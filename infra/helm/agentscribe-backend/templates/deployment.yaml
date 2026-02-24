@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentscribe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentscribe-backend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "agentscribe-backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentscribe-backend.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "agentscribe-backend.serviceAccountName" . }}
+      {{- if .Values.ghcr.pat }}
+      imagePullSecrets:
+        - name: {{ include "agentscribe-backend.fullname" . }}-ghcr
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentscribe-backend.secretName" . }}
+                  key: {{ .Values.existingSecretKey }}
+            - name: S3_BUCKET
+              value: {{ .Values.config.s3Bucket | quote }}
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.config.allowedOrigins | quote }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

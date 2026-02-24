@@ -1,0 +1,86 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ghcr.io/nate-yolodev/agentscribe-backend        # e.g. ghcr.io/your-org/agentscribe-backend
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+# Never set ghcr.pat here — pass it via --set on the command line.
+ghcr:
+  username: ""          # GitHub username or org that owns the package
+  pat: ""               # GitHub PAT with read:packages scope
+
+# ── Replicas & autoscaling ────────────────────────────────────────────────────
+replicaCount: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# ── Service ───────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 8000
+
+# ── Ingress (AWS ALB via Load Balancer Controller) ────────────────────────────
+ingress:
+  enabled: true
+  host: agentscribe-dev.runyolo.dev
+  # Certificate ARN for HTTPS termination at the ALB
+  certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"    # arn:aws:acm:us-west-2:123456789:certificate/...
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+# ── Service account (IRSA for S3 access) ─────────────────────────────────────
+serviceAccount:
+  create: true
+  # Annotate with the IAM role ARN that has s3:GetObject / s3:PutObject
+  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-dev-serviceaccount"        # arn:aws:iam::123456789:role/agentscribe-backend
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  s3Bucket: "agentscribe-dev"
+  allowedOrigins: "*"
+  model: "claude-opus-4-6"
+
+# ── Anthropic API key secret ──────────────────────────────────────────────────
+# Option A: reference an existing Kubernetes secret (recommended for production)
+#   existingSecret: agentscribe-secrets
+#   existingSecretKey: anthropic-api-key
+#
+# Option B: pass the key directly (for development only — do not commit)
+#   anthropicApiKey: "sk-ant-..."
+existingSecret: ""
+existingSecretKey: anthropic-api-key
+anthropicApiKey: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ── Probes ────────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
