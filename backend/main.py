@@ -4,7 +4,6 @@ import os
 import re
 from typing import Any
 
-import anthropic
 import boto3
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from agents import ChatAgent
+from agents.base import DEFAULT_MODEL, agents_prefix, skills_prefix
 
 app = FastAPI(title="AgentScribe API")
 
@@ -22,31 +22,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
-MODEL = "claude-opus-4-6"
+SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
+MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 
 _aws_profile = os.environ.get("AWS_PROFILE")
 _boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else boto3.Session()
 s3 = _boto_session.client("s3")
+sqs = _boto_session.client("sqs") if SQS_QUEUE_URL else None
 
-claude = anthropic.Anthropic()
+chat_agent = ChatAgent(
+    s3=s3,
+    bucket=S3_BUCKET,
+    model_id=MODEL,
+    sqs_client=sqs,
+    sqs_queue_url=SQS_QUEUE_URL,
+)
 
-chat_agent = ChatAgent(client=claude, s3=s3, bucket=S3_BUCKET, model=MODEL)
+# ── Path safety ───────────────────────────────────────────────────────────────
+# Allowed writable paths:
+#   content.md
+#   {page}/content.md               (child page root content)
+#   .agents/{name}/agent.md         (root-page agent definition)
+#   {page}/.agents/{name}/agent.md  (child-page agent definition)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+AGENT_NAME_SEG = r"[a-z0-9][a-z0-9_-]*"
+PAGE_SEG = r"[a-z0-9][a-z0-9_/-]*"
 
-SAFE_PATH = re.compile(r'^(content\.md|agents/[a-z0-9][a-z0-9_-]*/agents\.md)$')
+SAFE_PATH = re.compile(
+    r"^("
+    r"content\.md"
+    rf"|{PAGE_SEG}/content\.md"
+    rf"|\.agents/{AGENT_NAME_SEG}/agent\.md"
+    rf"|{PAGE_SEG}/\.agents/{AGENT_NAME_SEG}/agent\.md"
+    r")$"
+)
 
 
 def _is_safe_path(path: str) -> bool:
     return bool(SAFE_PATH.match(path))
 
 
-def _get_content(site: str) -> str:
+def _get_content(site: str, path: str = "content.md") -> str:
     try:
-        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"{site}/content.md")
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"{site}/{path}")
         return obj["Body"].read().decode("utf-8")
     except s3.exceptions.NoSuchKey:
         return ""
@@ -82,7 +103,7 @@ class ChatResponse(BaseModel):
     updated_content: str | None = None
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 
 @app.get("/health")
@@ -91,13 +112,17 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/content")
-async def get_content(site: str = "default") -> Response:
-    content = _get_content(site)
+async def get_content(site: str = "default", path: str = "content.md") -> Response:
+    if not _is_safe_path(path):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    content = _get_content(site, path)
     return Response(content=content, media_type="text/plain; charset=utf-8")
 
 
 @app.put("/content")
-async def put_content(request: Request, site: str = "default", path: str = "content.md") -> dict[str, str]:
+async def put_content(
+    request: Request, site: str = "default", path: str = "content.md"
+) -> dict[str, str]:
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
     body = await request.body()
@@ -105,10 +130,19 @@ async def put_content(request: Request, site: str = "default", path: str = "cont
     return {"status": "saved"}
 
 
+@app.get("/agents")
+async def list_agents(site: str = "default", page_path: str = "") -> dict:
+    prefix = agents_prefix(site, page_path)
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
+    names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
+    return {"agents": names}
+
+
 @app.get("/skills")
 async def list_skills() -> dict:
-    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix="skills/", Delimiter="/")
-    names = [p["Prefix"].split("/")[1] for p in resp.get("CommonPrefixes", [])]
+    prefix = skills_prefix()
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
+    names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"skills": names}
 
 
@@ -131,7 +165,7 @@ async def chat(req: ChatRequest) -> Any:
             site=req.site,
             file_path=req.file_path,
         )
-    except anthropic.APIError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ChatResponse(reply=reply, updated_content=updated_content)

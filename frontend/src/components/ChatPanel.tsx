@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -88,7 +90,7 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
 
   return (
     <div className="chat-panel">
-      <div className="chat-panel-header">Agent</div>
+      <div className="chat-panel-header">Chat</div>
 
       <div className="chat-messages">
         {messages.map((msg, i) => (
@@ -96,7 +98,11 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
             key={i}
             className={`chat-message ${msg.role}${msg.thinking ? ' thinking' : ''}`}
           >
-            {msg.content}
+            {msg.role === 'assistant' && !msg.thinking ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+            ) : (
+              msg.content
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
