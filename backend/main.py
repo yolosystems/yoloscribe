@@ -47,6 +47,7 @@ _aws_profile = os.environ.get("AWS_PROFILE")
 _boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else boto3.Session()
 s3 = _boto_session.client("s3")
 sqs = _boto_session.client("sqs") if SQS_QUEUE_URL else None
+sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
 
 chat_agent = ChatAgent(
     s3=s3,
@@ -54,6 +55,7 @@ chat_agent = ChatAgent(
     model_id=MODEL,
     sqs_client=sqs,
     sqs_queue_url=SQS_QUEUE_URL,
+    sm_client=sm,
 )
 
 # ── Path safety ───────────────────────────────────────────────────────────────

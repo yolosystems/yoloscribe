@@ -137,6 +137,26 @@ class S3Tools:
         return self.read_text(key)
 
     @tool
+    def get_skill_required_vars(self, skill_name: str) -> str:
+        """Return the environment variable names required by a skill's mcp.json.
+
+        Reads the skill's mcp.json and extracts every ${VAR_NAME} placeholder.
+        Call this after selecting a skill to know which API keys the user must supply.
+
+        Args:
+            skill_name: Name of the skill to inspect.
+        """
+        key = f"{skills_prefix()}/{skill_name}/mcp.json"
+        try:
+            raw = self.read_text(key)
+        except Exception:
+            return f"Skill '{skill_name}' has no mcp.json — no environment variables required."
+        vars_found = list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
+        if not vars_found:
+            return f"Skill '{skill_name}' requires no API keys or environment variables."
+        return f"Skill '{skill_name}' requires: {', '.join(vars_found)}"
+
+    @tool
     def list_agents(self, site: str, page_path: str = "") -> str:
         """List agents defined for a wiki page.
 
@@ -206,6 +226,68 @@ class S3Tools:
         # Write a .agents directory marker (S3 doesn't need it, but keeps structure clear)
         self.write_text(f"{site}/{page_path}/.agents/.keep", "")
         return f"Page '{page_path}' created at {content_key}"
+
+
+# ── SecretsManagerTools ───────────────────────────────────────────────────────
+
+_SM_SECRET_PREFIX = "agentscribe"
+
+
+class SecretsManagerTools:
+    """Strands class-based tools for reading and writing per-user Secrets Manager secrets.
+
+    Each secret is stored at agentscribe/{user_id}/{VAR_NAME}.
+    The user_id is baked in at construction time so the LLM cannot tamper with it.
+    """
+
+    def __init__(self, sm_client, user_id: str) -> None:
+        self.sm = sm_client
+        self.user_id = user_id
+
+    def _secret_id(self, var_name: str) -> str:
+        return f"{_SM_SECRET_PREFIX}/{self.user_id}/{var_name}"
+
+    @tool
+    def check_user_secret_exists(self, var_name: str) -> str:
+        """Check whether the current user already has a value stored for an environment variable.
+
+        Call this before asking the user to supply an API key — if one is already stored
+        you should tell the user and ask whether they want to keep it or replace it.
+
+        Args:
+            var_name: The environment variable name (e.g. GITHUB_TOKEN).
+        """
+        try:
+            self.sm.get_secret_value(SecretId=self._secret_id(var_name))
+            return f"A value for {var_name} is already stored for this user."
+        except self.sm.exceptions.ResourceNotFoundException:
+            return f"No value for {var_name} is stored yet — the user must supply one."
+        except Exception as exc:
+            return f"Could not check {var_name}: {exc}"
+
+    @tool
+    def put_user_secret(self, var_name: str, value: str) -> str:
+        """Store or update an environment variable value in the current user's secrets.
+
+        Creates the secret if it does not exist; updates it if it does.
+
+        Args:
+            var_name: The environment variable name (e.g. GITHUB_TOKEN).
+            value: The secret value to store.
+        """
+        secret_id = self._secret_id(var_name)
+        try:
+            self.sm.put_secret_value(SecretId=secret_id, SecretString=value)
+            return f"Updated {var_name} for this user."
+        except self.sm.exceptions.ResourceNotFoundException:
+            self.sm.create_secret(
+                Name=secret_id,
+                SecretString=value,
+                Description=f"AgentScribe user secret: {var_name} for user {self.user_id}",
+            )
+            return f"Stored {var_name} for this user."
+        except Exception as exc:
+            return f"Error storing {var_name}: {exc}"
 
 
 # ── AgentDefinition + parser ──────────────────────────────────────────────────
