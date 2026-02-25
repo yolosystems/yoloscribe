@@ -38,10 +38,16 @@ ingress:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
 
-# ── Service account (IRSA for S3 access) ─────────────────────────────────────
+# ── Service account (IRSA) ───────────────────────────────────────────────────
+# The attached IAM role must have the policy defined in
+# infra/iam/agentscribe-backend-policy.json, which covers:
+#   - s3:GetObject / PutObject / ListBucket  on agentscribe-* buckets
+#   - secretsmanager:CreateSecret / PutSecretValue / GetSecretValue / DescribeSecret
+#     on agentscribe* secrets (write access needed to store per-user API keys)
+#   - iam:CreateRole / PutRolePolicy / GetRole on agentscribe-user-* roles
+#   - sqs:SendMessage on agentscribe-* queues
 serviceAccount:
   create: true
-  # Annotate with the IAM role ARN that has s3:GetObject / s3:PutObject
   iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-dev-serviceaccount"        # arn:aws:iam::123456789:role/agentscribe-backend
 
 # ── Application config ────────────────────────────────────────────────────────
