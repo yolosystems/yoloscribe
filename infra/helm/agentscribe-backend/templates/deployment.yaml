@@ -40,6 +40,30 @@ spec:
               value: {{ .Values.config.s3Bucket | quote }}
             - name: ALLOWED_ORIGINS
               value: {{ .Values.config.allowedOrigins | quote }}
+            - name: SQS_QUEUE_URL
+              value: {{ .Values.config.sqsQueueUrl | quote }}
+            - name: EKS_OIDC_PROVIDER
+              value: {{ .Values.config.eksOidcProvider | quote }}
+            - name: AWS_ACCOUNT_ID
+              value: {{ .Values.config.awsAccountId | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.config.awsRegion | quote }}
+            - name: K8S_NAMESPACE
+              value: {{ .Values.config.k8sNamespace | quote }}
+            {{- if .Values.webhookSecret }}
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentscribe-backend.fullname" . }}-webhook
+                  key: webhook-secret
+                  optional: true
+            {{- end }}
+            - name: SUPABASE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentscribe-backend.secretName" . }}
+                  key: supabase-jwt-secret
+                  optional: true
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

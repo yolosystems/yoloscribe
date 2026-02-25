@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -150,7 +151,16 @@ class S3Tools:
         return "Available agents: " + ", ".join(names)
 
     @tool
-    def put_agent(self, site: str, agent_name: str, description: str, skills: list[str], page_path: str = "") -> str:
+    def put_agent(
+        self,
+        site: str,
+        agent_name: str,
+        description: str,
+        skills: list[str],
+        page_path: str = "",
+        schedule: str = "",
+        timezone: str = "",
+    ) -> str:
         """Create or overwrite an agent.md file in S3.
 
         Args:
@@ -159,13 +169,21 @@ class S3Tools:
             description: Agent purpose / system prompt.
             skills: List of skill names the agent should use.
             page_path: Relative page path; empty for root.
+            schedule: Optional cron expression for scheduled execution (e.g. "0 * * * *").
+            timezone: Optional timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
         """
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
         skills_list = "\n".join(f"- {s}" for s in skills)
+        optional_sections = ""
+        if schedule:
+            optional_sections += f"## Schedule\n\n{schedule}\n\n"
+        if timezone:
+            optional_sections += f"## Timezone\n\n{timezone}\n\n"
         content = (
             f"# Agent: {agent_name}\n\n"
             f"## Description\n\n{description}\n\n"
+            f"{optional_sections}"
             f"## Skills\n\n{skills_list}\n"
         )
         prefix = agents_prefix(site, page_path)
@@ -188,6 +206,76 @@ class S3Tools:
         # Write a .agents directory marker (S3 doesn't need it, but keeps structure clear)
         self.write_text(f"{site}/{page_path}/.agents/.keep", "")
         return f"Page '{page_path}' created at {content_key}"
+
+
+# ── AgentDefinition + parser ──────────────────────────────────────────────────
+
+
+@dataclasses.dataclass
+class AgentDefinition:
+    name: str
+    description: str
+    skills: list[str]
+    schedule: str = ""
+    timezone: str = ""
+
+
+def parse_agent_md(text: str) -> AgentDefinition:
+    """Parse an agent.md file into an AgentDefinition.
+
+    Expects the following structure (Schedule and Timezone sections are optional):
+
+        # Agent: {name}
+
+        ## Description
+
+        {description}
+
+        ## Schedule        ← optional
+
+        {cron}
+
+        ## Timezone        ← optional
+
+        {tz}
+
+        ## Skills
+
+        - skill-a
+        - skill-b
+    """
+    sections: dict[str, list[str]] = {}
+    current_section: str | None = None
+    name = ""
+
+    for line in text.splitlines():
+        if line.startswith("# Agent:"):
+            name = line[len("# Agent:"):].strip()
+        elif line.startswith("## "):
+            current_section = line[3:].strip()
+            sections.setdefault(current_section, [])
+        elif current_section is not None:
+            sections[current_section].append(line)
+
+    def _section_text(key: str) -> str:
+        return "\n".join(sections.get(key, [])).strip()
+
+    description = _section_text("Description")
+    schedule = _section_text("Schedule")
+    timezone = _section_text("Timezone")
+    skills = [
+        line[2:].strip()
+        for line in sections.get("Skills", [])
+        if line.startswith("- ")
+    ]
+
+    return AgentDefinition(
+        name=name,
+        description=description,
+        skills=skills,
+        schedule=schedule,
+        timezone=timezone,
+    )
 
 
 # ── BaseAgent ─────────────────────────────────────────────────────────────────

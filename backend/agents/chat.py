@@ -7,6 +7,7 @@ import os
 from typing import TYPE_CHECKING
 
 from strands import tool
+from strands_tools import http_request
 
 from .base import BaseAgent, S3Tools, DEFAULT_MODEL
 from .content_writer import ContentWriterAgent
@@ -39,10 +40,14 @@ You have access to the following tools and specialist sub-agents:
 - list_skills     — call this whenever the user asks what skills are available
                     on the server. It reads each skill's description from S3
                     and returns a summary.
+- http_request    — make HTTP requests to external URLs; use when the user
+                    asks you to fetch or look something up from the web.
 - content_writer  — use when the user wants to add, edit, or rewrite wiki
                     content on the current page.
 - creator         — use when the user wants to define a new AI agent for
                     the current page (creates an agent.md file).
+                    After successfully creating an agent, ask the user:
+                    "Would you like to run this agent now?" If yes, delegate to runner.
 - page_creator    — use when the user wants to create a new page or child
                     page under the current site.
 - runner          — use when the user wants to invoke / run an existing
@@ -82,6 +87,7 @@ Current context:
         history: list[dict[str, str]],
         site: str,
         file_path: str = "content.md",
+        user_id: str = "default",
     ) -> tuple[str, str | None]:
         """Process a user message and return (reply, updated_content | None).
 
@@ -97,7 +103,7 @@ Current context:
         shared: dict = {"updated_content": None}
 
         # Build fresh sub-agent @tool functions with current context baked in.
-        tools = self._make_tools(site=site, page_path=page_path, shared=shared)
+        tools = self._make_tools(site=site, page_path=page_path, shared=shared, user_id=user_id)
 
         # Rebuild the strands Agent with fresh prompt + tools for this request.
         from strands import Agent
@@ -139,7 +145,7 @@ Current context:
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
-    def _make_tools(self, site: str, page_path: str, shared: dict) -> list:
+    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "default") -> list:
         s3_tools = self._s3_tools
         model_id = self._model_id
 
@@ -224,12 +230,13 @@ Current context:
                 sqs_queue_url=self._sqs_queue_url,
                 sqs_client=self._sqs_client,
                 model_id=model_id,
+                user_id=user_id,
                 site=site,
                 page_path=page_path,
             )
             return str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
 
-        return [s3_tools.list_skills, content_writer, creator, page_creator, runner]
+        return [s3_tools.list_skills, http_request, content_writer, creator, page_creator, runner]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

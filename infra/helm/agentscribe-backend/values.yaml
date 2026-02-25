@@ -49,6 +49,15 @@ config:
   s3Bucket: "agentscribe-dev"
   allowedOrigins: "*"
   model: "claude-opus-4-6"
+  sqsQueueUrl: ""
+  eksOidcProvider: ""
+  awsAccountId: ""
+  awsRegion: "us-west-2"
+  k8sNamespace: "agentscribe"
+
+# ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
+# Pass via --set on the command line; never commit a real value here.
+webhookSecret: ""
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)

@@ -1,0 +1,44 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ghcr.io/nate-yolodev/agentscribe-agent-runner
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+# Never set ghcr.pat here — pass it via --set on the command line.
+ghcr:
+  username: ""          # GitHub username or org that owns the package
+  pat: ""               # GitHub PAT with read:packages scope
+
+# ── Service account (IRSA for SQS receive/delete + S3 read) ──────────────────
+serviceAccount:
+  create: true
+  iamRoleArn: ""        # arn:aws:iam::123456789:role/agentscribe-agent-runner
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  sqsQueueUrl: ""
+  awsRegion: "us-west-2"
+  k8sNamespace: "agentscribe"
+  anthropicSecretName: "agentscribe-secrets"
+  agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
+
+# ── Anthropic API key secret ──────────────────────────────────────────────────
+# Option A: reference an existing Kubernetes secret (recommended for production)
+#   existingSecret: agentscribe-secrets
+#   existingSecretKey: anthropic-api-key
+#
+# Option B: pass the key directly (for development only — do not commit)
+#   anthropicApiKey: "sk-ant-..."
+existingSecret: ""
+existingSecretKey: anthropic-api-key
+anthropicApiKey: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

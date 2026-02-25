@@ -1,0 +1,3 @@
+[console_scripts]
+agent-runner = agent_runner.agent_runner:main
+polling-worker = agent_runner.polling_worker:main

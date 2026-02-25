@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: agentscribe-agent-runner
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: boto3>=1.35.0
+Requires-Dist: kubernetes>=29.0.0
+Requires-Dist: strands-agents[anthropic]>=0.1.0
+Requires-Dist: strands-agents-tools>=0.1.0
+Requires-Dist: mcp>=1.0.0
