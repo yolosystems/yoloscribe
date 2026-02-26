@@ -113,7 +113,7 @@ def _get_user_id(
     Raises 401 if a token is present but invalid.
     """
     if not SUPABASE_JWT_SECRET:
-        return "default"
+        return "knuth"
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     token = credentials.credentials
@@ -145,7 +145,7 @@ class ChatRequest(BaseModel):
     history: list[HistoryMessage] = []
     site: str = "default"
     file_path: str = "content.md"
-    user_id: str = "default"
+    user_id: str = "knuth"
 
 
 class ChatResponse(BaseModel):

@@ -38,7 +38,7 @@ Current context:
         sqs_queue_url: str,
         sqs_client: "mypy_boto3_sqs.SQSClient",
         model_id: str = "",
-        user_id: str = "default",
+        user_id: str = "knuth",
         **kwargs,
     ) -> None:
         from .base import DEFAULT_MODEL
@@ -60,7 +60,7 @@ def _make_queue_tool(
     s3_tools: S3Tools,
     sqs_client: "mypy_boto3_sqs.SQSClient",
     sqs_queue_url: str,
-    user_id: str = "default",
+    user_id: str = "knuth",
 ):
     @tool
     def queue_agent_run(

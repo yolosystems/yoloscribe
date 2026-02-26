@@ -89,7 +89,7 @@ Current context:
         history: list[dict[str, str]],
         site: str,
         file_path: str = "content.md",
-        user_id: str = "default",
+        user_id: str = "knuth",
     ) -> tuple[str, str | None]:
         """Process a user message and return (reply, updated_content | None).
 
@@ -147,7 +147,7 @@ Current context:
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
-    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "default") -> list:
+    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth") -> list:
         s3_tools = self._s3_tools
         model_id = self._model_id
 
