@@ -297,10 +297,14 @@ async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, s
             from kubernetes import client as k8s_client  # type: ignore[import-untyped]
             from kubernetes import config as k8s_config  # type: ignore[import-untyped]
 
-            try:
-                k8s_config.load_incluster_config()
-            except Exception:
-                k8s_config.load_kube_config()
+            kubeconfig = os.environ.get("KUBECONFIG")
+            if kubeconfig:
+                k8s_config.load_kube_config(config_file=kubeconfig)
+            else:
+                try:
+                    k8s_config.load_incluster_config()
+                except Exception:
+                    k8s_config.load_kube_config()
 
             v1 = k8s_client.CoreV1Api()
             sa = k8s_client.V1ServiceAccount(
