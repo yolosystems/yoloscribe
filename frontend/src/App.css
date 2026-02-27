@@ -419,6 +419,120 @@ body {
   border-radius: 0 !important;
 }
 
+/* ── Credentials panel ── */
+.credentials-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.credentials-header {
+  padding: 0.75rem 1.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+
+.credentials-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 640px;
+}
+
+.credentials-empty,
+.credentials-no-vars {
+  font-size: 0.85rem;
+  color: #8b949e;
+  font-style: italic;
+}
+
+.credentials-skill {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.credentials-skill-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e6edf3;
+  text-transform: lowercase;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 0.4rem;
+}
+
+.credentials-var {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.credentials-var-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.credentials-var-name {
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  color: #e6edf3;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
+
+.credentials-badge {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.credentials-badge--stored {
+  background: #1a3a1a;
+  color: #3fb950;
+  border: 1px solid #2ea043;
+}
+
+.credentials-badge--missing {
+  background: #2a1a1a;
+  color: #f85149;
+  border: 1px solid #da3633;
+}
+
+.credentials-var-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.credentials-input {
+  flex: 1;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 0.875rem;
+  padding: 0.4rem 0.75rem;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+.credentials-input:focus {
+  outline: none;
+  border-color: #1f6feb;
+}
+
 /* ── Loading / error states ── */
 .state-center {
   flex: 1;

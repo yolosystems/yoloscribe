@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from strands import tool
 from strands_tools import http_request
 
-from .base import BaseAgent, S3Tools, SecretsManagerTools, DEFAULT_MODEL
+from .base import BaseAgent, S3Tools, DEFAULT_MODEL
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent
@@ -68,13 +68,11 @@ Current context:
         model_id: str = DEFAULT_MODEL,
         sqs_client: "mypy_boto3_sqs.SQSClient | None" = None,
         sqs_queue_url: str = "",
-        sm_client=None,
     ) -> None:
         self._s3_tools = S3Tools(s3=s3, bucket=bucket)
         self._model_id = model_id
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
-        self._sm_client = sm_client
         # Sub-agent tools are created lazily per-request (each call gets fresh
         # context injected via the prompt), so we set tools=[] here and override
         # per run() call.
@@ -188,10 +186,8 @@ Current context:
             Args:
                 instruction: The user's agent creation request.
             """
-            sm_tools = SecretsManagerTools(sm_client=self._sm_client, user_id=user_id)
             agent = CreatorAgent(
                 s3_tools=s3_tools,
-                sm_tools=sm_tools,
                 model_id=model_id,
                 site=site,
                 page_path=page_path,

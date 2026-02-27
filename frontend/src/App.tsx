@@ -4,6 +4,7 @@ import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
 import AgentsList from './components/AgentsList'
 import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
+import CredentialsPanel from './components/CredentialsPanel'
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -94,7 +95,7 @@ function getPagePath(filePath: string): string {
   return filePath.split('/').slice(0, -1).filter((s) => !s.startsWith('.')).join('/')
 }
 
-type Mode = 'view' | 'edit'
+type Mode = 'view' | 'edit' | 'credentials'
 
 export default function App() {
   const [filePath, setFilePath] = useState(getFilePath)
@@ -177,11 +178,18 @@ export default function App() {
       <header className="topbar">
         <span className="topbar-title">AgentScribe</span>
         <div className="topbar-actions">
-          {mode === 'view' ? (
+          <button
+            className={`btn${mode === 'credentials' ? ' btn-primary' : ''}`}
+            onClick={() => setMode(mode === 'credentials' ? 'view' : 'credentials')}
+          >
+            {mode === 'credentials' ? '← Back' : 'Credentials'}
+          </button>
+          {mode === 'view' && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
             </button>
-          ) : (
+          )}
+          {mode === 'edit' && (
             <>
               <button className="btn btn-danger" onClick={discard}>
                 Discard
@@ -204,31 +212,37 @@ export default function App() {
       <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
       <div className="workspace">
-        {mode === 'edit' && content !== null && (
-          <ChatPanel
-            content={content}
-            onContentUpdate={setContent}
-            apiBase={API_BASE}
-            site={SITE}
-            filePath={filePath}
-          />
-        )}
+        {mode === 'credentials' ? (
+          <CredentialsPanel apiBase={API_BASE} />
+        ) : (
+          <>
+            {mode === 'edit' && content !== null && (
+              <ChatPanel
+                content={content}
+                onContentUpdate={setContent}
+                apiBase={API_BASE}
+                site={SITE}
+                filePath={filePath}
+              />
+            )}
 
-        {mode === 'edit' && (
-          <AgentsList agents={agents} activeFilePath={filePath} />
-        )}
+            {mode === 'edit' && (
+              <AgentsList agents={agents} activeFilePath={filePath} />
+            )}
 
-        <div className="content-area">
-          {error ? (
-            <div className="state-center">{error}</div>
-          ) : content === null ? (
-            <div className="state-center">Loading…</div>
-          ) : mode === 'view' ? (
-            <MarkdownViewer content={content} />
-          ) : (
-            <MarkdownEditor content={content} onChange={setContent} />
-          )}
-        </div>
+            <div className="content-area">
+              {error ? (
+                <div className="state-center">{error}</div>
+              ) : content === null ? (
+                <div className="state-center">Loading…</div>
+              ) : mode === 'view' ? (
+                <MarkdownViewer content={content} />
+              ) : (
+                <MarkdownEditor content={content} onChange={setContent} />
+              )}
+            </div>
+          </>
+        )}
       </div>
     </>
   )

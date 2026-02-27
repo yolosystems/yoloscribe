@@ -55,7 +55,6 @@ chat_agent = ChatAgent(
     model_id=MODEL,
     sqs_client=sqs,
     sqs_queue_url=SQS_QUEUE_URL,
-    sm_client=sm,
 )
 
 # ── Path safety ───────────────────────────────────────────────────────────────
@@ -157,6 +156,10 @@ class UserCreatedEvent(BaseModel):
     user_id: str
 
 
+class SecretValue(BaseModel):
+    value: str
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -198,6 +201,77 @@ async def list_skills() -> dict:
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"skills": names}
+
+
+# ── Secrets (credentials) — no LLM involved ───────────────────────────────────
+
+_SM_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+_VAR_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_SM_SECRET_PREFIX = "agentscribe"
+
+
+def _secret_id(user_id: str, var_name: str) -> str:
+    return f"{_SM_SECRET_PREFIX}/{user_id}/{var_name}"
+
+
+def _skill_required_vars(skill_name: str) -> list[str]:
+    """Read a skill's mcp.json from S3 and return required ${VAR} names."""
+    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+        raw = obj["Body"].read().decode("utf-8")
+        return list(dict.fromkeys(_SM_VAR_RE.findall(raw)))
+    except Exception:
+        return []
+
+
+def _secret_exists(user_id: str, var_name: str) -> bool:
+    try:
+        sm.get_secret_value(SecretId=_secret_id(user_id, var_name))
+        return True
+    except sm.exceptions.ResourceNotFoundException:
+        return False
+    except Exception:
+        return False
+
+
+@app.get("/secrets/status")
+async def get_secrets_status(user_id: str = Depends(_get_user_id)) -> dict:
+    """Return all skills with their required vars and whether each is stored for this user."""
+    prefix = skills_prefix()
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
+    skill_names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
+
+    skills: dict = {}
+    for skill_name in skill_names:
+        vars_needed = _skill_required_vars(skill_name)
+        stored = {v: _secret_exists(user_id, v) for v in vars_needed}
+        skills[skill_name] = {"vars": vars_needed, "stored": stored}
+
+    return {"skills": skills}
+
+
+@app.put("/secrets/{var_name}")
+async def put_secret(
+    var_name: str,
+    body: SecretValue,
+    user_id: str = Depends(_get_user_id),
+) -> dict[str, str]:
+    """Store or update a credential value in Secrets Manager for the current user."""
+    if not _VAR_NAME_RE.match(var_name):
+        raise HTTPException(status_code=400, detail="Invalid variable name")
+    secret_id = _secret_id(user_id, var_name)
+    try:
+        sm.put_secret_value(SecretId=secret_id, SecretString=body.value)
+    except sm.exceptions.ResourceNotFoundException:
+        sm.create_secret(
+            Name=secret_id,
+            SecretString=body.value,
+            Description=f"AgentScribe credential: {var_name} for user {user_id}",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"status": "stored"}
 
 
 @app.post("/chat", response_model=ChatResponse)

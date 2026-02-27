@@ -228,68 +228,6 @@ class S3Tools:
         return f"Page '{page_path}' created at {content_key}"
 
 
-# ── SecretsManagerTools ───────────────────────────────────────────────────────
-
-_SM_SECRET_PREFIX = "agentscribe"
-
-
-class SecretsManagerTools:
-    """Strands class-based tools for reading and writing per-user Secrets Manager secrets.
-
-    Each secret is stored at agentscribe/{user_id}/{VAR_NAME}.
-    The user_id is baked in at construction time so the LLM cannot tamper with it.
-    """
-
-    def __init__(self, sm_client, user_id: str) -> None:
-        self.sm = sm_client
-        self.user_id = user_id
-
-    def _secret_id(self, var_name: str) -> str:
-        return f"{_SM_SECRET_PREFIX}/{self.user_id}/{var_name}"
-
-    @tool
-    def check_user_secret_exists(self, var_name: str) -> str:
-        """Check whether the current user already has a value stored for an environment variable.
-
-        Call this before asking the user to supply an API key — if one is already stored
-        you should tell the user and ask whether they want to keep it or replace it.
-
-        Args:
-            var_name: The environment variable name (e.g. GITHUB_TOKEN).
-        """
-        try:
-            self.sm.get_secret_value(SecretId=self._secret_id(var_name))
-            return f"A value for {var_name} is already stored for this user."
-        except self.sm.exceptions.ResourceNotFoundException:
-            return f"No value for {var_name} is stored yet — the user must supply one."
-        except Exception as exc:
-            return f"Could not check {var_name}: {exc}"
-
-    @tool
-    def put_user_secret(self, var_name: str, value: str) -> str:
-        """Store or update an environment variable value in the current user's secrets.
-
-        Creates the secret if it does not exist; updates it if it does.
-
-        Args:
-            var_name: The environment variable name (e.g. GITHUB_TOKEN).
-            value: The secret value to store.
-        """
-        secret_id = self._secret_id(var_name)
-        try:
-            self.sm.put_secret_value(SecretId=secret_id, SecretString=value)
-            return f"Updated {var_name} for this user."
-        except self.sm.exceptions.ResourceNotFoundException:
-            self.sm.create_secret(
-                Name=secret_id,
-                SecretString=value,
-                Description=f"AgentScribe user secret: {var_name} for user {self.user_id}",
-            )
-            return f"Stored {var_name} for this user."
-        except Exception as exc:
-            return f"Error storing {var_name}: {exc}"
-
-
 # ── AgentDefinition + parser ──────────────────────────────────────────────────
 
 
