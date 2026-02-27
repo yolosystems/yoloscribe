@@ -48,7 +48,14 @@ def _sm_client():
 
 
 def _resolve_env_vars(text: str) -> str:
-    """Substitute ${VAR_NAME} in text by fetching secrets from Secrets Manager."""
+    """Substitute ${VAR_NAME} in text by fetching secrets from Secrets Manager.
+
+    Security note: Secrets Manager access is intentionally allowed here.
+    This Job runs as the per-user K8s ServiceAccount (user-{USER_ID}), whose
+    IRSA role is scoped exclusively to agentscribe/{USER_ID}/* secrets.
+    The IAM policy prevents cross-user access at the AWS level regardless of
+    what prompt the agent receives.
+    """
     sm = _sm_client()
 
     def _fetch(match: re.Match) -> str:
