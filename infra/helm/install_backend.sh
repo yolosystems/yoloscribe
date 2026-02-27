@@ -17,6 +17,11 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${SUPABASE_JWT_SECRET:-}" ]]; then
+  echo "Error: SUPABASE_JWT_SECRET is not set in environment or backend/.env"
+  exit 1
+fi
+
 if [[ -z "${GHCR_PAT:-}" ]]; then
   echo "Error: GHCR_PAT is not set"
   exit 1
@@ -32,6 +37,7 @@ helm upgrade --install agentscribe-backend \
   --namespace yolo \
   --create-namespace \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
+  --set supabaseJwtSecret="$SUPABASE_JWT_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   --set ghcr.username="$GITHUB_USER" \
   "$@"

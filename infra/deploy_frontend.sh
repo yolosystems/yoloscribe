@@ -57,20 +57,34 @@ if [[ -z "${VITE_SITE:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${VITE_SUPABASE_URL:-}" ]]; then
+  echo "Error: VITE_SUPABASE_URL is not set (e.g. https://<project-ref>.supabase.co)"
+  exit 1
+fi
+
+if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
+  echo "Error: VITE_SUPABASE_ANON_KEY is not set"
+  exit 1
+fi
+
 AWS_ARGS=()
 if [[ -n "${AWS_PROFILE:-}" ]]; then
   AWS_ARGS+=(--profile "$AWS_PROFILE")
 fi
 
 echo "── Building frontend ────────────────────────────────────────────────────────"
-echo "  VITE_API_BASE = $VITE_API_BASE"
-echo "  VITE_SITE     = $VITE_SITE"
+echo "  VITE_API_BASE        = $VITE_API_BASE"
+echo "  VITE_SITE            = $VITE_SITE"
+echo "  VITE_SUPABASE_URL    = $VITE_SUPABASE_URL"
+echo "  VITE_SUPABASE_ANON_KEY = (set)"
 echo ""
 
 cd "$FRONTEND_DIR"
 npm ci --silent
 VITE_API_BASE="$VITE_API_BASE" \
   VITE_SITE="$VITE_SITE" \
+  VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+  VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
   npm run build
 
 SITE_PREFIX="$FRONTEND_BUCKET/$VITE_SITE"

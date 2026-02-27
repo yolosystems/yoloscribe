@@ -75,6 +75,7 @@ webhookSecret: ""
 existingSecret: ""
 existingSecretKey: anthropic-api-key
 anthropicApiKey: ""
+supabaseJwtSecret: ""
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:
