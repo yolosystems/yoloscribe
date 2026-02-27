@@ -7,7 +7,7 @@ Environment variables:
     BUCKET          S3 bucket name
     AGENT_MD_KEY    S3 key for the agent.md file
     CONTENT_KEY     S3 key for the content.md file
-    PROMPT          Task / instruction string passed to the agent
+    AGENT_PROMPT    Task / instruction string passed to the agent
     USER_ID         User ID (used to resolve Secrets Manager secrets)
     AWS_REGION      AWS region
     ANTHROPIC_API_KEY  Anthropic API key
@@ -31,7 +31,7 @@ from .parse import parse_agent_md
 BUCKET = os.environ["BUCKET"]
 AGENT_MD_KEY = os.environ["AGENT_MD_KEY"]
 CONTENT_KEY = os.environ["CONTENT_KEY"]
-PROMPT = os.environ["PROMPT"]
+AGENT_PROMPT = os.environ["AGENT_PROMPT"]
 USER_ID = os.environ.get("USER_ID", "default")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -148,7 +148,7 @@ def main() -> None:
             callback_handler=None,
             load_tools_from_directory=False,
         )
-        full_prompt = f"{PROMPT}\n\nCurrent content:\n```markdown\n{content}\n```"
+        full_prompt = f"{AGENT_PROMPT}\n\nCurrent content:\n```markdown\n{content}\n```"
         response = agent(full_prompt)
 
     # 7. Write updated content back to S3

@@ -55,7 +55,7 @@ def _run_local(payload: dict) -> None:
             "BUCKET": payload["bucket"],
             "AGENT_MD_KEY": payload["agent_md_key"],
             "CONTENT_KEY": payload["content_key"],
-            "PROMPT": payload["prompt"],
+            "AGENT_PROMPT": payload["prompt"],
             "USER_ID": payload.get("user_id", "default"),
             "AWS_REGION": AWS_REGION,
         }
