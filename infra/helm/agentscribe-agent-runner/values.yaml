@@ -19,7 +19,7 @@ serviceAccount:
 config:
   sqsQueueUrl: ""
   awsRegion: "us-west-2"
-  k8sNamespace: "agentscribe"
+  k8sNamespace: "yolo"
   anthropicSecretName: "agentscribe-secrets"
   agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
 

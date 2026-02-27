@@ -344,22 +344,39 @@ async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, s
             Description=f"IRSA role for AgentScribe user {user_id}",
         )
 
-        # 2. Attach inline policy: allow reading secrets for this user
+        # 2. Attach inline policy: allow reading secrets + scoped S3 access for this user
         secret_arn_prefix = (
             f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
         )
+        s3_bucket_arn = f"arn:aws:s3:::{S3_BUCKET}"
         iam.put_role_policy(
             RoleName=role_name,
-            PolicyName="agentscribe-secrets-access",
+            PolicyName="agentscribe-user-access",
             PolicyDocument=json.dumps(
                 {
                     "Version": "2012-10-17",
                     "Statement": [
                         {
+                            "Sid": "SecretsManagerReadUserSecrets",
                             "Effect": "Allow",
                             "Action": "secretsmanager:GetSecretValue",
                             "Resource": f"{secret_arn_prefix}*",
-                        }
+                        },
+                        {
+                            "Sid": "S3ReadWriteUserPrefix",
+                            "Effect": "Allow",
+                            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                            "Resource": f"{s3_bucket_arn}/{user_id}/*",
+                        },
+                        {
+                            "Sid": "S3ListUserPrefix",
+                            "Effect": "Allow",
+                            "Action": "s3:ListBucket",
+                            "Resource": s3_bucket_arn,
+                            "Condition": {
+                                "StringLike": {"s3:prefix": f"{user_id}/*"}
+                            },
+                        },
                     ],
                 }
             ),

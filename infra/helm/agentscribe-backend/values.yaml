@@ -14,7 +14,7 @@ ghcr:
 replicaCount: 1
 
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 2
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
@@ -59,7 +59,7 @@ config:
   eksOidcProvider: ""
   awsAccountId: ""
   awsRegion: "us-west-2"
-  k8sNamespace: "agentscribe"
+  k8sNamespace: "yolo"
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.

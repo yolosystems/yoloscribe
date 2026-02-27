@@ -1,5 +1,5 @@
 REGISTRY    := ghcr.io
-GITHUB_USER ?= your-github-username
+GITHUB_USER ?= nate-yolodev
 IMAGE       := $(REGISTRY)/$(GITHUB_USER)/agentscribe-agent-runner
 TAG         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo latest)
 PLATFORM    := linux/amd64
