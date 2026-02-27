@@ -32,6 +32,13 @@ if [[ -z "${SQS_QUEUE_URL:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${AGENT_RUNNER_ROLE_ARN:-}" ]]; then
+  echo "Error: AGENT_RUNNER_ROLE_ARN is not set"
+  echo "  Run infra/iam/create_agent_runner_role.sh to create it, then:"
+  echo "  export AGENT_RUNNER_ROLE_ARN=arn:aws:iam::<account>:role/agentscribe-agent-runner"
+  exit 1
+fi
+
 helm upgrade --install agentscribe-agent-runner \
   "$SCRIPT_DIR/agentscribe-agent-runner" \
   --namespace yolo \
@@ -40,4 +47,5 @@ helm upgrade --install agentscribe-agent-runner \
   --set ghcr.pat="$GHCR_PAT" \
   --set ghcr.username="$GITHUB_USER" \
   --set config.sqsQueueUrl="$SQS_QUEUE_URL" \
+  --set serviceAccount.iamRoleArn="$AGENT_RUNNER_ROLE_ARN" \
   "$@"
