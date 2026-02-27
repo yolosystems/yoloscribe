@@ -147,18 +147,38 @@ def main() -> None:
 
         # 6. Run the agent
         model = AnthropicModel(model_id=MODEL_ID, max_tokens=4096)
+        system_prompt = (
+            agent_def.description
+            + "\n\n"
+            + "IMPORTANT: When you have finished your work, your final message must contain "
+            "ONLY the complete updated markdown content — no preamble, no explanation, no "
+            "summary, no commentary. Output the raw markdown and nothing else."
+        )
         agent = Agent(
-            system_prompt=agent_def.description,
+            system_prompt=system_prompt,
             model=model,
             tools=tools,
             callback_handler=None,
             load_tools_from_directory=False,
         )
-        full_prompt = f"{AGENT_PROMPT}\n\nCurrent content:\n```markdown\n{content}\n```"
+        full_prompt = (
+            f"{AGENT_PROMPT}\n\n"
+            f"Current content:\n```markdown\n{content}\n```\n\n"
+            "When done, reply with ONLY the updated markdown. No explanations."
+        )
         response = agent(full_prompt)
 
-    # 7. Write updated content back to S3
-    updated = str(response)
+    # 7. Strip any preamble the model emitted before the markdown content.
+    # Wiki pages start with a "# Heading" so we find the first line that
+    # begins with "#" and discard everything before it.  If no heading is
+    # found we keep the full response (e.g. pure-prose pages).
+    raw = str(response)
+    lines = raw.splitlines()
+    for idx, line in enumerate(lines):
+        if line.startswith("#"):
+            raw = "\n".join(lines[idx:])
+            break
+    updated = raw
     s3.put_object(
         Bucket=BUCKET,
         Key=CONTENT_KEY,
