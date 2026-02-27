@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Build the Vite SPA and sync it to the frontend S3 bucket.
+# Build the Vite SPA and deploy it to s3://$FRONTEND_BUCKET/$VITE_SITE/.
+#
+# Bucket layout:
+#   {bucket}/.skills/          ← site-scoped skills (never touched by this script)
+#   {bucket}/{site}/index.html ← SPA entry point
+#   {bucket}/{site}/assets/    ← hashed JS/CSS bundles
+#   {bucket}/{site}/content.md ← wiki content (never touched by this script)
 #
 # Reads build-time vars from frontend/.env.local:
-#   VITE_SITE        — default site name (fallback when URL has no path segment)
+#   VITE_SITE        — site name; also used as the S3 deploy prefix
 #
 # Required in environment or backend/.env:
 #   VITE_API_BASE               — HTTPS URL of the backend ALB
 #                                 (e.g. https://agentscribe-dev.runyolo.dev)
-#   FRONTEND_BUCKET             — S3 bucket that serves the static site
-#                                 (e.g. agentscribe-dev-frontend)
+#   FRONTEND_BUCKET             — root S3 bucket
+#                                 (e.g. agentscribe-dev)
 #
 # Optional:
 #   CLOUDFRONT_DISTRIBUTION_ID  — if set, invalidates /* after sync
@@ -67,17 +73,18 @@ VITE_API_BASE="$VITE_API_BASE" \
   VITE_SITE="$VITE_SITE" \
   npm run build
 
-echo ""
-echo "── Uploading dist/ → s3://$FRONTEND_BUCKET/ ────────────────────────────────"
+SITE_PREFIX="$FRONTEND_BUCKET/$VITE_SITE"
 
-# Upload hashed assets with aggressive caching. No --delete: the content bucket
-# holds wiki data alongside SPA assets; deleting everything in it would wipe
-# user content. Old asset hashes are harmless and can be pruned manually if needed.
-aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 sync dist/assets/ "s3://$FRONTEND_BUCKET/assets/" \
+echo ""
+echo "── Uploading dist/ → s3://$SITE_PREFIX/ ────────────────────────────────────"
+
+# Upload hashed assets with aggressive caching. No --delete: user wiki data
+# lives in the same bucket; old asset hashes are harmless stale files.
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 sync dist/assets/ "s3://$SITE_PREFIX/assets/" \
   --cache-control "public,max-age=31536000,immutable"
 
 # index.html must not be cached — browsers re-check it on every load
-aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 cp dist/index.html "s3://$FRONTEND_BUCKET/index.html" \
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 cp dist/index.html "s3://$SITE_PREFIX/index.html" \
   --cache-control "no-cache,no-store,must-revalidate" \
   --content-type "text/html"
 
