@@ -92,7 +92,7 @@ def _load_mcp_configs(s3, skill_names: list[str]) -> list[dict]:
 def _build_mcp_clients(configs: list[dict]):
     """Build a flat list of MCPClient instances from mcp.json configs."""
     try:
-        from mcp import StdioServerParameters
+        from mcp import StdioServerParameters, stdio_client
         from strands.tools.mcp import MCPClient
     except ImportError:
         return []
@@ -104,7 +104,7 @@ def _build_mcp_clients(configs: list[dict]):
             args = server_cfg.get("args", [])
             env = server_cfg.get("env", {})
             params = StdioServerParameters(command=command, args=args, env=env or None)
-            clients.append(MCPClient(lambda p=params: p))
+            clients.append(MCPClient(lambda p=params: stdio_client(p)))
     return clients
 
 
