@@ -32,6 +32,13 @@ if [[ -z "${SQS_QUEUE_URL:-}" ]]; then
   exit 1
 fi
 
+# Sanity-check: must look like https://sqs.{region}.amazonaws.com/{account}/{queue}
+if [[ ! "$SQS_QUEUE_URL" =~ ^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]+/.+ ]]; then
+  echo "Error: SQS_QUEUE_URL does not look like a full queue URL: $SQS_QUEUE_URL"
+  echo "  Expected format: https://sqs.<region>.amazonaws.com/<account-id>/<queue-name>"
+  exit 1
+fi
+
 if [[ -z "${AGENT_RUNNER_ROLE_ARN:-}" ]]; then
   echo "Error: AGENT_RUNNER_ROLE_ARN is not set"
   echo "  Run infra/iam/create_agent_runner_role.sh to create it, then:"
