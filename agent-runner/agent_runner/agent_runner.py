@@ -11,6 +11,7 @@ Environment variables:
     USER_ID         User ID (used to resolve Secrets Manager secrets)
     AWS_REGION      AWS region
     ANTHROPIC_API_KEY  Anthropic API key
+    AWS_PROFILE     (optional) named AWS profile for local development
 """
 
 from __future__ import annotations
@@ -35,16 +36,19 @@ USER_ID = os.environ.get("USER_ID", "default")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL_ID = os.environ.get("AGENTSCRIBE_MODEL", "claude-opus-4-6")
+AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
+_session = boto3.Session(profile_name=AWS_PROFILE or None)
+
 
 def _s3_client():
-    return boto3.client("s3", region_name=AWS_REGION)
+    return _session.client("s3", region_name=AWS_REGION)
 
 
 def _sm_client():
-    return boto3.client("secretsmanager", region_name=AWS_REGION)
+    return _session.client("secretsmanager", region_name=AWS_REGION)
 
 
 def _resolve_env_vars(text: str) -> str:

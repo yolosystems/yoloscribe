@@ -6,6 +6,9 @@ Environment variables:
     AGENT_RUNNER_IMAGE      Docker image for the agent-runner Job container
     ANTHROPIC_SECRET_NAME   K8s Secret name holding the Anthropic API key
     K8S_NAMESPACE           Kubernetes namespace for Jobs/CronJobs
+    AWS_PROFILE             (optional) named AWS profile for local development
+    LOCAL_RUNNER            Set to "true" to run agents in-process instead of
+                            dispatching K8s Jobs (for local development/testing)
 """
 
 from __future__ import annotations
@@ -14,12 +17,11 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
 
 import boto3
-from kubernetes import client as k8s_client
-from kubernetes import config as k8s_config
-from kubernetes.client.rest import ApiException
 
 from .parse import parse_agent_md
 
@@ -31,6 +33,8 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/agentscribe-agent-runner:latest")
 ANTHROPIC_SECRET_NAME = os.environ.get("ANTHROPIC_SECRET_NAME", "agentscribe-secrets")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
+AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
+LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
 
 
 def _safe_k8s_name(*parts: str) -> str:
@@ -41,7 +45,41 @@ def _safe_k8s_name(*parts: str) -> str:
     return safe[:63]
 
 
-def _build_container(payload: dict) -> k8s_client.V1Container:
+# ── Local runner ───────────────────────────────────────────────────────────────
+
+def _run_local(payload: dict) -> None:
+    """Run the agent runner in a subprocess (local dev mode, no K8s)."""
+    env = os.environ.copy()
+    env.update(
+        {
+            "BUCKET": payload["bucket"],
+            "AGENT_MD_KEY": payload["agent_md_key"],
+            "CONTENT_KEY": payload["content_key"],
+            "PROMPT": payload["prompt"],
+            "USER_ID": payload.get("user_id", "default"),
+            "AWS_REGION": AWS_REGION,
+        }
+    )
+    if AWS_PROFILE:
+        env["AWS_PROFILE"] = AWS_PROFILE
+
+    log.info(
+        "LOCAL_RUNNER: running agent-runner for %s / %s",
+        payload.get("user_id"),
+        payload["agent_md_key"],
+    )
+    subprocess.run(
+        [sys.executable, "-m", "agent_runner.agent_runner"],
+        env=env,
+        check=True,
+    )
+
+
+# ── K8s runner ────────────────────────────────────────────────────────────────
+
+def _build_container(payload: dict):  # type: ignore[return]
+    from kubernetes import client as k8s_client  # noqa: PLC0415
+
     env_vars = [
         k8s_client.V1EnvVar(name="BUCKET", value=payload["bucket"]),
         k8s_client.V1EnvVar(name="AGENT_MD_KEY", value=payload["agent_md_key"]),
@@ -68,7 +106,9 @@ def _build_container(payload: dict) -> k8s_client.V1Container:
     )
 
 
-def _pod_spec(container: k8s_client.V1Container, user_id: str) -> k8s_client.V1PodSpec:
+def _pod_spec(container, user_id: str):  # type: ignore[return]
+    from kubernetes import client as k8s_client  # noqa: PLC0415
+
     return k8s_client.V1PodSpec(
         service_account_name=f"user-{user_id}",
         restart_policy="Never",
@@ -76,15 +116,15 @@ def _pod_spec(container: k8s_client.V1Container, user_id: str) -> k8s_client.V1P
     )
 
 
-def _create_job(batch_v1: k8s_client.BatchV1Api, name: str, pod_spec: k8s_client.V1PodSpec) -> None:
+def _create_job(batch_v1, name: str, pod_spec) -> None:  # type: ignore[return]
+    from kubernetes import client as k8s_client  # noqa: PLC0415
+
     job = k8s_client.V1Job(
         api_version="batch/v1",
         kind="Job",
         metadata=k8s_client.V1ObjectMeta(name=name, namespace=K8S_NAMESPACE),
         spec=k8s_client.V1JobSpec(
-            template=k8s_client.V1PodTemplateSpec(
-                spec=pod_spec,
-            ),
+            template=k8s_client.V1PodTemplateSpec(spec=pod_spec),
             backoff_limit=0,
             ttl_seconds_after_finished=3600,
         ),
@@ -93,13 +133,10 @@ def _create_job(batch_v1: k8s_client.BatchV1Api, name: str, pod_spec: k8s_client
     log.info("Created Job %s", name)
 
 
-def _upsert_cronjob(
-    batch_v1: k8s_client.BatchV1Api,
-    name: str,
-    pod_spec: k8s_client.V1PodSpec,
-    schedule: str,
-    timezone: str,
-) -> None:
+def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str) -> None:
+    from kubernetes import client as k8s_client  # noqa: PLC0415
+    from kubernetes.client.rest import ApiException  # noqa: PLC0415
+
     cron_spec = k8s_client.V1CronJobSpec(
         schedule=schedule,
         job_template=k8s_client.V1JobTemplateSpec(
@@ -131,12 +168,11 @@ def _upsert_cronjob(
             raise
 
 
-def _process_message(batch_v1: k8s_client.BatchV1Api, s3, payload: dict) -> None:
+def _process_message_k8s(batch_v1, s3, payload: dict) -> None:
     user_id = payload.get("user_id", "default")
     bucket = payload["bucket"]
     agent_md_key = payload["agent_md_key"]
 
-    # Parse agent.md to get name and schedule info
     obj = s3.get_object(Bucket=bucket, Key=agent_md_key)
     agent_md_text = obj["Body"].read().decode("utf-8")
     agent_def = parse_agent_md(agent_md_text)
@@ -151,7 +187,6 @@ def _process_message(batch_v1: k8s_client.BatchV1Api, s3, payload: dict) -> None
     pod_spec = _pod_spec(container, user_id)
 
     if agent_def.schedule:
-        # Stable name for idempotent CronJob upserts
         cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id)
         _upsert_cronjob(
             batch_v1,
@@ -167,14 +202,22 @@ def _process_message(batch_v1: k8s_client.BatchV1Api, s3, payload: dict) -> None
 
 
 def main() -> None:
-    try:
-        k8s_config.load_incluster_config()
-    except Exception:
-        k8s_config.load_kube_config()
+    _session = boto3.Session(profile_name=AWS_PROFILE or None)
+    sqs = _session.client("sqs", region_name=AWS_REGION)
+    s3 = _session.client("s3", region_name=AWS_REGION)
 
-    batch_v1 = k8s_client.BatchV1Api()
-    sqs = boto3.client("sqs", region_name=AWS_REGION)
-    s3 = boto3.client("s3", region_name=AWS_REGION)
+    if LOCAL_RUNNER:
+        log.info("LOCAL_RUNNER mode — agents will run as subprocesses (no K8s)")
+        batch_v1 = None
+    else:
+        from kubernetes import client as k8s_client  # type: ignore[import-untyped]  # noqa: PLC0415
+        from kubernetes import config as k8s_config  # type: ignore[import-untyped]  # noqa: PLC0415
+
+        try:
+            k8s_config.load_incluster_config()
+        except Exception:
+            k8s_config.load_kube_config()
+        batch_v1 = k8s_client.BatchV1Api()
 
     log.info("Polling SQS queue: %s", SQS_QUEUE_URL)
     while True:
@@ -188,7 +231,10 @@ def main() -> None:
                 receipt = msg["ReceiptHandle"]
                 try:
                     payload = json.loads(msg["Body"])
-                    _process_message(batch_v1, s3, payload)
+                    if LOCAL_RUNNER:
+                        _run_local(payload)
+                    else:
+                        _process_message_k8s(batch_v1, s3, payload)
                     sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt)
                 except Exception:
                     log.exception("Failed to process message %s", msg.get("MessageId"))
