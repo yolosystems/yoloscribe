@@ -11,10 +11,6 @@ import CredentialsPanel from './components/CredentialsPanel'
 // In production the build sets VITE_API_BASE to the ALB URL at build time.
 const API_BASE = import.meta.env.DEV ? '/api' : (import.meta.env.VITE_API_BASE ?? '/api')
 
-// S3 bucket name — the URL path structure mirrors the S3 bucket layout, so
-// knowing the bucket lets the frontend construct direct S3 URLs when needed.
-const S3_BUCKET = import.meta.env.VITE_S3_BUCKET ?? ''
-
 // Derive the site name from the first URL path segment so the frontend always
 // knows which S3 prefix it is operating under.
 // Production: /knuth-home/  →  "knuth-home"

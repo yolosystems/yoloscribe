@@ -3,7 +3,6 @@
 #
 # Reads build-time vars from frontend/.env.local:
 #   VITE_SITE        — default site name (fallback when URL has no path segment)
-#   VITE_S3_BUCKET   — content S3 bucket name
 #
 # Required in environment or backend/.env:
 #   VITE_API_BASE               — HTTPS URL of the backend ALB
@@ -29,7 +28,7 @@ if [[ -f "$BACKEND_ENV" ]]; then
   set +a
 fi
 
-# Load frontend/.env.local (VITE_SITE, VITE_S3_BUCKET)
+# Load frontend/.env.local (VITE_SITE)
 if [[ -f "$FRONTEND_ENV" ]]; then
   set -a
   # shellcheck source=/dev/null
@@ -47,11 +46,6 @@ if [[ -z "${FRONTEND_BUCKET:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${VITE_S3_BUCKET:-}" ]]; then
-  echo "Error: VITE_S3_BUCKET is not set in frontend/.env.local or environment"
-  exit 1
-fi
-
 if [[ -z "${VITE_SITE:-}" ]]; then
   echo "Error: VITE_SITE is not set in frontend/.env.local or environment"
   exit 1
@@ -63,15 +57,13 @@ if [[ -n "${AWS_PROFILE:-}" ]]; then
 fi
 
 echo "── Building frontend ────────────────────────────────────────────────────────"
-echo "  VITE_API_BASE  = $VITE_API_BASE"
-echo "  VITE_S3_BUCKET = $VITE_S3_BUCKET"
-echo "  VITE_SITE      = $VITE_SITE"
+echo "  VITE_API_BASE = $VITE_API_BASE"
+echo "  VITE_SITE     = $VITE_SITE"
 echo ""
 
 cd "$FRONTEND_DIR"
 npm ci --silent
 VITE_API_BASE="$VITE_API_BASE" \
-  VITE_S3_BUCKET="$VITE_S3_BUCKET" \
   VITE_SITE="$VITE_SITE" \
   npm run build
 
