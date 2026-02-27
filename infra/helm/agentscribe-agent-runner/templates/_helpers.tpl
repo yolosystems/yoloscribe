@@ -11,6 +11,8 @@ Create a default fully qualified app name.
 {{- define "agentscribe-agent-runner.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else if contains .Release.Name (include "agentscribe-agent-runner.name" .) }}
+{{- include "agentscribe-agent-runner.name" . | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- printf "%s-%s" .Release.Name (include "agentscribe-agent-runner.name" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

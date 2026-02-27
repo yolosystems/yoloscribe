@@ -11,6 +11,8 @@ Create a default fully qualified app name.
 {{- define "agentscribe-backend.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else if contains .Release.Name (include "agentscribe-backend.name" .) }}
+{{- include "agentscribe-backend.name" . | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- printf "%s-%s" .Release.Name (include "agentscribe-backend.name" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
