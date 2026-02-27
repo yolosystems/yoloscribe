@@ -109,6 +109,12 @@ def _build_mcp_clients(configs: list[dict]):
 
 
 def main() -> None:
+    # Expose the package directory so mcp.json files can reference bundled
+    # helper scripts via ${AGENT_RUNNER_HOME} (substituted by _resolve_env_vars).
+    os.environ.setdefault(
+        "AGENT_RUNNER_HOME", os.path.dirname(os.path.abspath(__file__))
+    )
+
     s3 = _s3_client()
 
     # 1. Read and parse agent.md

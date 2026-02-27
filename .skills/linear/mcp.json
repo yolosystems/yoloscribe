@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "linear": {
-      "command": "npx",
-      "args": ["-y", "linear-mcp-server"],
+      "command": "node",
+      "args": ["${AGENT_RUNNER_HOME}/linear_mcp_wrapper.js"],
       "env": {
-        "LINEAR_API_KEY": "${LINEAR_API_KEY}"
+        "LINEAR_API_TOKEN": "${LINEAR_API_KEY}"
       }
     }
   }
