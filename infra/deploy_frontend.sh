@@ -68,23 +68,23 @@ VITE_API_BASE="$VITE_API_BASE" \
   npm run build
 
 echo ""
-echo "── Syncing dist/ → s3://$FRONTEND_BUCKET/ ──────────────────────────────────"
+echo "── Uploading dist/ → s3://$FRONTEND_BUCKET/ ────────────────────────────────"
 
-# Hashed assets can be cached aggressively; everything else must not be cached
-aws "${AWS_ARGS[@]}" s3 sync dist/ "s3://$FRONTEND_BUCKET/" \
-  --delete \
-  --cache-control "public,max-age=31536000,immutable" \
-  --exclude "index.html"
+# Upload hashed assets with aggressive caching. No --delete: the content bucket
+# holds wiki data alongside SPA assets; deleting everything in it would wipe
+# user content. Old asset hashes are harmless and can be pruned manually if needed.
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 sync dist/assets/ "s3://$FRONTEND_BUCKET/assets/" \
+  --cache-control "public,max-age=31536000,immutable"
 
 # index.html must not be cached — browsers re-check it on every load
-aws "${AWS_ARGS[@]}" s3 cp dist/index.html "s3://$FRONTEND_BUCKET/index.html" \
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 cp dist/index.html "s3://$FRONTEND_BUCKET/index.html" \
   --cache-control "no-cache,no-store,must-revalidate" \
   --content-type "text/html"
 
 if [[ -n "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]]; then
   echo ""
   echo "── Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID ──────"
-  aws "${AWS_ARGS[@]}" cloudfront create-invalidation \
+  aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cloudfront create-invalidation \
     --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
     --paths "/*" \
     --query 'Invalidation.Id' --output text
