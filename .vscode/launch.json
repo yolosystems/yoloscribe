@@ -13,7 +13,8 @@
       "env": {
         "AWS_PROFILE": "runyolo_admin",
         "GITHUB_PERSONAL_ACCESS_TOKEN": "",
-        "GITHUB_TOKEN": ""
+        "GITHUB_TOKEN": "",
+        "SUPABASE_URL": "https://logpcqkicxkeqoseajzd.supabase.co"
       },
       "jinja": true,
       "justMyCode": true

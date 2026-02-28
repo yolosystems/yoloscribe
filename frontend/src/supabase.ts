@@ -5,7 +5,7 @@ export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY as string,
   {
     auth: {
-      flowType: 'pkce',
+      flowType: 'implicit',
     },
   }
 )
