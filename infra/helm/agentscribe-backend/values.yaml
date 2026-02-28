@@ -60,10 +60,15 @@ config:
   awsRegion: ""
   k8sNamespace: ""
   supabaseUrl: ""
+  cloudfrontDomain: ""
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.
 webhookSecret: ""
+
+# ── Supabase service role key (for /provision and site ownership lookups) ─────
+# Pass via --set on the command line; never commit a real value here.
+supabaseServiceRoleKey: ""
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)

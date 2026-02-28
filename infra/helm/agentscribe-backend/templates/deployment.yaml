@@ -60,6 +60,17 @@ spec:
             {{- end }}
             - name: SUPABASE_URL
               value: {{ .Values.config.supabaseUrl | quote }}
+            {{- if .Values.supabaseServiceRoleKey }}
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentscribe-backend.secretName" . }}
+                  key: supabase-service-role-key
+            {{- end }}
+            {{- if .Values.config.cloudfrontDomain }}
+            - name: CLOUDFRONT_DOMAIN
+              value: {{ .Values.config.cloudfrontDomain | quote }}
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

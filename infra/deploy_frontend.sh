@@ -57,9 +57,9 @@ if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
   exit 1
 fi
 
-AWS_ARGS=()
-if [[ -n "${AWS_PROFILE:-}" ]]; then
-  AWS_ARGS+=(--profile "$AWS_PROFILE")
+if [[ -z "${AWS_PROFILE:-}" ]]; then
+  echo "Error: AWS_PROFILE is not set"
+  exit 1
 fi
 
 echo "── Building frontend ────────────────────────────────────────────────────────"
@@ -77,25 +77,33 @@ VITE_API_BASE="$VITE_API_BASE" \
   VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
   npm run build
 
-SITE_PREFIX="$FRONTEND_BUCKET/$VITE_SITE"
+# The main site (VITE_SITE=default) deploys to the bucket root so that
+# CloudFront's Default Root Object (index.html) and relative asset paths
+# (./assets/...) resolve correctly from /.
+# User sites deploy to their own prefix ({site_name}/) as usual.
+if [[ "$VITE_SITE" == "default" ]]; then
+  SITE_PREFIX="$FRONTEND_BUCKET"
+else
+  SITE_PREFIX="$FRONTEND_BUCKET/$VITE_SITE"
+fi
 
 echo ""
 echo "── Uploading dist/ → s3://$SITE_PREFIX/ ────────────────────────────────────"
 
 # Upload hashed assets with aggressive caching. No --delete: user wiki data
 # lives in the same bucket; old asset hashes are harmless stale files.
-aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 sync dist/assets/ "s3://$SITE_PREFIX/assets/" \
+aws --profile "$AWS_PROFILE" s3 sync dist/assets/ "s3://$SITE_PREFIX/assets/" \
   --cache-control "public,max-age=31536000,immutable"
 
 # index.html must not be cached — browsers re-check it on every load
-aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} s3 cp dist/index.html "s3://$SITE_PREFIX/index.html" \
+aws --profile "$AWS_PROFILE" s3 cp dist/index.html "s3://$SITE_PREFIX/index.html" \
   --cache-control "no-cache,no-store,must-revalidate" \
   --content-type "text/html"
 
 if [[ -n "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]]; then
   echo ""
   echo "── Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID ──────"
-  aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cloudfront create-invalidation \
+  aws --profile "$AWS_PROFILE" cloudfront create-invalidation \
     --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
     --paths "/*" \
     --query 'Invalidation.Id' --output text
