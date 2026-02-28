@@ -109,7 +109,11 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s)
-      if (!s) {
+      // Don't redirect if a PKCE code exchange is already in progress (?code= in URL).
+      // getSession() returns null before the exchange completes; redirecting here would
+      // start a new OAuth loop. onAuthStateChange fires INITIAL_SESSION once the exchange
+      // is done and the session is established.
+      if (!s && !window.location.search.includes('code=')) {
         supabase.auth.signInWithOAuth({
           provider: 'google',
           options: { redirectTo: window.location.origin },
