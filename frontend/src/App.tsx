@@ -7,6 +7,8 @@ import ChatPanel from './components/ChatPanel'
 import AgentsList from './components/AgentsList'
 import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
 import CredentialsPanel from './components/CredentialsPanel'
+import LandingPage from './components/LandingPage'
+import OnboardingView from './components/OnboardingView'
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -23,6 +25,7 @@ function getSite(): string {
 }
 
 const SITE = getSite()
+const IS_MAIN_SITE = SITE === 'default'
 
 // ── Hash ↔ filePath helpers ────────────────────────────────────────────────────
 //
@@ -96,6 +99,7 @@ function getPagePath(filePath: string): string {
 }
 
 type Mode = 'view' | 'edit' | 'credentials'
+type AppView = 'loading' | 'landing' | 'onboarding' | 'site' | 'auth-wall'
 
 export default function App() {
   const [filePath, setFilePath] = useState(getFilePath)
@@ -107,6 +111,7 @@ export default function App() {
   const [agents, setAgents] = useState<string[]>([])
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
+  const [mySite, setMySite] = useState<string | null | undefined>(undefined)
 
   // Subscribe to Supabase auth state
   useEffect(() => {
@@ -115,6 +120,50 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // Load site theme from config.json (user sites only)
+  useEffect(() => {
+    if (IS_MAIN_SITE) return
+    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=config.json`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data?.theme) document.documentElement.setAttribute('data-theme', data.theme)
+      })
+      .catch(() => {})
+  }, [])
+
+  // On main site: after login, fetch /my-site to decide onboarding vs redirect
+  useEffect(() => {
+    if (!IS_MAIN_SITE) return
+    if (session === undefined || session === null) {
+      setMySite(undefined)
+      return
+    }
+    fetch(`${API_BASE}/my-site`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    })
+      .then((res) => res.ok ? res.json() : { site_name: null })
+      .then((data) => {
+        const name: string | null = data.site_name ?? null
+        if (name) {
+          window.location.href = `/${name}`
+        } else {
+          setMySite(null)
+        }
+      })
+      .catch(() => setMySite(null))
+  }, [session])
+
+  // Determine which view to show
+  const appView: AppView = (() => {
+    if (session === undefined) return 'loading'
+    if (session === null) return IS_MAIN_SITE ? 'landing' : 'auth-wall'
+    if (IS_MAIN_SITE) {
+      if (mySite === undefined) return 'loading'
+      return 'onboarding'
+    }
+    return 'site'
+  })()
 
   function signIn() {
     supabase.auth.signInWithOAuth({
@@ -174,7 +223,10 @@ export default function App() {
         `${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`,
         {
           method: 'PUT',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: {
+            'Content-Type': 'text/plain',
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          },
           body: content,
         }
       )
@@ -198,6 +250,49 @@ export default function App() {
     window.location.hash = filePathToHash(fp)
   }
 
+  // ── View rendering ────────────────────────────────────────────────────────
+
+  if (appView === 'loading') {
+    return <div className="state-center" style={{ height: '100vh' }}>Loading…</div>
+  }
+
+  if (appView === 'landing') {
+    return <LandingPage onSignIn={signIn} />
+  }
+
+  if (appView === 'onboarding') {
+    return (
+      <OnboardingView
+        apiBase={API_BASE}
+        token={session!.access_token}
+        defaultSiteName={(session!.user.email ?? '').split('@')[0]}
+        onSuccess={(siteName) => { window.location.href = `/${siteName}` }}
+      />
+    )
+  }
+
+  if (appView === 'auth-wall') {
+    return (
+      <>
+        <header className="topbar">
+          <span className="topbar-title">AgentScribe</span>
+          <div className="topbar-actions">
+            <button className="btn" onClick={signIn}>Sign in</button>
+          </div>
+        </header>
+        <div className="auth-wall">
+          <div className="auth-wall-content">
+            <p>This is a private site. Sign in to view its contents.</p>
+            <button className="btn btn-primary auth-wall-btn" onClick={signIn}>
+              Sign in with Google
+            </button>
+          </div>
+        </div>
+      </>
+    )
+  }
+
+  // appView === 'site'
   return (
     <>
       <header className="topbar">
@@ -231,25 +326,20 @@ export default function App() {
               </button>
             </>
           )}
-          {session === null && (
-            <button className="btn" onClick={signIn}>Sign in</button>
-          )}
-          {session != null && (
-            <div className="auth-avatar-wrap">
-              <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
-                {(session.user.user_metadata?.full_name ?? session.user.email ?? '?')[0].toUpperCase()}
-              </button>
-              {avatarOpen && (
-                <>
-                  <div className="auth-overlay" onClick={() => setAvatarOpen(false)} />
-                  <div className="auth-avatar-menu">
-                    <div className="auth-avatar-email">{session.user.email}</div>
-                    <button className="btn" onClick={signOut}>Sign out</button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          <div className="auth-avatar-wrap">
+            <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
+              {(session!.user.user_metadata?.full_name ?? session!.user.email ?? '?')[0].toUpperCase()}
+            </button>
+            {avatarOpen && (
+              <>
+                <div className="auth-overlay" onClick={() => setAvatarOpen(false)} />
+                <div className="auth-avatar-menu">
+                  <div className="auth-avatar-email">{session!.user.email}</div>
+                  <button className="btn" onClick={signOut}>Sign out</button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
@@ -257,7 +347,7 @@ export default function App() {
 
       <div className="workspace">
         {mode === 'credentials' ? (
-          <CredentialsPanel apiBase={API_BASE} token={session?.access_token ?? ''} />
+          <CredentialsPanel apiBase={API_BASE} token={session!.access_token} />
         ) : (
           <>
             {mode === 'edit' && content !== null && (
@@ -267,7 +357,7 @@ export default function App() {
                 apiBase={API_BASE}
                 site={SITE}
                 filePath={filePath}
-                token={session?.access_token ?? ''}
+                token={session!.access_token}
               />
             )}
 

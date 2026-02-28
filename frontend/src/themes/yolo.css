@@ -1,0 +1,23 @@
+/* Yolo theme — runyolo.dev inspired: dark navy + orange accents */
+[data-theme="yolo"] {
+  --bg: #05050f;
+  --surface: #0c0c1e;
+  --surface-raised: #14143a;
+  --border: #2a1f6e;
+  --text: #f5f0ff;
+  --text-muted: #8878bb;
+  --link: #ff6f3c;
+  --accent: #ff4500;
+  --accent-hover: #ff6f3c;
+  --user-msg-bg: #ff450022;
+  --user-msg-border: #ff450044;
+  --success: #00d97e;
+  --success-border: #00d97e;
+  --success-text: #00d97e;
+  --success-bg: #001a10;
+  --danger: #ff1744;
+  --danger-border: #ff4569;
+  --danger-text: #ff4569;
+  --danger-bg: #1a0010;
+  --shadow: rgba(0, 0, 0, 0.6);
+}

@@ -43,6 +43,11 @@ if [[ -z "${GHCR_PAT:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
+  echo "Error: SUPABASE_SERVICE_ROLE_KEY is not set in environment or .env"
+  exit 1
+fi
+
 helm upgrade --install agentscribe-backend \
   "$SCRIPT_DIR/agentscribe-backend" \
   --namespace yolo \
@@ -51,4 +56,5 @@ helm upgrade --install agentscribe-backend \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
   --set webhookSecret="$WEBHOOK_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
+  --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
   "$@"

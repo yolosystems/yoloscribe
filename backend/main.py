@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from typing import Any
 
 import boto3
@@ -32,8 +34,10 @@ app.add_middleware(
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
+CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 _jwks_client = (
     PyJWKClient(
         f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json",
@@ -46,13 +50,13 @@ _jwks_client = (
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
 
 _aws_profile = os.environ.get("AWS_PROFILE")
 _boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else boto3.Session()
 s3 = _boto_session.client("s3")
-sqs = _boto_session.client("sqs") if SQS_QUEUE_URL else None
+sqs = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else None
 sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
 
 chat_agent = ChatAgent(
@@ -82,6 +86,9 @@ SAFE_PATH = re.compile(
     r")$"
 )
 
+SITE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
+VALID_THEMES = {"light", "dark", "yolo"}
+
 
 def _is_safe_path(path: str) -> bool:
     return bool(SAFE_PATH.match(path))
@@ -109,10 +116,8 @@ def _put_content(site: str, path: str, content: str) -> None:
 _bearer = HTTPBearer(auto_error=False)
 
 
-def _get_user_id(
-    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
-) -> str:
-    """Extract user_id from a Supabase JWT Bearer token via JWKS."""
+def _decode_jwt(credentials: HTTPAuthorizationCredentials | None) -> str:
+    """Validate Supabase JWT and return user_id."""
     if _jwks_client is None:
         raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured")
     if credentials is None:
@@ -129,6 +134,183 @@ def _get_user_id(
         return payload["sub"]
     except pyjwt.exceptions.PyJWTError as exc:
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
+
+
+def _get_site_for_user(user_id: str) -> str | None:
+    """Look up the user's site name from the user_site table via Supabase PostgREST."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/user_site?user_uuid=eq.{user_id}&select=site_name&limit=1"
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read())
+            return data[0]["site_name"] if data else None
+    except Exception:
+        return None
+
+
+def _get_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> str:
+    """Extract user_id from JWT (backwards-compatible for /secrets routes)."""
+    return _decode_jwt(credentials)
+
+
+def _get_user_context(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> tuple[str, str | None]:
+    """Extract user_id from JWT and look up site_name from user_site table."""
+    user_id = _decode_jwt(credentials)
+    return user_id, _get_site_for_user(user_id)
+
+
+def _require_site_owner(requested_site: str, user_site: str | None) -> None:
+    if user_site is None or user_site != requested_site:
+        raise HTTPException(status_code=403, detail="Access denied: not your site")
+
+
+# ── Supabase admin helpers ────────────────────────────────────────────────────
+
+def _supabase_insert_user_site(user_id: str, site_name: str, theme: str) -> None:
+    """Insert into user_site table via Supabase PostgREST."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase admin API not configured")
+    url = f"{SUPABASE_URL}/rest/v1/user_site"
+    data = json.dumps({"user_uuid": user_id, "site_name": site_name, "theme": theme}).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Prefer": "return=minimal",
+        },
+    )
+    try:
+        urllib.request.urlopen(req)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Supabase PostgREST error: {exc}") from exc
+
+
+# ── Infrastructure provisioning ───────────────────────────────────────────────
+
+async def _provision_user_infrastructure(user_id: str) -> None:
+    """Provision IAM role, K8s ServiceAccount, and SM placeholder for a new user."""
+    role_name = f"agentscribe-user-{user_id}"
+    sa_name = f"user-{user_id}"
+    sm_secret_name = f"agentscribe/{user_id}/.initialized"
+
+    iam = _boto_session.client("iam")
+    secrets_manager = _boto_session.client("secretsmanager", region_name=AWS_REGION)
+
+    # 1. Create IAM role with IRSA trust policy
+    trust_policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Federated": f"arn:aws:iam::{AWS_ACCOUNT_ID}:oidc-provider/{EKS_OIDC_PROVIDER}"
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {
+                        f"{EKS_OIDC_PROVIDER}:sub": f"system:serviceaccount:{K8S_NAMESPACE}:{sa_name}",
+                        f"{EKS_OIDC_PROVIDER}:aud": "sts.amazonaws.com",
+                    }
+                },
+            }
+        ],
+    }
+    iam.create_role(
+        RoleName=role_name,
+        AssumeRolePolicyDocument=json.dumps(trust_policy),
+        Description=f"IRSA role for AgentScribe user {user_id}",
+    )
+
+    # 2. Attach inline policy: allow reading secrets + scoped S3 access for this user
+    secret_arn_prefix = (
+        f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
+    )
+    s3_bucket_arn = f"arn:aws:s3:::{S3_BUCKET}"
+    iam.put_role_policy(
+        RoleName=role_name,
+        PolicyName="agentscribe-user-access",
+        PolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "SecretsManagerReadUserSecrets",
+                        "Effect": "Allow",
+                        "Action": "secretsmanager:GetSecretValue",
+                        "Resource": f"{secret_arn_prefix}*",
+                    },
+                    {
+                        "Sid": "S3ReadWriteUserPrefix",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                        "Resource": f"{s3_bucket_arn}/{user_id}/*",
+                    },
+                    {
+                        "Sid": "S3ListUserPrefix",
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": s3_bucket_arn,
+                        "Condition": {
+                            "StringLike": {"s3:prefix": f"{user_id}/*"}
+                        },
+                    },
+                ],
+            }
+        ),
+    )
+    role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/{role_name}"
+
+    # 3. Create K8s ServiceAccount annotated with role ARN
+    try:
+        from kubernetes import client as k8s_client  # type: ignore[import-untyped]
+        from kubernetes import config as k8s_config  # type: ignore[import-untyped]
+
+        kubeconfig = os.environ.get("KUBECONFIG")
+        if kubeconfig:
+            k8s_config.load_kube_config(config_file=kubeconfig)
+        else:
+            try:
+                k8s_config.load_incluster_config()
+            except Exception:
+                k8s_config.load_kube_config()
+
+        v1 = k8s_client.CoreV1Api()
+        sa = k8s_client.V1ServiceAccount(
+            metadata=k8s_client.V1ObjectMeta(
+                name=sa_name,
+                namespace=K8S_NAMESPACE,
+                annotations={"eks.amazonaws.com/role-arn": role_arn},
+            )
+        )
+        v1.create_namespaced_service_account(namespace=K8S_NAMESPACE, body=sa)
+    except Exception as k8s_exc:
+        raise HTTPException(
+            status_code=502, detail=f"K8s ServiceAccount creation failed: {k8s_exc}"
+        ) from k8s_exc
+
+    # 4. Create Secrets Manager placeholder
+    secrets_manager.create_secret(
+        Name=sm_secret_name,
+        SecretString=json.dumps({"initialized": "true"}),
+        Description=f"Placeholder secret for AgentScribe user {user_id}",
+    )
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -160,6 +342,31 @@ class SecretValue(BaseModel):
     value: str
 
 
+class ProvisionRequest(BaseModel):
+    site_name: str
+    theme: str
+
+
+class ProvisionResponse(BaseModel):
+    site_url: str
+
+
+# ── Default welcome content ───────────────────────────────────────────────────
+
+_DEFAULT_WELCOME_MD = """\
+# Welcome to your AgentScribe site!
+
+This is the home page of your personal wiki. Edit this content using the editor,
+or ask the AI assistant in the Chat panel to help you write and organise your notes.
+
+## Getting Started
+
+- Click **Edit** to enter edit mode
+- Use the **Chat** panel to ask the AI to help you write content
+- Navigate to sub-pages by clicking links
+"""
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -178,8 +385,13 @@ async def get_content(site: str = "default", path: str = "content.md") -> Respon
 
 @app.put("/content")
 async def put_content(
-    request: Request, site: str = "default", path: str = "content.md"
+    request: Request,
+    site: str = "default",
+    path: str = "content.md",
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
 ) -> dict[str, str]:
+    user_id, user_site = ctx
+    _require_site_owner(site, user_site)
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
     body = await request.body()
@@ -275,7 +487,12 @@ async def put_secret(
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, user_id: str = Depends(_get_user_id)) -> Any:
+async def chat(
+    req: ChatRequest,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> Any:
+    user_id, user_site = ctx
+    _require_site_owner(req.site, user_site)
     if not _is_safe_path(req.file_path):
         raise HTTPException(status_code=400, detail="Invalid file_path")
 
@@ -300,6 +517,89 @@ async def chat(req: ChatRequest, user_id: str = Depends(_get_user_id)) -> Any:
     return ChatResponse(reply=reply, updated_content=updated_content)
 
 
+@app.post("/provision")
+async def provision(
+    req: ProvisionRequest,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> ProvisionResponse:
+    user_id, existing_site = ctx
+
+    if existing_site is not None:
+        raise HTTPException(status_code=409, detail="User already has a provisioned site")
+
+    if not SITE_NAME_RE.match(req.site_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid site name: must be 3-50 lowercase alphanumeric characters or hyphens, not starting or ending with a hyphen",
+        )
+
+    if req.theme not in VALID_THEMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid theme; must be one of: {', '.join(sorted(VALID_THEMES))}",
+        )
+
+    # Check S3 uniqueness
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"{req.site_name}/", MaxKeys=1)
+    if resp.get("KeyCount", 0) > 0:
+        raise HTTPException(status_code=409, detail="Site name already taken")
+
+    # Create initial S3 objects
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{req.site_name}/content.md",
+        Body=_DEFAULT_WELCOME_MD.encode("utf-8"),
+        ContentType="text/markdown; charset=utf-8",
+    )
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{req.site_name}/config.json",
+        Body=json.dumps({"theme": req.theme}).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    # Copy pre-built theme bundle from _themes/{theme}/ → {site_name}/
+    theme_prefix = f"_themes/{req.theme}/"
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=theme_prefix):
+        for obj in page.get("Contents", []):
+            src_key = obj["Key"]
+            dst_key = f"{req.site_name}/" + src_key[len(theme_prefix):]
+            s3.copy_object(
+                Bucket=S3_BUCKET,
+                CopySource={"Bucket": S3_BUCKET, "Key": src_key},
+                Key=dst_key,
+            )
+
+    # Insert into user_site table
+    _supabase_insert_user_site(user_id, req.site_name, req.theme)
+
+    # Provision IAM/K8s/SM infrastructure
+    try:
+        print("temporarily disabled")
+        #await _provision_user_infrastructure(user_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    site_url = (
+        f"https://{CLOUDFRONT_DOMAIN}/{req.site_name}"
+        if CLOUDFRONT_DOMAIN
+        else f"/{req.site_name}"
+    )
+    return ProvisionResponse(site_url=site_url)
+
+
+@app.get("/my-site")
+async def my_site(
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Return the authenticated user's site name from their JWT app_metadata."""
+    _, site_name = ctx
+    return {"site_name": site_name}
+
+
 @app.post("/webhooks/user-created")
 async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, str]:
     """Provision IAM role, K8s ServiceAccount, and Secrets Manager placeholder for a new user."""
@@ -307,114 +607,8 @@ async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, s
     if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
-    user_id = event.user_id
-    role_name = f"agentscribe-user-{user_id}"
-    sa_name = f"user-{user_id}"
-    sm_secret_name = f"agentscribe/{user_id}/.initialized"
-
     try:
-        iam = _boto_session.client("iam")
-        secrets_manager = _boto_session.client("secretsmanager", region_name=AWS_REGION)
-
-        # 1. Create IAM role with IRSA trust policy
-        trust_policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Federated": f"arn:aws:iam::{AWS_ACCOUNT_ID}:oidc-provider/{EKS_OIDC_PROVIDER}"
-                    },
-                    "Action": "sts:AssumeRoleWithWebIdentity",
-                    "Condition": {
-                        "StringEquals": {
-                            f"{EKS_OIDC_PROVIDER}:sub": f"system:serviceaccount:{K8S_NAMESPACE}:{sa_name}",
-                            f"{EKS_OIDC_PROVIDER}:aud": "sts.amazonaws.com",
-                        }
-                    },
-                }
-            ],
-        }
-        iam.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy),
-            Description=f"IRSA role for AgentScribe user {user_id}",
-        )
-
-        # 2. Attach inline policy: allow reading secrets + scoped S3 access for this user
-        secret_arn_prefix = (
-            f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
-        )
-        s3_bucket_arn = f"arn:aws:s3:::{S3_BUCKET}"
-        iam.put_role_policy(
-            RoleName=role_name,
-            PolicyName="agentscribe-user-access",
-            PolicyDocument=json.dumps(
-                {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Sid": "SecretsManagerReadUserSecrets",
-                            "Effect": "Allow",
-                            "Action": "secretsmanager:GetSecretValue",
-                            "Resource": f"{secret_arn_prefix}*",
-                        },
-                        {
-                            "Sid": "S3ReadWriteUserPrefix",
-                            "Effect": "Allow",
-                            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                            "Resource": f"{s3_bucket_arn}/{user_id}/*",
-                        },
-                        {
-                            "Sid": "S3ListUserPrefix",
-                            "Effect": "Allow",
-                            "Action": "s3:ListBucket",
-                            "Resource": s3_bucket_arn,
-                            "Condition": {
-                                "StringLike": {"s3:prefix": f"{user_id}/*"}
-                            },
-                        },
-                    ],
-                }
-            ),
-        )
-        role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/{role_name}"
-
-        # 3. Create K8s ServiceAccount annotated with role ARN
-        try:
-            from kubernetes import client as k8s_client  # type: ignore[import-untyped]
-            from kubernetes import config as k8s_config  # type: ignore[import-untyped]
-
-            kubeconfig = os.environ.get("KUBECONFIG")
-            if kubeconfig:
-                k8s_config.load_kube_config(config_file=kubeconfig)
-            else:
-                try:
-                    k8s_config.load_incluster_config()
-                except Exception:
-                    k8s_config.load_kube_config()
-
-            v1 = k8s_client.CoreV1Api()
-            sa = k8s_client.V1ServiceAccount(
-                metadata=k8s_client.V1ObjectMeta(
-                    name=sa_name,
-                    namespace=K8S_NAMESPACE,
-                    annotations={"eks.amazonaws.com/role-arn": role_arn},
-                )
-            )
-            v1.create_namespaced_service_account(namespace=K8S_NAMESPACE, body=sa)
-        except Exception as k8s_exc:
-            raise HTTPException(
-                status_code=502, detail=f"K8s ServiceAccount creation failed: {k8s_exc}"
-            ) from k8s_exc
-
-        # 4. Create Secrets Manager placeholder
-        secrets_manager.create_secret(
-            Name=sm_secret_name,
-            SecretString=json.dumps({"initialized": "true"}),
-            Description=f"Placeholder secret for AgentScribe user {user_id}",
-        )
-
+        await _provision_user_infrastructure(event.user_id)
     except HTTPException:
         raise
     except Exception as exc:
