@@ -135,24 +135,23 @@ export default function App() {
   // Fetch the agents list for the current page whenever we enter edit mode
   // or navigate to a different page while already editing.
   useEffect(() => {
-    if (mode !== 'edit') return
+    if (!session || mode !== 'edit') return
     const pagePath = getPagePath(filePath)
     const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
-    const headers: Record<string, string> = {}
-    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-    fetch(url, { headers })
+    fetch(url, { headers: { 'Authorization': `Bearer ${session.access_token}` } })
       .then((res) => (res.ok ? res.json() : { agents: [] }))
       .then((data) => setAgents(data.agents ?? []))
       .catch(() => setAgents([]))
-  }, [mode, filePath, session])
+  }, [mode, filePath, session?.access_token])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the markdown file through the API (works in dev and production).
   useEffect(() => {
+    if (!session) return
     setContent(null)
     setError(null)
-    const headers: Record<string, string> = {}
-    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, { headers })
+    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, {
+      headers: { 'Authorization': `Bearer ${session.access_token}` },
+    })
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load content: ${res.status}`)
         return res.text()
@@ -162,7 +161,7 @@ export default function App() {
         setSavedContent(text)
       })
       .catch((err) => setError(err.message))
-  }, [filePath, session])
+  }, [filePath, session?.access_token])  // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     if (content === null) return
