@@ -14,10 +14,9 @@ interface Props {
   apiBase: string
   site: string
   filePath: string
-  token: string
 }
 
-export default function ChatPanel({ content, onContentUpdate, apiBase, site, filePath, token }: Props) {
+export default function ChatPanel({ content, onContentUpdate, apiBase, site, filePath }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -47,7 +46,7 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
     try {
       const res = await fetch(`${apiBase}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
           current_content: content,
