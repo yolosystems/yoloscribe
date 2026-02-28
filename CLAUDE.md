@@ -110,4 +110,4 @@ Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 
-Copy `.env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.
+Copy `env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.
