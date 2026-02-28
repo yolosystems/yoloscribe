@@ -112,7 +112,7 @@ export default function App() {
       if (!s) {
         supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: { redirectTo: window.location.href },
+          options: { redirectTo: window.location.origin },
         })
       }
     })
