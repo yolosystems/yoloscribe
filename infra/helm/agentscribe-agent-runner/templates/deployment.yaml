@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentscribe-agent-runner.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentscribe-agent-runner.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agentscribe-agent-runner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentscribe-agent-runner.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "agentscribe-agent-runner.serviceAccountName" . }}
+      {{- if .Values.ghcr.pat }}
+      imagePullSecrets:
+        - name: {{ include "agentscribe-agent-runner.fullname" . }}-ghcr
+      {{- end }}
+      containers:
+        - name: polling-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uv", "run", "polling-worker"]
+          env:
+            - name: SQS_QUEUE_URL
+              value: {{ .Values.config.sqsQueueUrl | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.config.awsRegion | quote }}
+            - name: K8S_NAMESPACE
+              value: {{ .Values.config.k8sNamespace | quote }}
+            - name: ANTHROPIC_SECRET_NAME
+              value: {{ .Values.config.anthropicSecretName | quote }}
+            - name: AGENT_RUNNER_IMAGE
+              value: {{ include "agentscribe-agent-runner.runnerImage" . | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentscribe-agent-runner.secretName" . }}
+                  key: {{ .Values.existingSecretKey }}
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

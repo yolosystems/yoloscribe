@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react'
+import { type Session } from '@supabase/supabase-js'
+import { supabase } from './supabase'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
+import AgentsList from './components/AgentsList'
+import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
+import CredentialsPanel from './components/CredentialsPanel'
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -19,31 +24,103 @@ function getSite(): string {
 
 const SITE = getSite()
 
-// Derive the file path from the URL hash.
-// #/agents/myagent  →  agents/myagent/agents.md
-// (anything else)   →  content.md
+// ── Hash ↔ filePath helpers ────────────────────────────────────────────────────
+//
+// Hash scheme:
+//   (empty)                      →  content.md              (root page)
+//   #/{page}                     →  {page}/content.md       (child page)
+//   #/.agents/{name}             →  .agents/{name}/agent.md (root agent)
+//   #/{page}/.agents/{name}      →  {page}/.agents/{name}/agent.md
+
 function getFilePath(): string {
   const hash = window.location.hash
-  const match = hash.match(/^#\/agents\/([a-z0-9][a-z0-9_-]*)$/)
-  if (match) return `agents/${match[1]}/agents.md`
-  return 'content.md'
+  if (!hash) return 'content.md'
+  const path = hash.replace(/^#\/?/, '')
+  if (!path) return 'content.md'
+  // {page}/.agents/{name}  or  .agents/{name}
+  const agentMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)$/)
+  if (agentMatch) return `${agentMatch[1] ?? ''}.agents/${agentMatch[2]}/agent.md`
+  // page path
+  return `${path}/content.md`
 }
 
-// Extract agent name from file path for display purposes.
-function getAgentName(filePath: string): string | null {
-  const match = filePath.match(/^agents\/([a-z0-9][a-z0-9_-]*)\/agents\.md$/)
-  return match ? match[1] : null
+function filePathToHash(fp: string): string {
+  if (fp === 'content.md') return ''
+  const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
+  if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
+  const pageMatch = fp.match(/^(.+)\/content\.md$/)
+  if (pageMatch) return `#/${pageMatch[1]}`
+  return ''
 }
 
-type Mode = 'view' | 'edit'
+function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
+  const crumbs: BreadcrumbSegment[] = [{ label: 'Home', filePath: 'content.md' }]
+  if (fp === 'content.md') return crumbs
+
+  const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
+  if (agentMatch) {
+    const pagePart = agentMatch[1] ? agentMatch[1].replace(/\/$/, '') : null
+    if (pagePart) {
+      let acc = ''
+      for (const seg of pagePart.split('/')) {
+        acc = acc ? `${acc}/${seg}` : seg
+        crumbs.push({ label: seg, filePath: `${acc}/content.md` })
+      }
+    }
+    crumbs.push({ label: '.agents', filePath: null })
+    crumbs.push({ label: agentMatch[2], filePath: fp })
+    return crumbs
+  }
+
+  const pageMatch = fp.match(/^(.+)\/content\.md$/)
+  if (pageMatch) {
+    let acc = ''
+    for (const seg of pageMatch[1].split('/')) {
+      acc = acc ? `${acc}/${seg}` : seg
+      crumbs.push({ label: seg, filePath: `${acc}/content.md` })
+    }
+    return crumbs
+  }
+
+  return crumbs
+}
+
+// Derive the page path (used for listing page-scoped agents).
+// "content.md" or ".agents/*/agent.md"  →  "" (root page)
+// "{page}/content.md" or "{page}/.agents/*/agent.md"  →  "{page}"
+function getPagePath(filePath: string): string {
+  if (filePath === 'content.md' || filePath.startsWith('.agents/')) return ''
+  return filePath.split('/').slice(0, -1).filter((s) => !s.startsWith('.')).join('/')
+}
+
+type Mode = 'view' | 'edit' | 'credentials'
 
 export default function App() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [filePath, setFilePath] = useState(getFilePath)
   const [content, setContent] = useState<string | null>(null)
   const [savedContent, setSavedContent] = useState<string>('')
   const [mode, setMode] = useState<Mode>('view')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [agents, setAgents] = useState<string[]>([])
+
+  // Auth: check for an existing session on mount, redirect to Google if none.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s)
+      if (!s) {
+        supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: window.location.origin },
+        })
+      }
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
 
   // Update filePath on hash navigation
   useEffect(() => {
@@ -52,11 +129,27 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handler)
   }, [])
 
-  // Fetch the markdown file (relative URL resolves against S3 origin)
+  // Fetch the agents list for the current page whenever we enter edit mode
+  // or navigate to a different page while already editing.
+  useEffect(() => {
+    if (mode !== 'edit') return
+    const pagePath = getPagePath(filePath)
+    const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
+    const headers: Record<string, string> = {}
+    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+    fetch(url, { headers })
+      .then((res) => (res.ok ? res.json() : { agents: [] }))
+      .then((data) => setAgents(data.agents ?? []))
+      .catch(() => setAgents([]))
+  }, [mode, filePath, session])
+
+  // Fetch the markdown file through the API (works in dev and production).
   useEffect(() => {
     setContent(null)
     setError(null)
-    fetch(filePath)
+    const headers: Record<string, string> = {}
+    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load content: ${res.status}`)
         return res.text()
@@ -66,17 +159,19 @@ export default function App() {
         setSavedContent(text)
       })
       .catch((err) => setError(err.message))
-  }, [filePath])
+  }, [filePath, session])
 
   async function save() {
     if (content === null) return
     setSaving(true)
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'text/plain' }
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
       const res = await fetch(
         `${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`,
         {
           method: 'PUT',
-          headers: { 'Content-Type': 'text/plain' },
+          headers,
           body: content,
         }
       )
@@ -95,21 +190,31 @@ export default function App() {
   }
 
   const isDirty = content !== savedContent
-  const agentName = getAgentName(filePath)
+
+  function navigate(fp: string) {
+    window.location.hash = filePathToHash(fp)
+  }
+
+  if (session === undefined) return <div className="state-center">Loading…</div>
+  if (session === null) return null
 
   return (
     <>
       <header className="topbar">
-        <span className="topbar-title">
-          AgentScribe
-          {agentName && <span className="topbar-subtitle"> — Agent: {agentName}</span>}
-        </span>
+        <span className="topbar-title">AgentScribe</span>
         <div className="topbar-actions">
-          {mode === 'view' ? (
+          <button
+            className={`btn${mode === 'credentials' ? ' btn-primary' : ''}`}
+            onClick={() => setMode(mode === 'credentials' ? 'view' : 'credentials')}
+          >
+            {mode === 'credentials' ? '← Back' : 'Credentials'}
+          </button>
+          {mode === 'view' && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
             </button>
-          ) : (
+          )}
+          {mode === 'edit' && (
             <>
               <button className="btn btn-danger" onClick={discard}>
                 Discard
@@ -129,28 +234,41 @@ export default function App() {
         </div>
       </header>
 
-      <div className="workspace">
-        {mode === 'edit' && content !== null && (
-          <ChatPanel
-            content={content}
-            onContentUpdate={setContent}
-            apiBase={API_BASE}
-            site={SITE}
-            filePath={filePath}
-          />
-        )}
+      <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
-        <div className="content-area">
-          {error ? (
-            <div className="state-center">{error}</div>
-          ) : content === null ? (
-            <div className="state-center">Loading…</div>
-          ) : mode === 'view' ? (
-            <MarkdownViewer content={content} />
-          ) : (
-            <MarkdownEditor content={content} onChange={setContent} />
-          )}
-        </div>
+      <div className="workspace">
+        {mode === 'credentials' ? (
+          <CredentialsPanel apiBase={API_BASE} token={session.access_token} />
+        ) : (
+          <>
+            {mode === 'edit' && content !== null && (
+              <ChatPanel
+                content={content}
+                onContentUpdate={setContent}
+                apiBase={API_BASE}
+                site={SITE}
+                filePath={filePath}
+                token={session.access_token}
+              />
+            )}
+
+            {mode === 'edit' && (
+              <AgentsList agents={agents} activeFilePath={filePath} />
+            )}
+
+            <div className="content-area">
+              {error ? (
+                <div className="state-center">{error}</div>
+              ) : content === null ? (
+                <div className="state-center">Loading…</div>
+              ) : mode === 'view' ? (
+                <MarkdownViewer content={content} />
+              ) : (
+                <MarkdownEditor content={content} onChange={setContent} />
+              )}
+            </div>
+          </>
+        )}
       </div>
     </>
   )

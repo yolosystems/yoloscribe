@@ -1,0 +1,34 @@
+image:
+  repository: ghcr.io/nate-yolodev/agentscribe-backend
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: nate-yolodev
+
+replicaCount: 1
+
+ingress:
+  enabled: true
+  host: agentscribe-dev.runyolo.dev
+  certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+serviceAccount:
+  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-dev-serviceaccount"
+
+config:
+  s3Bucket: "agentscribe-dev"
+  allowedOrigins: "*"
+  model: "claude-opus-4-6"
+  sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/agentscribe-dev-jobs"
+  eksOidcProvider: "oidc.eks.us-west-2.amazonaws.com/id/329F46753B3AC6C1484FA9A7D94216B0"
+  awsAccountId: "295934381903"
+  awsRegion: "us-west-2"
+  k8sNamespace: "yolo"

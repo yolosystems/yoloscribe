@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -12,9 +14,10 @@ interface Props {
   apiBase: string
   site: string
   filePath: string
+  token: string
 }
 
-export default function ChatPanel({ content, onContentUpdate, apiBase, site, filePath }: Props) {
+export default function ChatPanel({ content, onContentUpdate, apiBase, site, filePath, token }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -44,7 +47,7 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
     try {
       const res = await fetch(`${apiBase}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           message: text,
           current_content: content,
@@ -88,7 +91,7 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
 
   return (
     <div className="chat-panel">
-      <div className="chat-panel-header">Agent</div>
+      <div className="chat-panel-header">Chat</div>
 
       <div className="chat-messages">
         {messages.map((msg, i) => (
@@ -96,7 +99,11 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
             key={i}
             className={`chat-message ${msg.role}${msg.thinking ? ' thinking' : ''}`}
           >
-            {msg.content}
+            {msg.role === 'assistant' && !msg.thinking ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+            ) : (
+              msg.content
+            )}
           </div>
         ))}
         <div ref={bottomRef} />

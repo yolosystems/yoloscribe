@@ -1,0 +1,18 @@
+[project]
+name = "agentscribe-agent-runner"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.35.0",
+    "kubernetes>=29.0.0",
+    "strands-agents[anthropic]>=0.1.0",
+    "strands-agents-tools>=0.1.0",
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+agent-runner = "agent_runner.agent_runner:main"
+polling-worker = "agent_runner.polling_worker:main"
+
+[tool.uv]
+package = true

@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3ReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::agentscribe-*",
+        "arn:aws:s3:::agentscribe-*/*"
+      ]
+    },
+    {
+      "Sid": "SecretsManagerWrite",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:agentscribe*"
+    },
+    {
+      "Sid": "IAMProvisionUserRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePolicy",
+        "iam:GetRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/agentscribe-user-*"
+    },
+    {
+      "Sid": "SQSSend",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage"
+      ],
+      "Resource": "arn:aws:sqs:*:*:agentscribe-*"
+    }
+  ]
+}
