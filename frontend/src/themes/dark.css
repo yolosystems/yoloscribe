@@ -1,0 +1,24 @@
+/* Dark theme — default; variables applied to :root so dark is the baseline */
+:root,
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-raised: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --link: #58a6ff;
+  --accent: #1f6feb;
+  --accent-hover: #388bfd;
+  --user-msg-bg: #1f6feb33;
+  --user-msg-border: #1f6feb55;
+  --success: #238636;
+  --success-border: #2ea043;
+  --success-text: #3fb950;
+  --success-bg: #1a3a1a;
+  --danger: #da3633;
+  --danger-border: #f85149;
+  --danger-text: #f85149;
+  --danger-bg: #2a1a1a;
+  --shadow: rgba(0, 0, 0, 0.4);
+}

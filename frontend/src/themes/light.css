@@ -1,0 +1,23 @@
+/* Light theme */
+[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --surface-raised: #eaeef2;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-muted: #656d76;
+  --link: #0969da;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --user-msg-bg: #0969da22;
+  --user-msg-border: #0969da44;
+  --success: #1a7f37;
+  --success-border: #1a7f37;
+  --success-text: #1a7f37;
+  --success-bg: #dafbe1;
+  --danger: #cf222e;
+  --danger-border: #cf222e;
+  --danger-text: #cf222e;
+  --danger-bg: #ffebe9;
+  --shadow: rgba(0, 0, 0, 0.12);
+}
