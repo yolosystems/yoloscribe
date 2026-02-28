@@ -59,6 +59,7 @@ config:
   awsAccountId: ""
   awsRegion: ""
   k8sNamespace: ""
+  supabaseUrl: ""
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.
@@ -74,7 +75,6 @@ webhookSecret: ""
 existingSecret: ""
 existingSecretKey: anthropic-api-key
 anthropicApiKey: ""
-supabaseJwtSecret: ""
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:

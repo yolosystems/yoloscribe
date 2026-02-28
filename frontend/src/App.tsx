@@ -1,6 +1,4 @@
 import { useState, useEffect } from 'react'
-import { type Session } from '@supabase/supabase-js'
-import { supabase } from './supabase'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
@@ -96,7 +94,6 @@ function getPagePath(filePath: string): string {
 type Mode = 'view' | 'edit' | 'credentials'
 
 export default function App() {
-  const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [filePath, setFilePath] = useState(getFilePath)
   const [content, setContent] = useState<string | null>(null)
   const [savedContent, setSavedContent] = useState<string>('')
@@ -104,23 +101,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [agents, setAgents] = useState<string[]>([])
-
-  // Auth: check for an existing session on mount, redirect to Google if none.
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s)
-      if (!s) {
-        supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: { redirectTo: window.location.origin },
-        })
-      }
-    })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s)
-    })
-    return () => subscription.unsubscribe()
-  }, [])
 
   // Update filePath on hash navigation
   useEffect(() => {
@@ -135,21 +115,20 @@ export default function App() {
     if (mode !== 'edit') return
     const pagePath = getPagePath(filePath)
     const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
-    const headers: Record<string, string> = {}
-    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-    fetch(url, { headers })
+    fetch(url)
       .then((res) => (res.ok ? res.json() : { agents: [] }))
       .then((data) => setAgents(data.agents ?? []))
       .catch(() => setAgents([]))
-  }, [mode, filePath, session])
+  }, [mode, filePath])
 
   // Fetch the markdown file through the API (works in dev and production).
   useEffect(() => {
+    const controller = new AbortController()
     setContent(null)
     setError(null)
-    const headers: Record<string, string> = {}
-    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, { headers })
+    fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, {
+      signal: controller.signal,
+    })
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load content: ${res.status}`)
         return res.text()
@@ -158,20 +137,19 @@ export default function App() {
         setContent(text)
         setSavedContent(text)
       })
-      .catch((err) => setError(err.message))
-  }, [filePath, session])
+      .catch((err) => { if (err.name !== 'AbortError') setError(err.message) })
+    return () => controller.abort()
+  }, [filePath])
 
   async function save() {
     if (content === null) return
     setSaving(true)
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'text/plain' }
-      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
       const res = await fetch(
         `${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`,
         {
           method: 'PUT',
-          headers,
+          headers: { 'Content-Type': 'text/plain' },
           body: content,
         }
       )
@@ -194,9 +172,6 @@ export default function App() {
   function navigate(fp: string) {
     window.location.hash = filePathToHash(fp)
   }
-
-  if (session === undefined) return <div className="state-center">Loading…</div>
-  if (session === null) return null
 
   return (
     <>
@@ -238,7 +213,7 @@ export default function App() {
 
       <div className="workspace">
         {mode === 'credentials' ? (
-          <CredentialsPanel apiBase={API_BASE} token={session.access_token} />
+          <CredentialsPanel apiBase={API_BASE} />
         ) : (
           <>
             {mode === 'edit' && content !== null && (
@@ -248,7 +223,6 @@ export default function App() {
                 apiBase={API_BASE}
                 site={SITE}
                 filePath={filePath}
-                token={session.access_token}
               />
             )}
 

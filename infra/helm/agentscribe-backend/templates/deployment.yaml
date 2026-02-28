@@ -58,12 +58,8 @@ spec:
                   key: webhook-secret
                   optional: true
             {{- end }}
-            - name: SUPABASE_JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "agentscribe-backend.secretName" . }}
-                  key: supabase-jwt-secret
-                  optional: true
+            - name: SUPABASE_URL
+              value: {{ .Values.config.supabaseUrl | quote }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
