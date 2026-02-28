@@ -10,8 +10,8 @@ dependencies = [
     "pydantic==2.8.2",
     "strands-agents[anthropic]>=0.1.0",
     "strands-agents-tools>=0.1.0",
-    "python-jose[cryptography]>=3.3.0",
     "kubernetes>=29.0.0",
+    "pyjwt[crypto]>=2.8.0",
 ]
 
 [tool.uv]
@@ -19,5 +19,4 @@ package = false
 dev-dependencies = [
     "boto3-stubs[s3,sqs]>=1.42.57",
     "mypy>=1.19.1",
-    "types-python-jose>=3.5.0.20250531",
 ]

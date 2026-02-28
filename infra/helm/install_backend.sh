@@ -33,11 +33,6 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${SUPABASE_JWT_SECRET:-}" ]]; then
-  echo "Error: SUPABASE_JWT_SECRET is not set in environment or .env"
-  exit 1
-fi
-
 if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
   echo "Error: WEBHOOK_SECRET is not set in environment or .env"
   exit 1
@@ -54,7 +49,6 @@ helm upgrade --install agentscribe-backend \
   --create-namespace \
   --values "$VALUES_FILE" \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
-  --set supabaseJwtSecret="$SUPABASE_JWT_SECRET" \
   --set webhookSecret="$WEBHOOK_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   "$@"

@@ -15,11 +15,8 @@ from pydantic import BaseModel
 from agents import ChatAgent
 from agents.base import DEFAULT_MODEL, agents_prefix, skills_prefix
 
-try:
-    from jose import JWTError, jwt as jose_jwt
-    _JOSE_AVAILABLE = True
-except ImportError:
-    _JOSE_AVAILABLE = False
+import jwt as pyjwt
+from jwt import PyJWKClient
 
 app = FastAPI(title="AgentScribe API")
 
@@ -36,7 +33,16 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 
-SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")  # required; 500 if unset
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_jwks_client = (
+    PyJWKClient(
+        f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json",
+        cache_keys=True,
+        lifespan=600,  # 10 minutes, matching Supabase's edge cache TTL
+    )
+    if SUPABASE_URL
+    else None
+)
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
@@ -106,26 +112,22 @@ _bearer = HTTPBearer(auto_error=False)
 def _get_user_id(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> str:
-    """Extract user_id from a Supabase JWT Bearer token.
-
-    Raises 401 if the token is missing or invalid.
-    """
-    if not SUPABASE_JWT_SECRET:
-        raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET is not configured")
+    """Extract user_id from a Supabase JWT Bearer token via JWKS."""
+    if _jwks_client is None:
+        raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured")
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     token = credentials.credentials
-    if not _JOSE_AVAILABLE:
-        raise HTTPException(status_code=500, detail="JWT library not available")
     try:
-        payload = jose_jwt.decode(
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
+        payload = pyjwt.decode(
             token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["RS256", "ES256"],
             audience="authenticated",
         )
         return payload["sub"]
-    except JWTError as exc:
+    except pyjwt.exceptions.PyJWTError as exc:
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
 
 
