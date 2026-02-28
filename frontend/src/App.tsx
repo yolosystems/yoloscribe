@@ -34,7 +34,7 @@ const SITE = getSite()
 
 function getFilePath(): string {
   const hash = window.location.hash
-  if (!hash) return 'content.md'
+  if (!hash || hash.includes('access_token=')) return 'content.md'
   const path = hash.replace(/^#\/?/, '')
   if (!path) return 'content.md'
   // {page}/.agents/{name}  or  .agents/{name}
@@ -116,8 +116,11 @@ export default function App() {
         })
       }
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s)
+      if (event === 'SIGNED_IN' && window.location.hash.includes('access_token=')) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
     })
     return () => subscription.unsubscribe()
   }, [])
