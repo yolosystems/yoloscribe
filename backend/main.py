@@ -204,7 +204,7 @@ def _supabase_insert_user_site(user_id: str, site_name: str, theme: str) -> None
 
 # ── Infrastructure provisioning ───────────────────────────────────────────────
 
-async def _provision_user_infrastructure(user_id: str) -> None:
+async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
     """Provision IAM role, K8s ServiceAccount, and SM placeholder for a new user."""
     role_name = f"agentscribe-user-{user_id}"
     sa_name = f"user-{user_id}"
@@ -234,11 +234,12 @@ async def _provision_user_infrastructure(user_id: str) -> None:
     }
     iam.create_role(
         RoleName=role_name,
+        Path="/agentscribe/",
         AssumeRolePolicyDocument=json.dumps(trust_policy),
         Description=f"IRSA role for AgentScribe user {user_id}",
     )
 
-    # 2. Attach inline policy: allow reading secrets + scoped S3 access for this user
+    # 2. Attach inline policy: allow reading secrets + scoped S3 access for this user's site
     secret_arn_prefix = (
         f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
     )
@@ -260,7 +261,7 @@ async def _provision_user_infrastructure(user_id: str) -> None:
                         "Sid": "S3ReadWriteUserPrefix",
                         "Effect": "Allow",
                         "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                        "Resource": f"{s3_bucket_arn}/{user_id}/*",
+                        "Resource": f"{s3_bucket_arn}/{site_name}/*",
                     },
                     {
                         "Sid": "S3ListUserPrefix",
@@ -268,14 +269,14 @@ async def _provision_user_infrastructure(user_id: str) -> None:
                         "Action": "s3:ListBucket",
                         "Resource": s3_bucket_arn,
                         "Condition": {
-                            "StringLike": {"s3:prefix": f"{user_id}/*"}
+                            "StringLike": {"s3:prefix": f"{site_name}/*"}
                         },
                     },
                 ],
             }
         ),
     )
-    role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/{role_name}"
+    role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/agentscribe/{role_name}"
 
     # 3. Create K8s ServiceAccount annotated with role ARN
     try:
@@ -576,8 +577,7 @@ async def provision(
 
     # Provision IAM/K8s/SM infrastructure
     try:
-        print("temporarily disabled")
-        #await _provision_user_infrastructure(user_id)
+        await _provision_user_infrastructure(user_id, req.site_name)
     except HTTPException:
         raise
     except Exception as exc:
@@ -607,8 +607,12 @@ async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, s
     if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
+    site_name = _get_site_for_user(event.user_id)
+    if site_name is None:
+        raise HTTPException(status_code=400, detail="No site found for user; provision a site first")
+
     try:
-        await _provision_user_infrastructure(event.user_id)
+        await _provision_user_infrastructure(event.user_id, site_name)
     except HTTPException:
         raise
     except Exception as exc:
