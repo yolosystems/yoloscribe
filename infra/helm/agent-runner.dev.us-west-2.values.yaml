@@ -7,7 +7,7 @@ ghcr:
   username: nate-yolodev
 
 serviceAccount:
-  iamRoleArn: ""  # set after running infra/iam/create_agent_runner_role.sh
+  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-agent-runner"  # set after running infra/iam/create_agent_runner_role.sh
 
 config:
   sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/agentscribe-dev-jobs"
