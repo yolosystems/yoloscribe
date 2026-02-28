@@ -1,26 +1,26 @@
 # ── Image ────────────────────────────────────────────────────────────────────
 image:
-  repository: ghcr.io/nate-yolodev/agentscribe-agent-runner
+  repository: ""
   tag: latest
   pullPolicy: Always
 
 # ── GitHub Container Registry credentials ────────────────────────────────────
 # Never set ghcr.pat here — pass it via --set on the command line.
 ghcr:
-  username: ""          # GitHub username or org that owns the package
-  pat: ""               # GitHub PAT with read:packages scope
+  username: ""          # set in environment-specific values file
+  pat: ""               # pass via --set; never commit a real value
 
 # ── Service account (IRSA for SQS receive/delete + S3 read) ──────────────────
 serviceAccount:
   create: true
-  iamRoleArn: ""        # arn:aws:iam::123456789:role/agentscribe-agent-runner
+  iamRoleArn: ""
 
 # ── Application config ────────────────────────────────────────────────────────
 config:
   sqsQueueUrl: ""
-  awsRegion: "us-west-2"
-  k8sNamespace: "yolo"
-  anthropicSecretName: "agentscribe-secrets"
+  awsRegion: ""
+  k8sNamespace: ""
+  anthropicSecretName: ""
   agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────

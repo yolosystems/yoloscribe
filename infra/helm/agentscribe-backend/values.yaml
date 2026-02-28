@@ -1,14 +1,14 @@
 # ── Image ────────────────────────────────────────────────────────────────────
 image:
-  repository: ghcr.io/nate-yolodev/agentscribe-backend        # e.g. ghcr.io/your-org/agentscribe-backend
+  repository: ""
   tag: latest
   pullPolicy: Always
 
 # ── GitHub Container Registry credentials ────────────────────────────────────
 # Never set ghcr.pat here — pass it via --set on the command line.
 ghcr:
-  username: ""          # GitHub username or org that owns the package
-  pat: ""               # GitHub PAT with read:packages scope
+  username: ""          # set in environment-specific values file
+  pat: ""               # pass via --set; never commit a real value
 
 # ── Replicas & autoscaling ────────────────────────────────────────────────────
 replicaCount: 1
@@ -27,9 +27,8 @@ service:
 # ── Ingress (AWS ALB via Load Balancer Controller) ────────────────────────────
 ingress:
   enabled: true
-  host: agentscribe-dev.runyolo.dev
-  # Certificate ARN for HTTPS termination at the ALB
-  certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"    # arn:aws:acm:us-west-2:123456789:certificate/...
+  host: ""
+  certificateArn: ""
   annotations:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
@@ -48,18 +47,18 @@ ingress:
 #   - sqs:SendMessage on agentscribe-* queues
 serviceAccount:
   create: true
-  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-dev-serviceaccount"        # arn:aws:iam::123456789:role/agentscribe-backend
+  iamRoleArn: ""
 
 # ── Application config ────────────────────────────────────────────────────────
 config:
-  s3Bucket: "agentscribe-dev"
-  allowedOrigins: "*"
-  model: "claude-opus-4-6"
+  s3Bucket: ""
+  allowedOrigins: ""
+  model: ""
   sqsQueueUrl: ""
   eksOidcProvider: ""
   awsAccountId: ""
-  awsRegion: "us-west-2"
-  k8sNamespace: "yolo"
+  awsRegion: ""
+  k8sNamespace: ""
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.

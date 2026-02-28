@@ -12,37 +12,29 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+if [[ -z "${STAGE:-}" ]]; then
+  echo "Error: STAGE is not set (e.g. dev, staging, prod)"
+  exit 1
+fi
+
+if [[ -z "${REGION:-}" ]]; then
+  echo "Error: REGION is not set (e.g. us-west-2)"
+  exit 1
+fi
+
+VALUES_FILE="$SCRIPT_DIR/agent-runner.${STAGE}.${REGION}.values.yaml"
+if [[ ! -f "$VALUES_FILE" ]]; then
+  echo "Error: values file not found: $VALUES_FILE"
+  exit 1
+fi
+
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "Error: ANTHROPIC_API_KEY is not set in environment or .env"
   exit 1
 fi
 
 if [[ -z "${GHCR_PAT:-}" ]]; then
-  echo "Error: GHCR_PAT is not set"
-  exit 1
-fi
-
-if [[ -z "${GITHUB_USER:-}" ]]; then
-  echo "Error: GITHUB_USER is not set"
-  exit 1
-fi
-
-if [[ -z "${SQS_QUEUE_URL:-}" ]]; then
-  echo "Error: SQS_QUEUE_URL is not set in environment or backend/.env"
-  exit 1
-fi
-
-# Sanity-check: must look like https://sqs.{region}.amazonaws.com/{account}/{queue}
-if [[ ! "$SQS_QUEUE_URL" =~ ^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]+/.+ ]]; then
-  echo "Error: SQS_QUEUE_URL does not look like a full queue URL: $SQS_QUEUE_URL"
-  echo "  Expected format: https://sqs.<region>.amazonaws.com/<account-id>/<queue-name>"
-  exit 1
-fi
-
-if [[ -z "${AGENT_RUNNER_ROLE_ARN:-}" ]]; then
-  echo "Error: AGENT_RUNNER_ROLE_ARN is not set"
-  echo "  Run infra/iam/create_agent_runner_role.sh to create it, then:"
-  echo "  export AGENT_RUNNER_ROLE_ARN=arn:aws:iam::<account>:role/agentscribe-agent-runner"
+  echo "Error: GHCR_PAT is not set in environment or .env"
   exit 1
 fi
 
@@ -50,9 +42,7 @@ helm upgrade --install agentscribe-agent-runner \
   "$SCRIPT_DIR/agentscribe-agent-runner" \
   --namespace yolo \
   --create-namespace \
+  --values "$VALUES_FILE" \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
   --set ghcr.pat="$GHCR_PAT" \
-  --set ghcr.username="$GITHUB_USER" \
-  --set config.sqsQueueUrl="$SQS_QUEUE_URL" \
-  --set serviceAccount.iamRoleArn="$AGENT_RUNNER_ROLE_ARN" \
   "$@"
