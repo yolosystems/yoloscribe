@@ -36,7 +36,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 
-SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")  # required; 500 if unset
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
@@ -108,11 +108,10 @@ def _get_user_id(
 ) -> str:
     """Extract user_id from a Supabase JWT Bearer token.
 
-    Returns "default" when SUPABASE_JWT_SECRET is unset (dev bypass).
-    Raises 401 if a token is present but invalid.
+    Raises 401 if the token is missing or invalid.
     """
     if not SUPABASE_JWT_SECRET:
-        return "knuth"
+        raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET is not configured")
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     token = credentials.credentials
@@ -144,7 +143,6 @@ class ChatRequest(BaseModel):
     history: list[HistoryMessage] = []
     site: str = "default"
     file_path: str = "content.md"
-    user_id: str = "knuth"
 
 
 class ChatResponse(BaseModel):
@@ -275,12 +273,9 @@ async def put_secret(
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, jwt_user_id: str = Depends(_get_user_id)) -> Any:
+async def chat(req: ChatRequest, user_id: str = Depends(_get_user_id)) -> Any:
     if not _is_safe_path(req.file_path):
         raise HTTPException(status_code=400, detail="Invalid file_path")
-
-    # JWT value takes precedence over body field; body fallback is for dev.
-    effective_user_id = jwt_user_id if jwt_user_id != "default" else req.user_id
 
     history = [
         {"role": m.role, "content": m.content}
@@ -295,7 +290,7 @@ async def chat(req: ChatRequest, jwt_user_id: str = Depends(_get_user_id)) -> An
             history=history,
             site=req.site,
             file_path=req.file_path,
-            user_id=effective_user_id,
+            user_id=user_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
