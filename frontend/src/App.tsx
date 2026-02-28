@@ -105,20 +105,14 @@ export default function App() {
   const [saving, setSaving] = useState(false)
   const [agents, setAgents] = useState<string[]>([])
 
-  // Auth: subscribe to session changes; redirect to Google when there is no session
-  // and no PKCE code exchange in progress.
-  //
-  // onAuthStateChange is the single source of truth for session state.
-  // getSession() is called only to determine whether to trigger the OAuth redirect;
-  // it must NOT call setSession because with PKCE the exchange is asynchronous —
-  // onAuthStateChange may have already stored the real session by the time
-  // getSession() resolves, and calling setSession(null) here would overwrite it.
+  // Auth: Supabase fires INITIAL_SESSION after initialization completes (including
+  // any PKCE code exchange). Set session state from there; if no session exists at
+  // that point, redirect to Google. All subsequent token refreshes go through
+  // onAuthStateChange too, so this is the only auth effect needed.
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s)
-    })
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      if (!s && !window.location.search.includes('code=')) {
+      if (event === 'INITIAL_SESSION' && !s) {
         supabase.auth.signInWithOAuth({
           provider: 'google',
           options: { redirectTo: window.location.origin },
