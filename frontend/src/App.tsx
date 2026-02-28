@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { type Session } from '@supabase/supabase-js'
+import { supabase } from './supabase'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
@@ -33,6 +35,8 @@ const SITE = getSite()
 function getFilePath(): string {
   const hash = window.location.hash
   if (!hash) return 'content.md'
+  // Supabase implicit-flow callback: ignore auth fragments before the client strips them
+  if (hash.includes('access_token=') || hash.includes('error_description=')) return 'content.md'
   const path = hash.replace(/^#\/?/, '')
   if (!path) return 'content.md'
   // {page}/.agents/{name}  or  .agents/{name}
@@ -101,6 +105,27 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [agents, setAgents] = useState<string[]>([])
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
+  const [avatarOpen, setAvatarOpen] = useState(false)
+
+  // Subscribe to Supabase auth state
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  function signIn() {
+    supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin },
+    })
+  }
+
+  function signOut() {
+    supabase.auth.signOut()
+  }
 
   // Update filePath on hash navigation
   useEffect(() => {
@@ -206,6 +231,25 @@ export default function App() {
               </button>
             </>
           )}
+          {session === null && (
+            <button className="btn" onClick={signIn}>Sign in</button>
+          )}
+          {session != null && (
+            <div className="auth-avatar-wrap">
+              <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
+                {(session.user.user_metadata?.full_name ?? session.user.email ?? '?')[0].toUpperCase()}
+              </button>
+              {avatarOpen && (
+                <>
+                  <div className="auth-overlay" onClick={() => setAvatarOpen(false)} />
+                  <div className="auth-avatar-menu">
+                    <div className="auth-avatar-email">{session.user.email}</div>
+                    <button className="btn" onClick={signOut}>Sign out</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -213,7 +257,7 @@ export default function App() {
 
       <div className="workspace">
         {mode === 'credentials' ? (
-          <CredentialsPanel apiBase={API_BASE} />
+          <CredentialsPanel apiBase={API_BASE} token={session?.access_token ?? ''} />
         ) : (
           <>
             {mode === 'edit' && content !== null && (
@@ -223,6 +267,7 @@ export default function App() {
                 apiBase={API_BASE}
                 site={SITE}
                 filePath={filePath}
+                token={session?.access_token ?? ''}
               />
             )}
 

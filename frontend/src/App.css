@@ -533,6 +533,60 @@ body {
   border-color: #1f6feb;
 }
 
+/* ── Auth avatar ── */
+.auth-avatar-wrap {
+  position: relative;
+}
+
+.auth-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #1f6feb;
+  color: #fff;
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.auth-avatar:hover {
+  background: #388bfd;
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+.auth-avatar-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 0.75rem;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.auth-avatar-email {
+  font-size: 0.82rem;
+  color: #8b949e;
+  padding: 0 0.1rem;
+  word-break: break-all;
+}
+
 /* ── Loading / error states ── */
 .state-center {
   flex: 1;

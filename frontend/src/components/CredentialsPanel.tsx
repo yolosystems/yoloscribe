@@ -11,9 +11,10 @@ interface SecretsStatus {
 
 interface Props {
   apiBase: string
+  token: string
 }
 
-export default function CredentialsPanel({ apiBase }: Props) {
+export default function CredentialsPanel({ apiBase, token }: Props) {
   const [status, setStatus] = useState<SecretsStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [inputs, setInputs] = useState<Record<string, string>>({})
@@ -21,7 +22,9 @@ export default function CredentialsPanel({ apiBase }: Props) {
   const [flashSaved, setFlashSaved] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    fetch(`${apiBase}/secrets/status`)
+    fetch(`${apiBase}/secrets/status`, {
+      headers: { ...(token && { Authorization: `Bearer ${token}` }) },
+    })
       .then((res) => (res.ok ? res.json() : Promise.reject(`HTTP ${res.status}`)))
       .then((data: SecretsStatus) => setStatus(data))
       .catch((e) => setError(`Failed to load credentials: ${e}`))
@@ -34,7 +37,7 @@ export default function CredentialsPanel({ apiBase }: Props) {
     try {
       const res = await fetch(`${apiBase}/secrets/${encodeURIComponent(varName)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
         body: JSON.stringify({ value }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
