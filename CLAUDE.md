@@ -14,9 +14,9 @@ npm run preview      # serve the built dist/
 
 ### Backend (`backend/`)
 ```bash
-uv sync                                              # install deps (pyproject.toml; no requirements.txt)
-uv run uvicorn main:app --reload                     # dev server on :8000
-AWS_PROFILE=myprofile uv run uvicorn main:app --reload  # with a named AWS profile
+uv sync                                                         # install deps (pyproject.toml; no requirements.txt)
+uv run --env-file ../.env uvicorn main:app --reload             # dev server on :8000
+AWS_PROFILE=myprofile uv run --env-file ../.env uvicorn main:app --reload  # with a named AWS profile
 ```
 
 Backend has no test suite yet. Lint/type-check: `uv run mypy main.py agents/`.
@@ -110,4 +110,4 @@ Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 
-Copy `backend/.env.example` to `backend/.env` for local development.
+Copy `.env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.

@@ -7,14 +7,13 @@
 #   {bucket}/{site}/assets/    ← hashed JS/CSS bundles
 #   {bucket}/{site}/content.md ← wiki content (never touched by this script)
 #
-# Reads build-time vars from frontend/.env.local:
-#   VITE_SITE        — site name; also used as the S3 deploy prefix
-#
-# Required in environment or backend/.env:
+# Required in environment or root .env:
 #   VITE_API_BASE               — HTTPS URL of the backend ALB
 #                                 (e.g. https://agentscribe-dev.runyolo.dev)
-#   FRONTEND_BUCKET             — root S3 bucket
-#                                 (e.g. agentscribe-dev)
+#   VITE_SITE                   — site name; also used as the S3 deploy prefix
+#   VITE_SUPABASE_URL           — Supabase project URL
+#   VITE_SUPABASE_ANON_KEY      — Supabase anon key
+#   FRONTEND_BUCKET             — root S3 bucket (e.g. agentscribe-dev)
 #
 # Optional:
 #   CLOUDFRONT_DISTRIBUTION_ID  — if set, invalidates /* after sync
@@ -23,22 +22,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$SCRIPT_DIR/../frontend"
-BACKEND_ENV="$SCRIPT_DIR/../backend/.env"
-FRONTEND_ENV="$FRONTEND_DIR/.env.local"
+ENV_FILE="$SCRIPT_DIR/../.env"
 
-# Load backend/.env (AWS creds, VITE_API_BASE, FRONTEND_BUCKET, etc.)
-if [[ -f "$BACKEND_ENV" ]]; then
+# Load root .env if present
+if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$BACKEND_ENV"
-  set +a
-fi
-
-# Load frontend/.env.local (VITE_SITE)
-if [[ -f "$FRONTEND_ENV" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$FRONTEND_ENV"
+  source "$ENV_FILE"
   set +a
 fi
 

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="$SCRIPT_DIR/../../backend/.env"
+ENV_FILE="$SCRIPT_DIR/../../.env"
 
-# Load backend/.env if present, without permanently polluting the environment
+# Load root .env if present, without permanently polluting the environment
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck source=/dev/null
@@ -13,7 +13,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "Error: ANTHROPIC_API_KEY is not set in environment or backend/.env"
+  echo "Error: ANTHROPIC_API_KEY is not set in environment or .env"
   exit 1
 fi
 

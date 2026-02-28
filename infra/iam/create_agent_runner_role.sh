@@ -16,6 +16,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../../.env"
+
+# Load root .env if present
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
 : "${EKS_OIDC_PROVIDER:?EKS_OIDC_PROVIDER must be set (without https://)}"
 : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID must be set}"
 : "${K8S_NAMESPACE:?K8S_NAMESPACE must be set}"
