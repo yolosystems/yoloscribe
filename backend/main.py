@@ -1,6 +1,7 @@
 """AgentScribe backend — FastAPI service running behind a public ALB on EKS."""
 
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -80,6 +81,7 @@ PAGE_SEG = r"[a-z0-9][a-z0-9_/-]*"
 SAFE_PATH = re.compile(
     r"^("
     r"content\.md"
+    r"|config\.json"
     rf"|{PAGE_SEG}/content\.md"
     rf"|\.agents/{AGENT_NAME_SEG}/agent\.md"
     rf"|{PAGE_SEG}/\.agents/{AGENT_NAME_SEG}/agent\.md"
@@ -109,6 +111,14 @@ def _put_content(site: str, path: str, content: str) -> None:
         Body=content.encode("utf-8"),
         ContentType="text/markdown; charset=utf-8",
     )
+
+
+def _delete_s3_prefix(site_name: str) -> None:
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{site_name}/"):
+        objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+        if objects:
+            s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objects, "Quiet": True})
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -200,6 +210,44 @@ def _supabase_insert_user_site(user_id: str, site_name: str, theme: str) -> None
         urllib.request.urlopen(req)
     except urllib.error.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Supabase PostgREST error: {exc}") from exc
+
+
+def _supabase_delete_user_site(user_id: str) -> None:
+    """Delete from user_site table via Supabase PostgREST. Logs warning on failure, does not raise."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/user_site?user_uuid=eq.{user_id}"
+    req = urllib.request.Request(
+        url,
+        method="DELETE",
+        headers={
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        },
+    )
+    try:
+        urllib.request.urlopen(req)
+    except Exception as exc:
+        logging.warning("Failed to delete user_site row for %s: %s", user_id, exc)
+
+
+def _supabase_delete_auth_user(user_id: str) -> None:
+    """Delete Supabase Auth user. Raises HTTPException(502) on failure."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase admin API not configured")
+    url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+    req = urllib.request.Request(
+        url,
+        method="DELETE",
+        headers={
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        },
+    )
+    try:
+        urllib.request.urlopen(req)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Supabase Auth delete error: {exc}") from exc
 
 
 # ── Infrastructure provisioning ───────────────────────────────────────────────
@@ -312,6 +360,79 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
         SecretString=json.dumps({"initialized": "true"}),
         Description=f"Placeholder secret for AgentScribe user {user_id}",
     )
+
+
+async def _deprovision_user_infrastructure(user_id: str, site_name: str | None) -> list[str]:
+    """Delete IAM role/policy, SM secrets, and K8s ServiceAccount for a user.
+
+    Returns a list of warning strings. Never raises.
+    """
+    warnings: list[str] = []
+    role_name = f"agentscribe-user-{user_id}"
+    sa_name = f"user-{user_id}"
+
+    iam = _boto_session.client("iam")
+    secrets_manager = _boto_session.client("secretsmanager", region_name=AWS_REGION)
+
+    # 1. Delete IAM inline policy
+    try:
+        iam.delete_role_policy(RoleName=role_name, PolicyName="agentscribe-user-access")
+    except iam.exceptions.NoSuchEntityException:
+        pass
+    except Exception as exc:
+        warnings.append(f"IAM policy delete warning: {exc}")
+
+    # 2. Delete IAM role
+    try:
+        iam.delete_role(RoleName=role_name)
+    except iam.exceptions.NoSuchEntityException:
+        pass
+    except Exception as exc:
+        warnings.append(f"IAM role delete warning: {exc}")
+
+    # 3. Delete SM secrets under agentscribe/{user_id}/
+    prefix = f"agentscribe/{user_id}/"
+    try:
+        paginator = secrets_manager.get_paginator("list_secrets")
+        for page in paginator.paginate():
+            for secret in page.get("SecretList", []):
+                if secret["Name"].startswith(prefix):
+                    try:
+                        secrets_manager.delete_secret(
+                            SecretId=secret["ARN"],
+                            ForceDeleteWithoutRecovery=True,
+                        )
+                    except Exception as exc:
+                        warnings.append(f"SM secret delete warning ({secret['Name']}): {exc}")
+    except Exception as exc:
+        warnings.append(f"SM list secrets warning: {exc}")
+
+    # 4. Delete K8s ServiceAccount
+    try:
+        from kubernetes import client as k8s_client  # type: ignore[import-untyped]
+        from kubernetes import config as k8s_config  # type: ignore[import-untyped]
+
+        kubeconfig = os.environ.get("KUBECONFIG")
+        if kubeconfig:
+            k8s_config.load_kube_config(config_file=kubeconfig)
+        else:
+            try:
+                k8s_config.load_incluster_config()
+            except Exception:
+                k8s_config.load_kube_config()
+
+        v1 = k8s_client.CoreV1Api()
+        try:
+            v1.delete_namespaced_service_account(name=sa_name, namespace=K8S_NAMESPACE)
+        except Exception as exc:
+            if "404" not in str(exc) and "Not Found" not in str(exc):
+                warnings.append(f"K8s ServiceAccount delete warning: {exc}")
+    except Exception as k8s_exc:
+        warnings.append(f"K8s config warning: {k8s_exc}")
+
+    for w in warnings:
+        logging.warning(w)
+    return warnings
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -598,6 +719,33 @@ async def my_site(
     """Return the authenticated user's site name from their JWT app_metadata."""
     _, site_name = ctx
     return {"site_name": site_name}
+
+
+@app.delete("/account")
+async def delete_account(
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict[str, str]:
+    """Permanently delete the authenticated user's account and all associated resources."""
+    user_id, site_name = ctx
+
+    # 1. Delete S3 prefix (best-effort)
+    if site_name is not None:
+        try:
+            _delete_s3_prefix(site_name)
+        except Exception as exc:
+            logging.warning("S3 prefix delete warning for %s: %s", site_name, exc)
+
+    # 2. Deprovision AWS infrastructure (best-effort)
+    await _deprovision_user_infrastructure(user_id, site_name)
+
+    # 3. Delete user_site row (best-effort)
+    _supabase_delete_user_site(user_id)
+
+    # 4. Delete Supabase auth user — hard stop on failure; must be last so the
+    #    request JWT remains valid throughout all preceding steps.
+    _supabase_delete_auth_user(user_id)
+
+    return {"status": "deleted"}
 
 
 @app.post("/webhooks/user-created")
