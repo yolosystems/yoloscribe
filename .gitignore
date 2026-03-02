@@ -2,8 +2,6 @@
 .env
 .env.*
 
-# IDE
-.vscode/
 
 # Python
 __pycache__/
