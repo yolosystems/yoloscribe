@@ -9,6 +9,7 @@ import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
 import CredentialsPanel from './components/CredentialsPanel'
 import LandingPage from './components/LandingPage'
 import OnboardingView from './components/OnboardingView'
+import DeleteAccountModal from './components/DeleteAccountModal'
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -111,6 +112,7 @@ export default function App() {
   const [agents, setAgents] = useState<string[]>([])
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [mySite, setMySite] = useState<string | null | undefined>(undefined)
 
   // Subscribe to Supabase auth state
@@ -336,12 +338,29 @@ export default function App() {
                 <div className="auth-avatar-menu">
                   <div className="auth-avatar-email">{session!.user.email}</div>
                   <button className="btn" onClick={signOut}>Sign out</button>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => { setAvatarOpen(false); setDeleteModalOpen(true) }}
+                  >
+                    Delete Account
+                  </button>
                 </div>
               </>
             )}
           </div>
         </div>
       </header>
+      {deleteModalOpen && session && (
+        <DeleteAccountModal
+          apiBase={API_BASE}
+          token={session.access_token}
+          onClose={() => setDeleteModalOpen(false)}
+          onDeleted={async () => {
+            await supabase.auth.signOut()
+            window.location.href = '/'
+          }}
+        />
+      )}
 
       <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
