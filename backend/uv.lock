@@ -14,6 +14,7 @@ dependencies = [
     { name = "boto3" },
     { name = "fastapi" },
     { name = "kubernetes" },
+    { name = "mcp-oauth" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
@@ -33,6 +34,7 @@ requires-dist = [
     { name = "boto3", specifier = "==1.35.23" },
     { name = "fastapi", specifier = "==0.115.0" },
     { name = "kubernetes", specifier = ">=29.0.0" },
+    { name = "mcp-oauth", directory = "../libs/mcp_oauth" },
     { name = "pydantic", specifier = "==2.8.2" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8.0" },
     { name = "python-multipart", specifier = "==0.0.9" },
@@ -849,6 +851,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/31/88/f6cb7e7c260cd4b4c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/68/316cbc54b7163fa22571dcf42c9cc46562aae0a021b974e0a8141e897200/mcp-1.12.4-py3-none-any.whl", hash = "sha256:7aa884648969fab8e78b89399d59a683202972e12e6bc9a1c88ce7eda7743789", size = 160145, upload-time = "2025-08-07T20:31:15.69Z" },
 ]
+
+[[package]]
+name = "mcp-oauth"
+version = "0.1.0"
+source = { directory = "../libs/mcp_oauth" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27.0" }]
 
 [[package]]
 name = "mdurl"

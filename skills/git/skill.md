@@ -1,35 +1,26 @@
-The tool signature is different — instead of a single repo_url, mcp-server-github takes owner, repo, and path as separate parameters:
+# Skill: github
 
-  # Skill: git
+You have access to GitHub tools provided by the GitHub Copilot MCP server.
 
-  You have access to GitHub repository tools provided by mcp-server-github.
+## When to use this skill
 
-  ## When to use this skill
+Use these tools when the user wants to:
+- View, create, or update GitHub issues and pull requests
+- Read source files, READMEs, or documentation from a repository
+- Search code or repositories
+- Manage comments, labels, or milestones
+- Base wiki content on the contents of a codebase
 
-  Use these tools when the user wants to:
-  - Import or reference content from a GitHub repository
-  - Read source files, READMEs, or documentation from a repo
-  - Base a wiki page on the contents of a codebase
+## Authentication
 
-  ## Tool: get_file_contents
+This skill uses OAuth. Users must authenticate via the Credentials panel before
+agents using this skill can run.
 
-  Retrieves the contents of a file or directory from a GitHub repository.
+## Usage guidelines
 
-  Parameters:
-  - `owner` (required): The GitHub username or organisation name
-  - `repo` (required): The repository name
-  - `path` (required): Path to the file or directory within the repo
-  - `branch` (optional): Branch name. Defaults to the repo's default branch.
-
-  Returns file contents as a string, or a directory listing if `path` is a
-  directory.
-
-  ## Usage guidelines
-
-  - Parse GitHub URLs into parts: `https://github.com/{owner}/{repo}` →
-    `owner` and `repo`. The path comes from whatever the user specifies.
-  - To explore an unknown repo, call `get_file_contents` with `path` set to
-    `/` or `""` to get a directory listing, then drill into files of interest.
-  - Prefer reading `README.md` first for an overview before reading source files.
-  - Do not read unnecessarily large files (e.g. binaries, generated files,
-    lock files like `package-lock.json`).
+- Parse GitHub URLs into owner and repo: `https://github.com/{owner}/{repo}`
+- To explore an unknown repo, list the root directory first, then drill into
+  files of interest.
+- Prefer reading `README.md` first for an overview before reading source files.
+- Do not read unnecessarily large files (binaries, generated files, lock files).
+- Search before creating — avoid duplicating existing issues or PRs.

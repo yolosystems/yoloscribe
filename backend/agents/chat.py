@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -9,11 +10,10 @@ from typing import TYPE_CHECKING
 from strands import tool
 from strands_tools import http_request
 
-from .base import BaseAgent, S3Tools, DEFAULT_MODEL
+from .base import BaseAgent, S3Tools, DEFAULT_MODEL, agents_prefix, parse_agent_md
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent
-from .runner import RunnerAgent
 
 if TYPE_CHECKING:
     import mypy_boto3_s3
@@ -29,17 +29,19 @@ class ChatAgent(BaseAgent):
     - ContentWriterAgent  — update page content
     - CreatorAgent        — define a new agent.md
     - PageCreatorAgent    — create a new child page
-    - RunnerAgent         — queue an agent.md-defined agent via SQS
+    - runner tool         — queue an agent.md-defined agent via SQS (no LLM hop)
     """
 
     SYSTEM_PROMPT = """\
 You are the AgentScribe wiki assistant. You help users manage their wiki.
 
-You have access to the following tools and specialist sub-agents:
+You have access to the following tools:
 
 - list_skills     — call this whenever the user asks what skills are available
                     on the server. It reads each skill's description from S3
                     and returns a summary.
+- list_agents     — call this to discover what agents are defined for the
+                    current page before trying to run one.
 - http_request    — make HTTP requests to external URLs; use when the user
                     asks you to fetch or look something up from the web.
 - content_writer  — use when the user wants to add, edit, or rewrite wiki
@@ -47,11 +49,13 @@ You have access to the following tools and specialist sub-agents:
 - creator         — use when the user wants to define a new AI agent for
                     the current page (creates an agent.md file).
                     After successfully creating an agent, ask the user:
-                    "Would you like to run this agent now?" If yes, delegate to runner.
+                    "Would you like to run this agent now?" If yes, use runner.
 - page_creator    — use when the user wants to create a new page or child
                     page under the current site.
 - runner          — use when the user wants to invoke / run an existing
-                    named agent that is defined in an agent.md file.
+                    named agent that is defined in an agent.md file. The
+                    agent will be queued for asynchronous execution; pass the
+                    agent_name and the prompt (task) to give it.
 
 For simple questions that don't require any of the above, answer directly.
 
@@ -68,11 +72,13 @@ Current context:
         model_id: str = DEFAULT_MODEL,
         sqs_client: "mypy_boto3_sqs.SQSClient | None" = None,
         sqs_queue_url: str = "",
+        sm_client=None,
     ) -> None:
         self._s3_tools = S3Tools(s3=s3, bucket=bucket)
         self._model_id = model_id
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
+        self._sm_client = sm_client
         # Sub-agent tools are created lazily per-request (each call gets fresh
         # context injected via the prompt), so we set tools=[] here and override
         # per run() call.
@@ -148,6 +154,9 @@ Current context:
     def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth") -> list:
         s3_tools = self._s3_tools
         model_id = self._model_id
+        sqs_client = self._sqs_client
+        sqs_queue_url = self._sqs_queue_url
+        sm_client = self._sm_client
 
         @tool
         def content_writer(instruction: str) -> str:
@@ -192,7 +201,38 @@ Current context:
                 site=site,
                 page_path=page_path,
             )
-            return str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
+            result = str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
+
+            # After the agent.md is written, validate that OAuth has been completed
+            # for every remote MCP skill it references. If any are missing, delete
+            # the agent.md and return an actionable error to the user.
+            if sm_client is not None:
+                import re as _re
+                match = _re.search(r"Agent '([^']+)' created", result)
+                if match:
+                    agent_name = match.group(1)
+                    agent_md_key = f"{agents_prefix(site, page_path)}/{agent_name}/agent.md"
+                    try:
+                        obj = s3_tools.s3.get_object(Bucket=s3_tools.bucket, Key=agent_md_key)
+                        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+                        missing = [
+                            skill for skill in agent_def.skills
+                            if s3_tools.is_remote_skill(skill)
+                            and not _oauth_token_exists(sm_client, user_id, skill)
+                        ]
+                        if missing:
+                            s3_tools.s3.delete_object(Bucket=s3_tools.bucket, Key=agent_md_key)
+                            skill_list = ", ".join(f"'{s}'" for s in missing)
+                            return (
+                                f"Agent creation blocked: OAuth authentication has not been completed "
+                                f"for skill(s) {skill_list}. Please open the Credentials panel and "
+                                f"click 'Authenticate via OAuth' for each of these skills, then try "
+                                f"creating the agent again."
+                            )
+                    except Exception:
+                        pass  # Unexpected errors don't block creation
+
+            return result
 
         @tool
         def page_creator(instruction: str) -> str:
@@ -213,33 +253,47 @@ Current context:
             return str(agent(f"Site: {site}\nParent page: {page_path or '(root)'}\n\n{instruction}"))
 
         @tool
-        def runner(instruction: str) -> str:
-            """Invoke (queue) a named agent defined in an agent.md file.
+        def runner(agent_name: str, prompt: str) -> str:
+            """Queue a named agent for asynchronous execution via SQS.
 
-            Use this when the user asks to run or invoke an existing agent
-            by name.
+            Use this when the user wants to run or invoke an existing agent.
+            Call list_agents first if you need to discover available agents.
 
             Args:
-                instruction: The user's request, including which agent to run
-                             and what task to give it.
+                agent_name: Name of the agent to run.
+                prompt: The task or instruction to pass to the agent.
             """
-            if self._sqs_client is None or not self._sqs_queue_url:
+            if sqs_client is None or not sqs_queue_url:
                 return "Error: SQS is not configured on this server. Agent queuing is unavailable."
-            agent = RunnerAgent(
-                s3_tools=s3_tools,
-                sqs_queue_url=self._sqs_queue_url,
-                sqs_client=self._sqs_client,
-                model_id=model_id,
-                user_id=user_id,
-                site=site,
-                page_path=page_path,
+            prefix = agents_prefix(site, page_path)
+            agent_md_key = f"{prefix}/{agent_name}/agent.md"
+            content_key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
+            payload = {
+                "bucket": s3_tools.bucket,
+                "content_key": content_key,
+                "agent_md_key": agent_md_key,
+                "prompt": prompt,
+                "user_id": user_id,
+            }
+            sqs_client.send_message(
+                QueueUrl=sqs_queue_url,
+                MessageBody=json.dumps(payload),
             )
-            return str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
+            return f"Agent '{agent_name}' has been queued for execution."
 
-        return [s3_tools.list_skills, http_request, content_writer, creator, page_creator, runner]
+        return [s3_tools.list_skills, s3_tools.list_agents, http_request, content_writer, creator, page_creator, runner]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _oauth_token_exists(sm_client, user_id: str, skill_name: str) -> bool:
+    """Return True if an OAuth token is stored in Secrets Manager for this user+skill."""
+    try:
+        sm_client.get_secret_value(SecretId=f"agentscribe/{user_id}/oauth/{skill_name}")
+        return True
+    except Exception:
+        return False
 
 
 def _page_path_from_file(file_path: str) -> str:

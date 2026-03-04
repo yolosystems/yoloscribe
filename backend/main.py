@@ -1,18 +1,31 @@
 """AgentScribe backend — FastAPI service running behind a public ALB on EKS."""
 
+import dataclasses
+import datetime
 import json
 import logging
 import os
 import re
+import secrets
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 import boto3
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from mcp_oauth import (
+    PKCEChallenge,
+    build_authorization_url,
+    discover,
+    dynamic_client_registration,
+)
+from mcp_oauth.discovery import AuthorizationServerMetadata
+from mcp_oauth.oauth_flow import exchange_code
 from pydantic import BaseModel
 
 from agents import ChatAgent
@@ -36,6 +49,14 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
+OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
+# In production FRONTEND_URL is derived from CLOUDFRONT_DOMAIN.
+# Locally it points to the Vite dev server so the OAuth callback redirect lands correctly.
+FRONTEND_URL = (
+    f"https://{CLOUDFRONT_DOMAIN}"
+    if CLOUDFRONT_DOMAIN
+    else os.environ.get("FRONTEND_URL", "http://localhost:5173")
+)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -60,12 +81,39 @@ s3 = _boto_session.client("s3")
 sqs = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else None
 sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
 
+# ── OAuth state (in-memory, TTL ~10 min) ──────────────────────────────────────
+
+@dataclasses.dataclass
+class _OAuthPendingState:
+    skill_name: str
+    user_id: str
+    site: str
+    server_url: str
+    pkce_verifier: str
+    client_id: str
+    client_secret: str | None
+    auth_metadata: dict  # serialized AuthorizationServerMetadata fields
+    created_at: float
+
+
+_oauth_pending: dict[str, _OAuthPendingState] = {}
+
+
+def _cleanup_oauth_state() -> None:
+    cutoff = time.time() - 600
+    for k in [k for k, v in _oauth_pending.items() if v.created_at < cutoff]:
+        del _oauth_pending[k]
+
+
+# ── ChatAgent ─────────────────────────────────────────────────────────────────
+
 chat_agent = ChatAgent(
     s3=s3,
     bucket=S3_BUCKET,
     model_id=MODEL,
     sqs_client=sqs,
     sqs_queue_url=SQS_QUEUE_URL,
+    sm_client=sm,
 )
 
 # ── Path safety ───────────────────────────────────────────────────────────────
@@ -300,9 +348,12 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
                 "Version": "2012-10-17",
                 "Statement": [
                     {
-                        "Sid": "SecretsManagerReadUserSecrets",
+                        "Sid": "SecretsManagerUserSecrets",
                         "Effect": "Allow",
-                        "Action": "secretsmanager:GetSecretValue",
+                        "Action": [
+                            "secretsmanager:GetSecretValue",
+                            "secretsmanager:PutSecretValue",
+                        ],
                         "Resource": f"{secret_arn_prefix}*",
                     },
                     {
@@ -312,12 +363,18 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
                         "Resource": f"{s3_bucket_arn}/{site_name}/*",
                     },
                     {
+                        "Sid": "S3ReadSkillsPrefix",
+                        "Effect": "Allow",
+                        "Action": "s3:GetObject",
+                        "Resource": f"{s3_bucket_arn}/.skills/*",
+                    },
+                    {
                         "Sid": "S3ListUserPrefix",
                         "Effect": "Allow",
                         "Action": "s3:ListBucket",
                         "Resource": s3_bucket_arn,
                         "Condition": {
-                            "StringLike": {"s3:prefix": f"{site_name}/*"}
+                            "StringLike": {"s3:prefix": [f"{site_name}/*", ".skills/*"]}
                         },
                     },
                 ],
@@ -548,8 +605,23 @@ def _secret_id(user_id: str, var_name: str) -> str:
     return f"{_SM_SECRET_PREFIX}/{user_id}/{var_name}"
 
 
+def _oauth_secret_id(user_id: str, skill_name: str) -> str:
+    return f"{_SM_SECRET_PREFIX}/{user_id}/oauth/{skill_name}"
+
+
+def _is_remote_skill(skill_name: str) -> bool:
+    """Return True if the skill's mcp.json uses remote HTTP transport."""
+    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+        config = json.loads(obj["Body"].read())
+        return any("url" in srv for srv in config.get("mcpServers", {}).values())
+    except Exception:
+        return False
+
+
 def _skill_required_vars(skill_name: str) -> list[str]:
-    """Read a skill's mcp.json from S3 and return required ${VAR} names."""
+    """Read a stdio skill's mcp.json from S3 and return required ${VAR} names."""
     key = f"{skills_prefix()}/{skill_name}/mcp.json"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
@@ -569,20 +641,303 @@ def _secret_exists(user_id: str, var_name: str) -> bool:
         return False
 
 
+def _load_skill_oauth_client(skill_name: str) -> dict | None:
+    """Load pre-registered OAuth client config from S3 for a skill.
+
+    Returns the parsed oauth_client.json dict, or None if the file does not exist.
+    This file is present for skills whose MCP servers do not support DCR (e.g. GitHub).
+    Format: {"client_id": "...", "scopes": ["repo", ...]}  (scopes is optional)
+    The corresponding client_secret is stored in Secrets Manager at
+    agentscribe/platform/oauth/{skill_name}.
+    """
+    key = f"{skills_prefix()}/{skill_name}/oauth_client.json"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
+def _load_platform_client_secret(skill_name: str) -> str | None:
+    """Load the platform-level OAuth client_secret from Secrets Manager.
+
+    Secret path: agentscribe/platform/oauth/{skill_name}
+    Expected format: {"client_secret": "..."}
+    The backend IAM role must have secretsmanager:GetSecretValue on this path.
+    Returns None if the secret does not exist or cannot be read.
+    """
+    secret_id = f"agentscribe/platform/oauth/{skill_name}"
+    try:
+        resp = sm.get_secret_value(SecretId=secret_id)
+        data = json.loads(resp["SecretString"])
+        return data.get("client_secret")
+    except Exception:
+        return None
+
+
+def _load_oauth_token(user_id: str, skill_name: str) -> dict | None:
+    """Load a stored OAuth token blob from Secrets Manager, or None if not found."""
+    try:
+        resp = sm.get_secret_value(SecretId=_oauth_secret_id(user_id, skill_name))
+        return json.loads(resp["SecretString"])
+    except sm.exceptions.ResourceNotFoundException:
+        return None
+    except Exception:
+        return None
+
+
+def _save_oauth_token(user_id: str, skill_name: str, token_blob: dict) -> None:
+    """Create or update the OAuth token blob in Secrets Manager."""
+    secret_id = _oauth_secret_id(user_id, skill_name)
+    secret_string = json.dumps(token_blob)
+    try:
+        sm.put_secret_value(SecretId=secret_id, SecretString=secret_string)
+    except sm.exceptions.ResourceNotFoundException:
+        sm.create_secret(
+            Name=secret_id,
+            SecretString=secret_string,
+            Description=f"OAuth tokens for user {user_id} skill {skill_name}",
+        )
+
+
 @app.get("/secrets/status")
 async def get_secrets_status(user_id: str = Depends(_get_user_id)) -> dict:
-    """Return all skills with their required vars and whether each is stored for this user."""
+    """Return all skills with their credential status for this user.
+
+    Remote OAuth skills return: {type: "oauth", authenticated, expires_at, scope}
+    Stdio key-based skills return: {type: "key", vars, stored}
+    """
     prefix = skills_prefix()
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     skill_names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
 
     skills: dict = {}
     for skill_name in skill_names:
-        vars_needed = _skill_required_vars(skill_name)
-        stored = {v: _secret_exists(user_id, v) for v in vars_needed}
-        skills[skill_name] = {"vars": vars_needed, "stored": stored}
+        if _is_remote_skill(skill_name):
+            token = _load_oauth_token(user_id, skill_name)
+            if token:
+                expires_at = token.get("expires_at")
+                expires_str = (
+                    datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc).isoformat()
+                    if expires_at
+                    else None
+                )
+                skills[skill_name] = {
+                    "type": "oauth",
+                    "authenticated": True,
+                    "expires_at": expires_str,
+                    "scope": token.get("scope") or None,
+                }
+            else:
+                skills[skill_name] = {
+                    "type": "oauth",
+                    "authenticated": False,
+                    "expires_at": None,
+                    "scope": None,
+                }
+        else:
+            vars_needed = _skill_required_vars(skill_name)
+            stored = {v: _secret_exists(user_id, v) for v in vars_needed}
+            skills[skill_name] = {"type": "key", "vars": vars_needed, "stored": stored}
 
     return {"skills": skills}
+
+
+@app.post("/oauth/initiate/{skill_name}")
+async def oauth_initiate(
+    skill_name: str,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Begin the OAuth flow for a remote MCP skill.
+
+    Performs OAuth discovery, then either:
+    - Uses a pre-registered client from .skills/{skill_name}/oauth_client.json in S3
+      (for servers like GitHub that don't support Dynamic Client Registration), or
+    - Performs Dynamic Client Registration (RFC 7591) for servers that support it.
+
+    Returns an authorization URL for the frontend to redirect the browser to.
+    """
+    user_id, user_site = ctx
+    if user_site is None:
+        raise HTTPException(status_code=403, detail="No site provisioned for this user")
+    # Load the skill's mcp.json and extract the remote server URL
+    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+        mcp_config = json.loads(obj["Body"].read())
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found or has no mcp.json")
+
+    server_url: str | None = None
+    for server_cfg in mcp_config.get("mcpServers", {}).values():
+        if "url" in server_cfg:
+            server_url = server_cfg["url"]
+            break
+    if not server_url:
+        raise HTTPException(status_code=400, detail=f"Skill '{skill_name}' is not a remote MCP skill")
+
+    _cleanup_oauth_state()
+
+    # Check for a pre-registered OAuth client (skills whose servers don't support DCR).
+    # oauth_client.json lives in S3 at .skills/{skill_name}/oauth_client.json and is
+    # managed by the platform operator (not per-user).
+    pre_registered = _load_skill_oauth_client(skill_name)
+
+    # Discover OAuth metadata
+    try:
+        _prm, auth_meta = await discover(server_url)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OAuth discovery failed for {server_url}: {exc}") from exc
+    if auth_meta is None:
+        raise HTTPException(status_code=502, detail=f"No OAuth authorization server found for {server_url}")
+
+    if pre_registered:
+        # Use the platform-registered client — no DCR needed.
+        client_id: str = pre_registered["client_id"]
+        client_secret: str | None = _load_platform_client_secret(skill_name)
+        # Skill-level scope override takes priority; fall back to server-advertised scopes.
+        scopes: list[str] = pre_registered.get("scopes") or (
+            list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
+        )
+    else:
+        # Dynamic Client Registration (per-user client, servers that support RFC 7591).
+        if not auth_meta.registration_endpoint:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Skill '{skill_name}' has no pre-registered OAuth client "
+                    f"and the MCP server at {server_url} does not support "
+                    f"Dynamic Client Registration. Upload an oauth_client.json "
+                    f"to .skills/{skill_name}/ in S3 with the pre-registered client_id."
+                ),
+            )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                client_data = await dynamic_client_registration(
+                    client,
+                    auth_meta.registration_endpoint,
+                    OAUTH_REDIRECT_URI,
+                    "AgentScribe",
+                )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Dynamic client registration failed: {exc}") from exc
+
+        client_id = client_data["client_id"]
+        client_secret = client_data.get("client_secret")
+        scopes = list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
+
+    # PKCE + state
+    pkce = PKCEChallenge()
+    state = secrets.token_urlsafe(32)
+
+    auth_url = build_authorization_url(
+        metadata=auth_meta,
+        client_id=client_id,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        pkce=pkce,
+        state=state,
+        scopes=scopes,
+        resource=server_url,
+    )
+
+    _oauth_pending[state] = _OAuthPendingState(
+        skill_name=skill_name,
+        user_id=user_id,
+        site=user_site,
+        server_url=server_url,
+        pkce_verifier=pkce.verifier,
+        client_id=client_id,
+        client_secret=client_secret,
+        auth_metadata={
+            "issuer": auth_meta.issuer,
+            "authorization_endpoint": auth_meta.authorization_endpoint,
+            "token_endpoint": auth_meta.token_endpoint,
+            "registration_endpoint": auth_meta.registration_endpoint,
+            "scopes_supported": auth_meta.scopes_supported,
+            "code_challenge_methods_supported": auth_meta.code_challenge_methods_supported,
+        },
+        created_at=time.time(),
+    )
+
+    return {"auth_url": auth_url}
+
+
+@app.get("/oauth/callback")
+async def oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
+) -> RedirectResponse:
+    """Receive the OAuth authorization code callback and exchange it for tokens.
+
+    Stores the token in Secrets Manager, then redirects the browser back to the
+    frontend with ?oauth_success={skill_name} or ?oauth_error={message}.
+    """
+    _cleanup_oauth_state()
+
+    def _frontend_redirect(site: str, params: str) -> RedirectResponse:
+        return RedirectResponse(url=f"{FRONTEND_URL}/{site}?{params}", status_code=302)
+
+    if error:
+        pending = _oauth_pending.get(state or "")
+        site = pending.site if pending else "default"
+        return _frontend_redirect(site, f"oauth_error={error_description or error}")
+
+    if not state or state not in _oauth_pending:
+        return Response(  # type: ignore[return-value]
+            content="Invalid or expired OAuth state. Please try authenticating again.",
+            status_code=400,
+        )
+
+    pending = _oauth_pending.pop(state)
+
+    # Reconstruct the metadata and a minimal PKCE object (verifier only needed for exchange)
+    auth_meta = AuthorizationServerMetadata(
+        issuer=pending.auth_metadata["issuer"],
+        authorization_endpoint=pending.auth_metadata["authorization_endpoint"],
+        token_endpoint=pending.auth_metadata["token_endpoint"],
+        registration_endpoint=pending.auth_metadata.get("registration_endpoint"),
+        scopes_supported=pending.auth_metadata.get("scopes_supported", []),
+        code_challenge_methods_supported=pending.auth_metadata.get("code_challenge_methods_supported", []),
+    )
+
+    class _VerifierOnly:
+        def __init__(self, verifier: str) -> None:
+            self.verifier = verifier
+
+    try:
+        token_data = await exchange_code(
+            metadata=auth_meta,
+            code=code or "",
+            redirect_uri=OAUTH_REDIRECT_URI,
+            client_id=pending.client_id,
+            pkce=_VerifierOnly(pending.pkce_verifier),  # type: ignore[arg-type]
+            client_secret=pending.client_secret,
+        )
+    except Exception as exc:
+        logging.warning("OAuth code exchange failed for user %s skill %s: %s", pending.user_id, pending.skill_name, exc)
+        return _frontend_redirect(pending.site, f"oauth_error={exc}")
+
+    token_blob = {
+        "client_id": pending.client_id,
+        "client_secret": pending.client_secret,
+        "access_token": token_data.get("access_token"),
+        "refresh_token": token_data.get("refresh_token"),
+        "expires_at": int(time.time()) + int(token_data.get("expires_in", 3600)),
+        "token_type": token_data.get("token_type", "Bearer"),
+        "scope": token_data.get("scope", ""),
+        "server_url": pending.server_url,
+        "auth_server_metadata": pending.auth_metadata,
+    }
+
+    try:
+        _save_oauth_token(pending.user_id, pending.skill_name, token_blob)
+    except Exception as exc:
+        logging.error("Failed to store OAuth token for user %s skill %s: %s", pending.user_id, pending.skill_name, exc)
+        return _frontend_redirect(pending.site, f"oauth_error=Failed+to+store+token")
+
+    return _frontend_redirect(pending.site, f"oauth_success={pending.skill_name}")
 
 
 @app.put("/secrets/{var_name}")

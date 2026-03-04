@@ -12,6 +12,7 @@ dependencies = [
     "strands-agents-tools>=0.1.0",
     "kubernetes>=29.0.0",
     "pyjwt[crypto]>=2.8.0",
+    "mcp-oauth",
 ]
 
 [tool.uv]
@@ -20,3 +21,6 @@ dev-dependencies = [
     "boto3-stubs[s3,sqs]>=1.42.57",
     "mypy>=1.19.1",
 ]
+
+[tool.uv.sources]
+mcp-oauth = {path = "../libs/mcp_oauth"}

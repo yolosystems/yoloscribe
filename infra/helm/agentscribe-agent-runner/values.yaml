@@ -20,7 +20,6 @@ config:
   sqsQueueUrl: ""
   awsRegion: ""
   k8sNamespace: ""
-  anthropicSecretName: ""
   agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────

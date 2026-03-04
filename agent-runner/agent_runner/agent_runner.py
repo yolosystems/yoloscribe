@@ -3,6 +3,9 @@
 Reads an agent.md from S3, loads its MCP skills, and runs the agent against
 the page's content.md, writing the result back to S3.
 
+Skills that use remote HTTP MCP servers authenticate via stored OAuth tokens.
+Skills that use stdio MCP servers resolve ${VAR} placeholders from Secrets Manager.
+
 Environment variables:
     BUCKET          S3 bucket name
     AGENT_MD_KEY    S3 key for the agent.md file
@@ -16,10 +19,15 @@ Environment variables:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
+import time
+
+log = logging.getLogger(__name__)
 
 import boto3
 from strands import Agent
@@ -51,64 +59,225 @@ def _sm_client():
     return _session.client("secretsmanager", region_name=AWS_REGION)
 
 
-def _resolve_env_vars(text: str) -> str:
+# ── OAuth token management ─────────────────────────────────────────────────────
+
+
+class OAuthTokenError(Exception):
+    """Raised when an OAuth token cannot be loaded or refreshed for a skill."""
+
+    def __init__(self, skill_name: str, reason: str) -> None:
+        super().__init__(f"OAuth error for skill '{skill_name}': {reason}")
+        self.skill_name = skill_name
+        self.reason = reason
+
+
+def _load_and_refresh_oauth_token(skill_name: str, user_id: str, sm) -> dict:
+    """Load the OAuth token for a skill from Secrets Manager.
+
+    If the token is within 5 minutes of expiry and a refresh token is available,
+    refreshes proactively and writes the updated token back to Secrets Manager.
+
+    Raises OAuthTokenError if the token is missing or cannot be refreshed.
+    """
+    from mcp_oauth import OAuthError
+    from mcp_oauth import refresh_access_token as _refresh
+    from mcp_oauth.discovery import AuthorizationServerMetadata
+
+    secret_id = f"agentscribe/{user_id}/oauth/{skill_name}"
+    try:
+        resp = sm.get_secret_value(SecretId=secret_id)
+        token_data: dict = json.loads(resp["SecretString"])
+    except sm.exceptions.ResourceNotFoundException:
+        raise OAuthTokenError(
+            skill_name,
+            "No OAuth token found. Please open the Credentials panel and authenticate this skill.",
+        )
+    except Exception as exc:
+        raise OAuthTokenError(skill_name, f"Failed to read token from Secrets Manager: {exc}")
+
+    # Proactive refresh: refresh if the token expires within 5 minutes
+    expires_at = token_data.get("expires_at", 0)
+    if time.time() > expires_at - 300:
+        refresh_token = token_data.get("refresh_token")
+        if not refresh_token:
+            raise OAuthTokenError(
+                skill_name,
+                "Token has expired and no refresh token is available. Please re-authenticate in the Credentials panel.",
+            )
+
+        auth_meta_dict = token_data.get("auth_server_metadata", {})
+        auth_meta = AuthorizationServerMetadata(
+            issuer=auth_meta_dict.get("issuer", ""),
+            authorization_endpoint=auth_meta_dict.get("authorization_endpoint", ""),
+            token_endpoint=auth_meta_dict.get("token_endpoint", ""),
+            registration_endpoint=auth_meta_dict.get("registration_endpoint"),
+            scopes_supported=auth_meta_dict.get("scopes_supported", []),
+            code_challenge_methods_supported=auth_meta_dict.get("code_challenge_methods_supported", []),
+        )
+
+        try:
+            new_tokens = asyncio.run(
+                _refresh(
+                    metadata=auth_meta,
+                    refresh_token=refresh_token,
+                    client_id=token_data.get("client_id", ""),
+                    client_secret=token_data.get("client_secret"),
+                )
+            )
+        except OAuthError as exc:
+            raise OAuthTokenError(skill_name, f"Token refresh failed: {exc}")
+
+        token_data["access_token"] = new_tokens.get("access_token", token_data["access_token"])
+        if "refresh_token" in new_tokens:
+            token_data["refresh_token"] = new_tokens["refresh_token"]
+        token_data["expires_at"] = int(time.time()) + int(new_tokens.get("expires_in", 3600))
+        if "scope" in new_tokens:
+            token_data["scope"] = new_tokens["scope"]
+
+        try:
+            sm.put_secret_value(SecretId=secret_id, SecretString=json.dumps(token_data))
+            log.info("Refreshed and persisted OAuth token for skill '%s'", skill_name)
+        except Exception as exc:
+            log.warning("Failed to persist refreshed token for skill '%s': %s", skill_name, exc)
+
+    return token_data
+
+
+# ── Stdio env-var resolution ───────────────────────────────────────────────────
+
+
+def _resolve_env_vars(text: str, sm) -> str:
     """Substitute ${VAR_NAME} in text by fetching secrets from Secrets Manager.
 
     Security note: Secrets Manager access is intentionally allowed here.
     This Job runs as the per-user K8s ServiceAccount (user-{USER_ID}), whose
     IRSA role is scoped exclusively to agentscribe/{USER_ID}/* secrets.
-    The IAM policy prevents cross-user access at the AWS level regardless of
-    what prompt the agent receives.
+    The IAM policy prevents cross-user access at the AWS level.
     """
-    sm = _sm_client()
-
     def _fetch(match: re.Match) -> str:
         var_name = match.group(1)
+        env_val = os.environ.get(var_name)
+        if env_val is not None:
+            return env_val
         secret_id = f"agentscribe/{USER_ID}/{var_name}"
         try:
             resp = sm.get_secret_value(SecretId=secret_id)
             return resp.get("SecretString", "")
-        except Exception:
-            return os.environ.get(var_name, "")
+        except Exception as exc:
+            log.warning(
+                "Could not resolve ${%s} from Secrets Manager (secret: %s): %s",
+                var_name, secret_id, exc,
+            )
+            return ""
 
     return _ENV_VAR_RE.sub(_fetch, text)
 
 
-def _load_mcp_configs(s3, skill_names: list[str]) -> list[dict]:
-    """Read and parse mcp.json for each skill, substituting env vars."""
-    configs = []
+# ── MCP client construction ───────────────────────────────────────────────────
+
+
+def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuthTokenError]]:
+    """Build Strands MCPClient instances for all skills.
+
+    Returns (clients, oauth_errors). OAuth errors are collected rather than
+    raised so all missing tokens can be reported together.
+
+    Remote OAuth skills: connects via streamable HTTP with a Bearer token.
+    Stdio skills: connects via subprocess with env-var substitution.
+    """
+    try:
+        from mcp import StdioServerParameters, stdio_client
+        from strands.tools.mcp import MCPClient
+    except ImportError:
+        log.warning("MCP package not available; no MCP tools will be loaded")
+        return [], []
+
+    clients: list = []
+    errors: list[OAuthTokenError] = []
+
     for skill in skill_names:
         key = f".skills/{skill}/mcp.json"
         try:
             obj = s3.get_object(Bucket=BUCKET, Key=key)
             raw = obj["Body"].read().decode("utf-8")
-            raw = _resolve_env_vars(raw)
-            configs.append(json.loads(raw))
+        except Exception as exc:
+            log.warning("Failed to read mcp.json for skill '%s': %s", skill, exc)
+            continue
+
+        # Peek at the raw JSON to decide remote vs stdio before any substitution
+        try:
+            config_peek = json.loads(raw)
+            is_remote = any("url" in srv for srv in config_peek.get("mcpServers", {}).values())
         except Exception:
-            pass
-    return configs
+            is_remote = False
 
+        if is_remote:
+            config = config_peek
+        else:
+            # Apply ${VAR} substitution only for stdio skills
+            resolved_raw = _resolve_env_vars(raw, sm)
+            try:
+                config = json.loads(resolved_raw)
+            except Exception as exc:
+                log.warning("Failed to parse mcp.json for skill '%s' after substitution: %s", skill, exc)
+                continue
 
-def _build_mcp_clients(configs: list[dict]):
-    """Build a flat list of MCPClient instances from mcp.json configs."""
-    try:
-        from mcp import StdioServerParameters, stdio_client
-        from strands.tools.mcp import MCPClient
-    except ImportError:
-        return []
-
-    clients = []
-    for config in configs:
         for server_name, server_cfg in config.get("mcpServers", {}).items():
-            command = server_cfg.get("command", "")
-            args = server_cfg.get("args", [])
-            env = server_cfg.get("env", {})
-            params = StdioServerParameters(command=command, args=args, env=env or None)
-            clients.append(MCPClient(lambda p=params: stdio_client(p)))
-    return clients
+            if "url" in server_cfg:
+                # Remote HTTP MCP — OAuth Bearer auth
+                try:
+                    token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
+                except OAuthTokenError as exc:
+                    errors.append(exc)
+                    continue
+
+                access_token = token_data["access_token"]
+                server_url = server_cfg["url"]
+                log.info("Building remote MCP client for skill '%s' server '%s'", skill, server_name)
+
+                try:
+                    from mcp.client.streamable_http import streamablehttp_client
+                    clients.append(
+                        MCPClient(
+                            lambda u=server_url, t=access_token: streamablehttp_client(
+                                u, headers={"Authorization": f"Bearer {t}"}
+                            ),
+                            prefix=skill,
+                        )
+                    )
+                except ImportError:
+                    log.warning(
+                        "streamablehttp_client not available in mcp package; skipping remote skill '%s'",
+                        skill,
+                    )
+            else:
+                # Stdio MCP — subprocess
+                command = server_cfg.get("command", "")
+                args = server_cfg.get("args", [])
+                env = server_cfg.get("env") or {}
+                params = StdioServerParameters(command=command, args=args, env=env or None)
+                clients.append(MCPClient(lambda p=params: stdio_client(p), prefix=skill))
+                log.info("Building stdio MCP client for skill '%s' server '%s'", skill, server_name)
+
+    return clients, errors
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+
+def _write_error_to_content(s3, content: str, error_block: str) -> None:
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=CONTENT_KEY,
+        Body=(error_block + content).encode("utf-8"),
+        ContentType="text/markdown; charset=utf-8",
+    )
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    log.info("Agent runner starting: bucket=%s agent_md=%s user=%s", BUCKET, AGENT_MD_KEY, USER_ID)
+
     # Expose the package directory so mcp.json files can reference bundled
     # helper scripts via ${AGENT_RUNNER_HOME} (substituted by _resolve_env_vars).
     os.environ.setdefault(
@@ -116,62 +285,79 @@ def main() -> None:
     )
 
     s3 = _s3_client()
+    sm = _sm_client()
 
     # 1. Read and parse agent.md
     obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
-    agent_md_text = obj["Body"].read().decode("utf-8")
-    agent_def = parse_agent_md(agent_md_text)
+    agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
 
-    # 2. Load MCP configs for each skill
-    mcp_configs = _load_mcp_configs(s3, agent_def.skills)
+    # 2. Read current content.md early — we need it for error reporting too
+    try:
+        content_obj = s3.get_object(Bucket=BUCKET, Key=CONTENT_KEY)
+        content = content_obj["Body"].read().decode("utf-8")
+    except Exception:
+        content = ""
 
-    # 3. Build MCP clients
-    mcp_clients = _build_mcp_clients(mcp_configs)
-
-    # 4. Collect tools: always include http_request, then MCP tools from skills
-    tools = [http_request]
-    with contextlib.ExitStack() as stack:
-        for client in mcp_clients:
-            stack.enter_context(client)
-            try:
-                tools.extend(client.list_tools_sync())
-            except Exception:
-                pass
-
-        # 5. Read current content.md
-        try:
-            content_obj = s3.get_object(Bucket=BUCKET, Key=CONTENT_KEY)
-            content = content_obj["Body"].read().decode("utf-8")
-        except Exception:
-            content = ""
-
-        # 6. Run the agent
-        model = AnthropicModel(model_id=MODEL_ID, max_tokens=4096)
-        system_prompt = (
-            agent_def.description
+    # 3. Build MCP clients; collect OAuth errors rather than raising immediately
+    mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, s3, sm)
+    if oauth_errors:
+        error_block = (
+            "\n".join(
+                f"> **Agent Error** (skill `{e.skill_name}`): {e.reason}"
+                for e in oauth_errors
+            )
             + "\n\n"
-            + "IMPORTANT: When you have finished your work, your final message must contain "
-            "ONLY the complete updated markdown content — no preamble, no explanation, no "
-            "summary, no commentary. Output the raw markdown and nothing else."
         )
-        agent = Agent(
-            system_prompt=system_prompt,
-            model=model,
-            tools=tools,
-            callback_handler=None,
-            load_tools_from_directory=False,
-        )
-        full_prompt = (
-            f"{AGENT_PROMPT}\n\n"
-            f"Current content:\n```markdown\n{content}\n```\n\n"
-            "When done, reply with ONLY the updated markdown. No explanations."
-        )
-        response = agent(full_prompt)
+        _write_error_to_content(s3, content, error_block)
+        log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
+        return
 
-    # 7. Strip any preamble the model emitted before the markdown content.
-    # Wiki pages start with a "# Heading" so we find the first line that
-    # begins with "#" and discard everything before it.  If no heading is
-    # found we keep the full response (e.g. pure-prose pages).
+    # 4. Run the agent, catching any MCP or execution errors
+    tools = [http_request]
+    try:
+        with contextlib.ExitStack() as stack:
+            for client in mcp_clients:
+                try:
+                    stack.enter_context(client)
+                except Exception as exc:
+                    log.warning("MCP client failed to start: %s", exc)
+                    continue
+                try:
+                    mcp_tools = client.list_tools_sync()
+                    tools.extend(mcp_tools)
+                    log.info("Loaded %d tools from MCP client", len(mcp_tools))
+                except Exception as exc:
+                    log.warning("Failed to load tools from MCP client: %s", exc)
+
+            model = AnthropicModel(model_id=MODEL_ID, max_tokens=4096)
+            system_prompt = (
+                agent_def.description
+                + "\n\n"
+                + "IMPORTANT: When you have finished your work, your final message must contain "
+                "ONLY the complete updated markdown content — no preamble, no explanation, no "
+                "summary, no commentary. Output the raw markdown and nothing else."
+            )
+            agent = Agent(
+                system_prompt=system_prompt,
+                model=model,
+                tools=tools,
+                callback_handler=None,
+                load_tools_from_directory=False,
+            )
+            full_prompt = (
+                f"{AGENT_PROMPT}\n\n"
+                f"Current content:\n```markdown\n{content}\n```\n\n"
+                "When done, reply with ONLY the updated markdown. No explanations."
+            )
+            response = agent(full_prompt)
+
+    except Exception as exc:
+        log.error("Agent execution failed: %s", exc)
+        error_block = f"> **Agent Error**: The agent encountered an error during execution: {exc}\n\n"
+        _write_error_to_content(s3, content, error_block)
+        return
+
+    # 5. Strip any preamble the model emitted before the markdown heading
     raw = str(response)
     lines = raw.splitlines()
     for idx, line in enumerate(lines):

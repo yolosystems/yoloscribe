@@ -8,6 +8,7 @@ dependencies = [
     "strands-agents[anthropic]>=0.1.0",
     "strands-agents-tools>=0.1.0",
     "mcp>=1.0.0",
+    "mcp-oauth",
 ]
 
 [project.scripts]
@@ -16,3 +17,6 @@ polling-worker = "agent_runner.polling_worker:main"
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+mcp-oauth = {path = "../libs/mcp_oauth"}

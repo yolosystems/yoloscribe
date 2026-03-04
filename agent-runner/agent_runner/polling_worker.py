@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/agentscribe-agent-runner:latest")
-ANTHROPIC_SECRET_NAME = os.environ.get("ANTHROPIC_SECRET_NAME", "agentscribe-secrets")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
@@ -42,7 +42,7 @@ def _safe_k8s_name(*parts: str) -> str:
     joined = "-".join(parts).lower()
     safe = re.sub(r"[^a-z0-9-]", "-", joined)
     safe = re.sub(r"-+", "-", safe).strip("-")
-    return safe[:63]
+    return safe[:63].strip("-")
 
 
 # ── Local runner ───────────────────────────────────────────────────────────────
@@ -84,19 +84,10 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="BUCKET", value=payload["bucket"]),
         k8s_client.V1EnvVar(name="AGENT_MD_KEY", value=payload["agent_md_key"]),
         k8s_client.V1EnvVar(name="CONTENT_KEY", value=payload["content_key"]),
-        k8s_client.V1EnvVar(name="PROMPT", value=payload["prompt"]),
+        k8s_client.V1EnvVar(name="AGENT_PROMPT", value=payload["prompt"]),
         k8s_client.V1EnvVar(name="USER_ID", value=payload.get("user_id", "default")),
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
-        k8s_client.V1EnvVar(
-            name="ANTHROPIC_API_KEY",
-            value_from=k8s_client.V1EnvVarSource(
-                secret_key_ref=k8s_client.V1SecretKeySelector(
-                    name=ANTHROPIC_SECRET_NAME,
-                    key="anthropic-api-key",
-                    optional=True,
-                )
-            ),
-        ),
+        k8s_client.V1EnvVar(name="ANTHROPIC_API_KEY", value=ANTHROPIC_API_KEY),
     ]
     return k8s_client.V1Container(
         name="agent-runner",
@@ -106,13 +97,14 @@ def _build_container(payload: dict):  # type: ignore[return]
     )
 
 
-def _pod_spec(container, user_id: str):  # type: ignore[return]
+def _pod_spec(container, user_id: str, image_pull_secrets=None):  # type: ignore[return]
     from kubernetes import client as k8s_client  # noqa: PLC0415
 
     return k8s_client.V1PodSpec(
         service_account_name=f"user-{user_id}",
         restart_policy="Never",
         containers=[container],
+        image_pull_secrets=image_pull_secrets,
     )
 
 
@@ -168,7 +160,7 @@ def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str)
             raise
 
 
-def _process_message_k8s(batch_v1, s3, payload: dict) -> None:
+def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -> None:
     user_id = payload.get("user_id", "default")
     bucket = payload["bucket"]
     agent_md_key = payload["agent_md_key"]
@@ -184,7 +176,7 @@ def _process_message_k8s(batch_v1, s3, payload: dict) -> None:
     agent_name = parts[-2] if len(parts) >= 2 else "unknown"
 
     container = _build_container(payload)
-    pod_spec = _pod_spec(container, user_id)
+    pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
 
     if agent_def.schedule:
         cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id)
@@ -197,7 +189,9 @@ def _process_message_k8s(batch_v1, s3, payload: dict) -> None:
         )
     else:
         ts = str(int(time.time()))
-        job_name = _safe_k8s_name("agentrunner", site, agent_name, user_id, ts)
+        prefix = _safe_k8s_name("agentrunner", site, agent_name, user_id)
+        max_prefix = 63 - 1 - len(ts)  # reserve room for "-{ts}"
+        job_name = f"{prefix[:max_prefix].rstrip('-')}-{ts}"
         _create_job(batch_v1, name=job_name, pod_spec=pod_spec)
 
 
@@ -206,6 +200,7 @@ def main() -> None:
     sqs = _session.client("sqs", region_name=AWS_REGION)
     s3 = _session.client("s3", region_name=AWS_REGION)
 
+    image_pull_secrets: list = []
     if LOCAL_RUNNER:
         log.info("LOCAL_RUNNER mode — agents will run as subprocesses (no K8s)")
         batch_v1 = None
@@ -218,6 +213,16 @@ def main() -> None:
         except Exception:
             k8s_config.load_kube_config()
         batch_v1 = k8s_client.BatchV1Api()
+
+        # Inherit imagePullSecrets from this pod so spawned jobs can pull the same image.
+        try:
+            core_v1 = k8s_client.CoreV1Api()
+            pod_name = os.environ.get("HOSTNAME", "")
+            own_pod = core_v1.read_namespaced_pod(name=pod_name, namespace=K8S_NAMESPACE)
+            image_pull_secrets = own_pod.spec.image_pull_secrets or []
+        except Exception:
+            log.warning("Could not read own pod spec to inherit imagePullSecrets", exc_info=True)
+            image_pull_secrets = []
 
     log.info("Polling SQS queue: %s", SQS_QUEUE_URL)
     while True:
@@ -234,7 +239,7 @@ def main() -> None:
                     if LOCAL_RUNNER:
                         _run_local(payload)
                     else:
-                        _process_message_k8s(batch_v1, s3, payload)
+                        _process_message_k8s(batch_v1, s3, payload, image_pull_secrets=image_pull_secrets)
                     sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt)
                 except Exception:
                     log.exception("Failed to process message %s", msg.get("MessageId"))
