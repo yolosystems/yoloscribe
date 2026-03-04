@@ -1,4 +1,8 @@
-"""RunnerAgent — queues an agent.md-defined agent for async execution via SQS."""
+"""RunnerAgent — queues an agent.md-defined agent for async execution via SQS.
+
+NOTE: RunnerAgent is not currently used. The ChatAgent runner tool sends SQS
+messages directly. This class is retained for potential future use.
+"""
 
 from __future__ import annotations
 

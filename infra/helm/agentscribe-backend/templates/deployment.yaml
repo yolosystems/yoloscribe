@@ -71,6 +71,10 @@ spec:
             - name: CLOUDFRONT_DOMAIN
               value: {{ .Values.config.cloudfrontDomain | quote }}
             {{- end }}
+            {{- if .Values.ingress.host }}
+            - name: OAUTH_REDIRECT_URI
+              value: {{ printf "https://%s/oauth/callback" .Values.ingress.host | quote }}
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

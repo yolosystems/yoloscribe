@@ -1,7 +1,11 @@
 FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-COPY pyproject.toml uv.lock ./
+COPY libs/ libs/
+COPY agent-runner/pyproject.toml agent-runner/uv.lock agent-runner/
+WORKDIR /app/agent-runner
 RUN uv sync --no-dev --frozen
-COPY agent_runner/ agent_runner/
+COPY agent-runner/agent_runner/ agent_runner/
 CMD ["uv", "run", "polling-worker"]

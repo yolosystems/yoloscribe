@@ -25,4 +25,5 @@ release: lock login
 		--push \
 		-t $(IMAGE):$(TAG) \
 		-t $(IMAGE):latest \
-		.
+		-f Dockerfile \
+		..

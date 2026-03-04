@@ -9,3 +9,6 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
     verbs: ["create", "get", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]

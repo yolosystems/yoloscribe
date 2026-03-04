@@ -10,6 +10,7 @@ dependencies = [
     { name = "boto3" },
     { name = "kubernetes" },
     { name = "mcp" },
+    { name = "mcp-oauth" },
     { name = "strands-agents", extra = ["anthropic"] },
     { name = "strands-agents-tools" },
 ]
@@ -19,6 +20,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35.0" },
     { name = "kubernetes", specifier = ">=29.0.0" },
     { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mcp-oauth", directory = "../libs/mcp_oauth" },
     { name = "strands-agents", extras = ["anthropic"], specifier = ">=0.1.0" },
     { name = "strands-agents-tools", specifier = ">=0.1.0" },
 ]
@@ -795,6 +797,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/fc/6d/62e76bbb8144d6ed8
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
 ]
+
+[[package]]
+name = "mcp-oauth"
+version = "0.1.0"
+source = { directory = "../libs/mcp_oauth" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27.0" }]
 
 [[package]]
 name = "mdurl"

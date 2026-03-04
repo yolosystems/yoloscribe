@@ -136,12 +136,23 @@ class S3Tools:
         key = f"{skills_prefix()}/{skill_name}/mcp.json"
         return self.read_text(key)
 
+    def is_remote_skill(self, skill_name: str) -> bool:
+        """Return True if the skill uses remote HTTP transport (has a 'url' key in mcp.json)."""
+        key = f"{skills_prefix()}/{skill_name}/mcp.json"
+        try:
+            raw = self.read_text(key)
+            config = json.loads(raw)
+            return any("url" in srv for srv in config.get("mcpServers", {}).values())
+        except Exception:
+            return False
+
     @tool
     def get_skill_required_vars(self, skill_name: str) -> str:
-        """Return the environment variable names required by a skill's mcp.json.
+        """Return the credential requirements for a skill's mcp.json.
 
-        Reads the skill's mcp.json and extracts every ${VAR_NAME} placeholder.
-        Call this after selecting a skill to know which API keys the user must supply.
+        For remote OAuth skills, explains that OAuth authentication is required.
+        For stdio skills, lists the ${VAR_NAME} environment variable placeholders.
+        Call this after selecting a skill to know what credentials the user must provide.
 
         Args:
             skill_name: Name of the skill to inspect.
@@ -150,7 +161,16 @@ class S3Tools:
         try:
             raw = self.read_text(key)
         except Exception:
-            return f"Skill '{skill_name}' has no mcp.json — no environment variables required."
+            return f"Skill '{skill_name}' has no mcp.json — no credentials required."
+        try:
+            config = json.loads(raw)
+            if any("url" in srv for srv in config.get("mcpServers", {}).values()):
+                return (
+                    f"Skill '{skill_name}' uses remote OAuth authentication — no API keys required. "
+                    f"Users must authenticate via OAuth in the Credentials panel before this skill can be used."
+                )
+        except Exception:
+            pass
         vars_found = list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
         if not vars_found:
             return f"Skill '{skill_name}' requires no API keys or environment variables."
