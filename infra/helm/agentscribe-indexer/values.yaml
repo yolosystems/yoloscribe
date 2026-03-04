@@ -1,0 +1,41 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+# Never set ghcr.pat here — pass it via --set on the command line.
+ghcr:
+  username: ""          # set in environment-specific values file
+  pat: ""               # pass via --set; never commit a real value
+
+# ── Service account (IRSA for SQS receive/delete + S3 read/write + Bedrock) ──
+serviceAccount:
+  create: true
+  iamRoleArn: ""
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  sqsIndexingQueueUrl: ""
+  s3VectorsBucket: ""
+  s3VectorsIndexName: "agentscribe"
+  awsRegion: "us-east-1"
+  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
+  k8sNamespace: "agentscribe"
+  indexerImage: ""      # defaults to image.repository:image.tag if empty
+  indexerServiceAccount: "agentscribe-indexer"  # SA used by spawned indexer Jobs
+  supabaseUrl: ""
+
+# ── Supabase service role key ─────────────────────────────────────────────────
+# Pass via --set on the command line; never commit a real value here.
+supabaseServiceRoleKey: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

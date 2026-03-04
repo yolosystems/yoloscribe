@@ -1,0 +1,53 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SQSPoll",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "__SQS_INDEXING_QUEUE_ARN__"
+    },
+    {
+      "Sid": "S3ReadContent",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::__S3_BUCKET__",
+        "arn:aws:s3:::__S3_BUCKET__/*"
+      ]
+    },
+    {
+      "Sid": "S3WriteChunks",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::__S3_BUCKET__/*/.chunks/*"
+    },
+    {
+      "Sid": "BedrockEmbed",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:__AWS_REGION__::foundation-model/__BEDROCK_EMBEDDING_MODEL__"
+    },
+    {
+      "Sid": "S3VectorsReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3vectors:PutVectors",
+        "s3vectors:DeleteVectors",
+        "s3vectors:ListVectors",
+        "s3vectors:QueryVectors"
+      ],
+      "Resource": "arn:aws:s3vectors:__AWS_REGION__:__AWS_ACCOUNT_ID__:bucket/__S3_VECTORS_BUCKET__/index/__S3_VECTORS_INDEX_NAME__"
+    }
+  ]
+}

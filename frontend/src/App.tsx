@@ -43,6 +43,8 @@ function getFilePath(): string {
   if (hash.includes('access_token=') || hash.includes('error_description=')) return 'content.md'
   const path = hash.replace(/^#\/?/, '')
   if (!path) return 'content.md'
+  // .user/search
+  if (path === '.user/search') return '.user/search.md'
   // {page}/.agents/{name}  or  .agents/{name}
   const agentMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)$/)
   if (agentMatch) return `${agentMatch[1] ?? ''}.agents/${agentMatch[2]}/agent.md`
@@ -52,6 +54,7 @@ function getFilePath(): string {
 
 function filePathToHash(fp: string): string {
   if (fp === 'content.md') return ''
+  if (fp === '.user/search.md') return '#/.user/search'
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
   if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
   const pageMatch = fp.match(/^(.+)\/content\.md$/)
@@ -62,6 +65,11 @@ function filePathToHash(fp: string): string {
 function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
   const crumbs: BreadcrumbSegment[] = [{ label: 'Home', filePath: 'content.md' }]
   if (fp === 'content.md') return crumbs
+
+  if (fp === '.user/search.md') {
+    crumbs.push({ label: 'Search Results', filePath: fp })
+    return crumbs
+  }
 
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
   if (agentMatch) {
