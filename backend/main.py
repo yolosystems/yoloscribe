@@ -47,6 +47,7 @@ app.add_middleware(
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
+SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
@@ -79,6 +80,7 @@ _aws_profile = os.environ.get("AWS_PROFILE")
 _boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else boto3.Session()
 s3 = _boto_session.client("s3")
 sqs = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else None
+sqs_indexing = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_INDEXING_QUEUE_URL else None
 sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
 
 # ── OAuth state (in-memory, TTL ~10 min) ──────────────────────────────────────
@@ -133,6 +135,7 @@ SAFE_PATH = re.compile(
     rf"|{PAGE_SEG}/content\.md"
     rf"|\.agents/{AGENT_NAME_SEG}/agent\.md"
     rf"|{PAGE_SEG}/\.agents/{AGENT_NAME_SEG}/agent\.md"
+    r"|\.user/search\.md"
     r")$"
 )
 
@@ -167,6 +170,19 @@ def _delete_s3_prefix(site_name: str) -> None:
         objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
         if objects:
             s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objects, "Quiet": True})
+
+
+def _enqueue_index_job(content_key: str) -> None:
+    """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
+    if sqs_indexing is None or not SQS_INDEXING_QUEUE_URL:
+        return
+    try:
+        sqs_indexing.send_message(
+            QueueUrl=SQS_INDEXING_QUEUE_URL,
+            MessageBody=json.dumps({"bucket": S3_BUCKET, "content_key": content_key}),
+        )
+    except Exception:
+        logging.warning("Failed to enqueue indexing job for %s", content_key, exc_info=True)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -511,6 +527,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     updated_content: str | None = None
+    navigate_to: str | None = None
 
 
 class UserCreatedEvent(BaseModel):
@@ -575,6 +592,8 @@ async def put_content(
         raise HTTPException(status_code=400, detail="Invalid path")
     body = await request.body()
     _put_content(site, path, body.decode("utf-8"))
+    if path == "content.md" or path.endswith("/content.md"):
+        _enqueue_index_job(f"{site}/{path}")
     return {"status": "saved"}
 
 
@@ -980,7 +999,7 @@ async def chat(
     ]
 
     try:
-        reply, updated_content = chat_agent.run(
+        reply, updated_content, navigate_to = chat_agent.run(
             message=req.message,
             current_content=req.current_content,
             history=history,
@@ -991,7 +1010,12 @@ async def chat(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return ChatResponse(reply=reply, updated_content=updated_content)
+    if updated_content is not None:
+        content_key = f"{req.site}/{req.file_path}"
+        if req.file_path == "content.md" or req.file_path.endswith("/content.md"):
+            _enqueue_index_job(content_key)
+
+    return ChatResponse(reply=reply, updated_content=updated_content, navigate_to=navigate_to)
 
 
 @app.post("/provision")

@@ -69,6 +69,10 @@ export default function ChatPanel({ content, onContentUpdate, apiBase, site, fil
       if (data.updated_content != null && data.updated_content !== content) {
         onContentUpdate(data.updated_content)
       }
+
+      if (data.navigate_to) {
+        window.location.hash = data.navigate_to
+      }
     } catch (err) {
       setMessages((prev) => {
         const without = prev.filter((m) => !m.thinking)

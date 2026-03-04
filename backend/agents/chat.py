@@ -56,6 +56,9 @@ You have access to the following tools:
                     named agent that is defined in an agent.md file. The
                     agent will be queued for asynchronous execution; pass the
                     agent_name and the prompt (task) to give it.
+- search          — use when the user wants to search for content across the
+                    entire wiki. Returns a summary of matching pages and
+                    navigates the user to their search results.
 
 For simple questions that don't require any of the above, answer directly.
 
@@ -94,11 +97,13 @@ Current context:
         site: str,
         file_path: str = "content.md",
         user_id: str = "knuth",
-    ) -> tuple[str, str | None]:
-        """Process a user message and return (reply, updated_content | None).
+    ) -> tuple[str, str | None, str | None]:
+        """Process a user message and return (reply, updated_content | None, navigate_to | None).
 
         updated_content is non-None when ContentWriterAgent successfully edited
         the page; the caller (FastAPI) can forward it to the frontend.
+        navigate_to is non-None when the SearchAgent ran; the caller should
+        update window.location.hash accordingly.
         """
         # Derive page_path from file_path:
         # "content.md"                       → ""
@@ -106,7 +111,7 @@ Current context:
         page_path = _page_path_from_file(file_path)
 
         # Shared mutable dict so sub-agent tools can pass updated_content back.
-        shared: dict = {"updated_content": None}
+        shared: dict = {"updated_content": None, "navigate_to": None}
 
         # Build fresh sub-agent @tool functions with current context baked in.
         tools = self._make_tools(site=site, page_path=page_path, shared=shared, user_id=user_id)
@@ -147,7 +152,7 @@ Current context:
         response = agent(full_message)
         reply = str(response)
 
-        return reply, shared.get("updated_content")
+        return reply, shared.get("updated_content"), shared.get("navigate_to")
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
@@ -281,7 +286,23 @@ Current context:
             )
             return f"Agent '{agent_name}' has been queued for execution."
 
-        return [s3_tools.list_skills, s3_tools.list_agents, http_request, content_writer, creator, page_creator, runner]
+        @tool
+        def search(query: str) -> str:
+            """Search across all wiki sites using a semantic query.
+
+            Use when the user wants to find content across the wiki.
+            Returns a summary of results and navigates to search results page.
+
+            Args:
+                query: The search query string.
+            """
+            from agents.search import SearchAgent as _SearchAgent
+            agent = _SearchAgent(s3=s3_tools.s3, bucket=s3_tools.bucket)
+            reply, navigate_to = agent.run(query=query, user_site=site)
+            shared["navigate_to"] = navigate_to
+            return reply
+
+        return [s3_tools.list_skills, s3_tools.list_agents, http_request, content_writer, creator, page_creator, runner, search]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

@@ -55,6 +55,7 @@ config:
   allowedOrigins: ""
   model: ""
   sqsQueueUrl: ""
+  sqsIndexingQueueUrl: ""
   eksOidcProvider: ""
   awsAccountId: ""
   awsRegion: ""

@@ -182,7 +182,8 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
     Returns (clients, oauth_errors). OAuth errors are collected rather than
     raised so all missing tokens can be reported together.
 
-    Remote OAuth skills: connects via streamable HTTP with a Bearer token.
+    Remote skills with "auth": "oauth": connects via streamable HTTP with a Bearer token.
+    Remote skills without "auth" (or "auth": "none"): connects via streamable HTTP unauthenticated.
     Stdio skills: connects via subprocess with env-var substitution.
     """
     try:
@@ -224,24 +225,25 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
 
         for server_name, server_cfg in config.get("mcpServers", {}).items():
             if "url" in server_cfg:
-                # Remote HTTP MCP — OAuth Bearer auth
-                try:
-                    token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
-                except OAuthTokenError as exc:
-                    errors.append(exc)
-                    continue
+                # Remote HTTP MCP — optionally OAuth Bearer auth
+                auth = server_cfg.get("auth", "none")
+                headers: dict[str, str] = {}
+                if auth == "oauth":
+                    try:
+                        token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
+                    except OAuthTokenError as exc:
+                        errors.append(exc)
+                        continue
+                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
 
-                access_token = token_data["access_token"]
                 server_url = server_cfg["url"]
-                log.info("Building remote MCP client for skill '%s' server '%s'", skill, server_name)
+                log.info("Building remote MCP client for skill '%s' server '%s' (auth=%s)", skill, server_name, auth)
 
                 try:
                     from mcp.client.streamable_http import streamablehttp_client
                     clients.append(
                         MCPClient(
-                            lambda u=server_url, t=access_token: streamablehttp_client(
-                                u, headers={"Authorization": f"Bearer {t}"}
-                            ),
+                            lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
                             prefix=skill,
                         )
                     )
