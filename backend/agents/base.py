@@ -8,7 +8,7 @@ import os
 import re
 from typing import TYPE_CHECKING
 
-from strands import Agent, tool
+from strands import Agent, ModelRetryStrategy, tool
 from strands.models.anthropic import AnthropicModel
 
 if TYPE_CHECKING:
@@ -340,6 +340,9 @@ class BaseAgent(Agent):
         model = AnthropicModel(
             model_id=model_id,
             max_tokens=4096,
+            # Disable SDK-level retries so Strands' retry_strategy is the
+            # single retry layer with proper exponential backoff.
+            client_args={"max_retries": 0},
         )
         formatted_prompt = self.SYSTEM_PROMPT.format(**prompt_vars) if prompt_vars else self.SYSTEM_PROMPT
         super().__init__(
@@ -348,4 +351,9 @@ class BaseAgent(Agent):
             tools=tools,
             callback_handler=None,
             load_tools_from_directory=False,
+            retry_strategy=ModelRetryStrategy(
+                max_attempts=8,
+                initial_delay=10,
+                max_delay=120,
+            ),
         )
