@@ -30,7 +30,7 @@ import time
 log = logging.getLogger(__name__)
 
 import boto3
-from strands import Agent
+from strands import Agent, ModelRetryStrategy
 from strands.models.anthropic import AnthropicModel
 from strands_tools import http_request
 
@@ -329,7 +329,11 @@ def main() -> None:
                 except Exception as exc:
                     log.warning("Failed to load tools from MCP client: %s", exc)
 
-            model = AnthropicModel(model_id=MODEL_ID, max_tokens=4096)
+            model = AnthropicModel(
+                model_id=MODEL_ID,
+                max_tokens=4096,
+                client_args={"max_retries": 0},
+            )
             system_prompt = (
                 agent_def.description
                 + "\n\n"
@@ -343,6 +347,11 @@ def main() -> None:
                 tools=tools,
                 callback_handler=None,
                 load_tools_from_directory=False,
+                retry_strategy=ModelRetryStrategy(
+                    max_attempts=8,
+                    initial_delay=10,
+                    max_delay=120,
+                ),
             )
             full_prompt = (
                 f"{AGENT_PROMPT}\n\n"
