@@ -25,11 +25,6 @@ config:
   k8sNamespace: "agentscribe"
   indexerImage: ""      # defaults to image.repository:image.tag if empty
   indexerServiceAccount: "agentscribe-indexer"  # SA used by spawned indexer Jobs
-  supabaseUrl: ""
-
-# ── Supabase service role key ─────────────────────────────────────────────────
-# Pass via --set on the command line; never commit a real value here.
-supabaseServiceRoleKey: ""
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:

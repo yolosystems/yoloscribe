@@ -62,6 +62,9 @@ config:
   k8sNamespace: ""
   supabaseUrl: ""
   cloudfrontDomain: ""
+  s3VectorsBucket: ""
+  s3VectorsIndexName: "agentscribe"
+  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.

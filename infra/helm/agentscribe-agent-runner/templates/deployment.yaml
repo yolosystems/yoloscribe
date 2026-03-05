@@ -28,6 +28,8 @@ spec:
           env:
             - name: SQS_QUEUE_URL
               value: {{ .Values.config.sqsQueueUrl | quote }}
+            - name: SQS_INDEXING_QUEUE_URL
+              value: {{ .Values.config.sqsIndexingQueueUrl | quote }}
             - name: AWS_REGION
               value: {{ .Values.config.awsRegion | quote }}
             - name: K8S_NAMESPACE

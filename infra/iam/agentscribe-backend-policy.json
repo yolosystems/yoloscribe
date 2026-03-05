@@ -42,6 +42,18 @@
         "sqs:SendMessage"
       ],
       "Resource": "arn:aws:sqs:*:*:agentscribe-*"
+    },
+    {
+      "Sid": "BedrockEmbed",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:*::foundation-model/*"
+    },
+    {
+      "Sid": "S3VectorsQuery",
+      "Effect": "Allow",
+      "Action": "s3vectors:QueryVectors",
+      "Resource": "arn:aws:s3vectors:*:*:bucket/*/index/*"
     }
   ]
 }

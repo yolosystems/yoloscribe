@@ -42,14 +42,5 @@ spec:
               value: {{ include "agentscribe-indexer.indexerImage" . | quote }}
             - name: INDEXER_SERVICE_ACCOUNT
               value: {{ .Values.config.indexerServiceAccount | quote }}
-            - name: SUPABASE_URL
-              value: {{ .Values.config.supabaseUrl | quote }}
-            {{- if .Values.supabaseServiceRoleKey }}
-            - name: SUPABASE_SERVICE_ROLE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "agentscribe-indexer.secretName" . }}
-                  key: supabase-service-role-key
-            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
