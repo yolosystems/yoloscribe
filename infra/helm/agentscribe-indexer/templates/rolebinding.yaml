@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentscribe-indexer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentscribe-indexer.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agentscribe-indexer.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentscribe-indexer.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

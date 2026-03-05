@@ -44,6 +44,12 @@ spec:
               value: {{ .Values.config.sqsQueueUrl | quote }}
             - name: SQS_INDEXING_QUEUE_URL
               value: {{ .Values.config.sqsIndexingQueueUrl | quote }}
+            - name: S3_VECTORS_BUCKET
+              value: {{ .Values.config.s3VectorsBucket | quote }}
+            - name: S3_VECTORS_INDEX_NAME
+              value: {{ .Values.config.s3VectorsIndexName | quote }}
+            - name: BEDROCK_EMBEDDING_MODEL
+              value: {{ .Values.config.bedrockEmbeddingModel | quote }}
             - name: EKS_OIDC_PROVIDER
               value: {{ .Values.config.eksOidcProvider | quote }}
             - name: AWS_ACCOUNT_ID

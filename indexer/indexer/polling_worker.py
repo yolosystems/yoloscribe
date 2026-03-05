@@ -8,8 +8,6 @@ Environment variables:
     S3_VECTORS_BUCKET           S3 Vectors bucket name
     S3_VECTORS_INDEX_NAME       S3 Vectors index name (default: agentscribe)
     BEDROCK_EMBEDDING_MODEL     Bedrock embedding model ID
-    SUPABASE_URL                Supabase project URL
-    SUPABASE_SERVICE_ROLE_KEY   Supabase service role key
     AWS_PROFILE                 (optional) named AWS profile for local development
     LOCAL_RUNNER                Set to "true" to run index-runner in subprocess
 """
@@ -37,8 +35,6 @@ INDEXER_SERVICE_ACCOUNT = os.environ.get("INDEXER_SERVICE_ACCOUNT", "agentscribe
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
 
@@ -60,10 +56,9 @@ def _run_local(payload: dict) -> None:
         {
             "BUCKET": payload["bucket"],
             "CONTENT_KEY": payload["content_key"],
+            "USER_ID": payload.get("user_id", "unknown"),
             "S3_VECTORS_BUCKET": S3_VECTORS_BUCKET,
             "S3_VECTORS_INDEX_NAME": S3_VECTORS_INDEX_NAME,
-            "SUPABASE_URL": SUPABASE_URL,
-            "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_SERVICE_ROLE_KEY,
             "AWS_REGION": AWS_REGION,
             "BEDROCK_EMBEDDING_MODEL": BEDROCK_EMBEDDING_MODEL,
         }
@@ -87,10 +82,9 @@ def _build_container(payload: dict):  # type: ignore[return]
     env_vars = [
         k8s_client.V1EnvVar(name="BUCKET", value=payload["bucket"]),
         k8s_client.V1EnvVar(name="CONTENT_KEY", value=payload["content_key"]),
+        k8s_client.V1EnvVar(name="USER_ID", value=payload.get("user_id", "unknown")),
         k8s_client.V1EnvVar(name="S3_VECTORS_BUCKET", value=S3_VECTORS_BUCKET),
         k8s_client.V1EnvVar(name="S3_VECTORS_INDEX_NAME", value=S3_VECTORS_INDEX_NAME),
-        k8s_client.V1EnvVar(name="SUPABASE_URL", value=SUPABASE_URL),
-        k8s_client.V1EnvVar(name="SUPABASE_SERVICE_ROLE_KEY", value=SUPABASE_SERVICE_ROLE_KEY),
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
         k8s_client.V1EnvVar(name="BEDROCK_EMBEDDING_MODEL", value=BEDROCK_EMBEDDING_MODEL),
     ]

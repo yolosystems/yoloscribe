@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
+SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/agentscribe-agent-runner:latest")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -60,6 +61,8 @@ def _run_local(payload: dict) -> None:
             "AWS_REGION": AWS_REGION,
         }
     )
+    if SQS_INDEXING_QUEUE_URL:
+        env["SQS_INDEXING_QUEUE_URL"] = SQS_INDEXING_QUEUE_URL
     if AWS_PROFILE:
         env["AWS_PROFILE"] = AWS_PROFILE
 
@@ -88,6 +91,7 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="USER_ID", value=payload.get("user_id", "default")),
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
         k8s_client.V1EnvVar(name="ANTHROPIC_API_KEY", value=ANTHROPIC_API_KEY),
+        k8s_client.V1EnvVar(name="SQS_INDEXING_QUEUE_URL", value=SQS_INDEXING_QUEUE_URL),
     ]
     return k8s_client.V1Container(
         name="agent-runner",

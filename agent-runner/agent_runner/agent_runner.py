@@ -3,8 +3,7 @@
 Reads an agent.md from S3, loads its MCP skills, and runs the agent against
 the page's content.md, writing the result back to S3.
 
-Skills that use remote HTTP MCP servers authenticate via stored OAuth tokens.
-Skills that use stdio MCP servers resolve ${VAR} placeholders from Secrets Manager.
+Skills use remote HTTP MCP servers, optionally authenticated via stored OAuth tokens.
 
 Environment variables:
     BUCKET          S3 bucket name
@@ -24,7 +23,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import time
 
 log = logging.getLogger(__name__)
@@ -45,8 +43,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL_ID = os.environ.get("AGENTSCRIBE_MODEL", "claude-opus-4-6")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
-
-_ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 
 _session = boto3.Session(profile_name=AWS_PROFILE or None)
 
@@ -57,6 +54,21 @@ def _s3_client():
 
 def _sm_client():
     return _session.client("secretsmanager", region_name=AWS_REGION)
+
+
+def _enqueue_index_job(content_key: str) -> None:
+    """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
+    if not SQS_INDEXING_QUEUE_URL:
+        return
+    try:
+        sqs = _session.client("sqs", region_name=AWS_REGION)
+        sqs.send_message(
+            QueueUrl=SQS_INDEXING_QUEUE_URL,
+            MessageBody=json.dumps({"bucket": BUCKET, "content_key": content_key, "user_id": USER_ID}),
+        )
+        log.info("Enqueued indexing job for %s", content_key)
+    except Exception:
+        log.warning("Failed to enqueue indexing job for %s", content_key, exc_info=True)
 
 
 # ── OAuth token management ─────────────────────────────────────────────────────
@@ -143,36 +155,6 @@ def _load_and_refresh_oauth_token(skill_name: str, user_id: str, sm) -> dict:
     return token_data
 
 
-# ── Stdio env-var resolution ───────────────────────────────────────────────────
-
-
-def _resolve_env_vars(text: str, sm) -> str:
-    """Substitute ${VAR_NAME} in text by fetching secrets from Secrets Manager.
-
-    Security note: Secrets Manager access is intentionally allowed here.
-    This Job runs as the per-user K8s ServiceAccount (user-{USER_ID}), whose
-    IRSA role is scoped exclusively to agentscribe/{USER_ID}/* secrets.
-    The IAM policy prevents cross-user access at the AWS level.
-    """
-    def _fetch(match: re.Match) -> str:
-        var_name = match.group(1)
-        env_val = os.environ.get(var_name)
-        if env_val is not None:
-            return env_val
-        secret_id = f"agentscribe/{USER_ID}/{var_name}"
-        try:
-            resp = sm.get_secret_value(SecretId=secret_id)
-            return resp.get("SecretString", "")
-        except Exception as exc:
-            log.warning(
-                "Could not resolve ${%s} from Secrets Manager (secret: %s): %s",
-                var_name, secret_id, exc,
-            )
-            return ""
-
-    return _ENV_VAR_RE.sub(_fetch, text)
-
-
 # ── MCP client construction ───────────────────────────────────────────────────
 
 
@@ -184,10 +166,9 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
 
     Remote skills with "auth": "oauth": connects via streamable HTTP with a Bearer token.
     Remote skills without "auth" (or "auth": "none"): connects via streamable HTTP unauthenticated.
-    Stdio skills: connects via subprocess with env-var substitution.
     """
     try:
-        from mcp import StdioServerParameters, stdio_client
+        from mcp.client.streamable_http import streamablehttp_client
         from strands.tools.mcp import MCPClient
     except ImportError:
         log.warning("MCP package not available; no MCP tools will be loaded")
@@ -200,66 +181,34 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
         key = f".skills/{skill}/mcp.json"
         try:
             obj = s3.get_object(Bucket=BUCKET, Key=key)
-            raw = obj["Body"].read().decode("utf-8")
+            config = json.loads(obj["Body"].read().decode("utf-8"))
         except Exception as exc:
             log.warning("Failed to read mcp.json for skill '%s': %s", skill, exc)
             continue
 
-        # Peek at the raw JSON to decide remote vs stdio before any substitution
-        try:
-            config_peek = json.loads(raw)
-            is_remote = any("url" in srv for srv in config_peek.get("mcpServers", {}).values())
-        except Exception:
-            is_remote = False
-
-        if is_remote:
-            config = config_peek
-        else:
-            # Apply ${VAR} substitution only for stdio skills
-            resolved_raw = _resolve_env_vars(raw, sm)
-            try:
-                config = json.loads(resolved_raw)
-            except Exception as exc:
-                log.warning("Failed to parse mcp.json for skill '%s' after substitution: %s", skill, exc)
+        for server_name, server_cfg in config.get("mcpServers", {}).items():
+            if "url" not in server_cfg:
+                log.warning("Skipping non-remote MCP server '%s' in skill '%s'", server_name, skill)
                 continue
 
-        for server_name, server_cfg in config.get("mcpServers", {}).items():
-            if "url" in server_cfg:
-                # Remote HTTP MCP — optionally OAuth Bearer auth
-                auth = server_cfg.get("auth", "none")
-                headers: dict[str, str] = {}
-                if auth == "oauth":
-                    try:
-                        token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
-                    except OAuthTokenError as exc:
-                        errors.append(exc)
-                        continue
-                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
-
-                server_url = server_cfg["url"]
-                log.info("Building remote MCP client for skill '%s' server '%s' (auth=%s)", skill, server_name, auth)
-
+            auth = server_cfg.get("auth", "none")
+            headers: dict[str, str] = {}
+            if auth == "oauth":
                 try:
-                    from mcp.client.streamable_http import streamablehttp_client
-                    clients.append(
-                        MCPClient(
-                            lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
-                            prefix=skill,
-                        )
-                    )
-                except ImportError:
-                    log.warning(
-                        "streamablehttp_client not available in mcp package; skipping remote skill '%s'",
-                        skill,
-                    )
-            else:
-                # Stdio MCP — subprocess
-                command = server_cfg.get("command", "")
-                args = server_cfg.get("args", [])
-                env = server_cfg.get("env") or {}
-                params = StdioServerParameters(command=command, args=args, env=env or None)
-                clients.append(MCPClient(lambda p=params: stdio_client(p), prefix=skill))
-                log.info("Building stdio MCP client for skill '%s' server '%s'", skill, server_name)
+                    token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
+                except OAuthTokenError as exc:
+                    errors.append(exc)
+                    continue
+                headers["Authorization"] = f"Bearer {token_data['access_token']}"
+
+            server_url = server_cfg["url"]
+            log.info("Building remote MCP client for skill '%s' server '%s' (auth=%s)", skill, server_name, auth)
+            clients.append(
+                MCPClient(
+                    lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
+                    prefix=skill,
+                )
+            )
 
     return clients, errors
 
@@ -383,6 +332,7 @@ def main() -> None:
         ContentType="text/markdown; charset=utf-8",
     )
     print(f"Done. Wrote {len(updated)} chars to s3://{BUCKET}/{CONTENT_KEY}")
+    _enqueue_index_job(CONTENT_KEY)
 
 
 if __name__ == "__main__":

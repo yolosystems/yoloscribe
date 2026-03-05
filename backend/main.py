@@ -172,14 +172,14 @@ def _delete_s3_prefix(site_name: str) -> None:
             s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objects, "Quiet": True})
 
 
-def _enqueue_index_job(content_key: str) -> None:
+def _enqueue_index_job(content_key: str, user_id: str) -> None:
     """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
     if sqs_indexing is None or not SQS_INDEXING_QUEUE_URL:
         return
     try:
         sqs_indexing.send_message(
             QueueUrl=SQS_INDEXING_QUEUE_URL,
-            MessageBody=json.dumps({"bucket": S3_BUCKET, "content_key": content_key}),
+            MessageBody=json.dumps({"bucket": S3_BUCKET, "content_key": content_key, "user_id": user_id}),
         )
     except Exception:
         logging.warning("Failed to enqueue indexing job for %s", content_key, exc_info=True)
@@ -356,46 +356,53 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
         f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
     )
     s3_bucket_arn = f"arn:aws:s3:::{S3_BUCKET}"
+    statements: list[dict] = [
+        {
+            "Sid": "SecretsManagerUserSecrets",
+            "Effect": "Allow",
+            "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+            ],
+            "Resource": f"{secret_arn_prefix}*",
+        },
+        {
+            "Sid": "S3ReadWriteUserPrefix",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Resource": f"{s3_bucket_arn}/{site_name}/*",
+        },
+        {
+            "Sid": "S3ReadSkillsPrefix",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": f"{s3_bucket_arn}/.skills/*",
+        },
+        {
+            "Sid": "S3ListUserPrefix",
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": s3_bucket_arn,
+            "Condition": {
+                "StringLike": {"s3:prefix": [f"{site_name}/*", ".skills/*"]}
+            },
+        },
+    ]
+    if SQS_INDEXING_QUEUE_URL:
+        queue_name = SQS_INDEXING_QUEUE_URL.rstrip("/").split("/")[-1]
+        indexing_queue_arn = f"arn:aws:sqs:{AWS_REGION}:{AWS_ACCOUNT_ID}:{queue_name}"
+        statements.append(
+            {
+                "Sid": "SQSSendIndexingQueue",
+                "Effect": "Allow",
+                "Action": "sqs:SendMessage",
+                "Resource": indexing_queue_arn,
+            }
+        )
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName="agentscribe-user-access",
-        PolicyDocument=json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "SecretsManagerUserSecrets",
-                        "Effect": "Allow",
-                        "Action": [
-                            "secretsmanager:GetSecretValue",
-                            "secretsmanager:PutSecretValue",
-                        ],
-                        "Resource": f"{secret_arn_prefix}*",
-                    },
-                    {
-                        "Sid": "S3ReadWriteUserPrefix",
-                        "Effect": "Allow",
-                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                        "Resource": f"{s3_bucket_arn}/{site_name}/*",
-                    },
-                    {
-                        "Sid": "S3ReadSkillsPrefix",
-                        "Effect": "Allow",
-                        "Action": "s3:GetObject",
-                        "Resource": f"{s3_bucket_arn}/.skills/*",
-                    },
-                    {
-                        "Sid": "S3ListUserPrefix",
-                        "Effect": "Allow",
-                        "Action": "s3:ListBucket",
-                        "Resource": s3_bucket_arn,
-                        "Condition": {
-                            "StringLike": {"s3:prefix": [f"{site_name}/*", ".skills/*"]}
-                        },
-                    },
-                ],
-            }
-        ),
+        PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": statements}),
     )
     role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/agentscribe/{role_name}"
 
@@ -593,7 +600,7 @@ async def put_content(
     body = await request.body()
     _put_content(site, path, body.decode("utf-8"))
     if path == "content.md" or path.endswith("/content.md"):
-        _enqueue_index_job(f"{site}/{path}")
+        _enqueue_index_job(f"{site}/{path}", user_id)
     return {"status": "saved"}
 
 
@@ -1013,7 +1020,7 @@ async def chat(
     if updated_content is not None:
         content_key = f"{req.site}/{req.file_path}"
         if req.file_path == "content.md" or req.file_path.endswith("/content.md"):
-            _enqueue_index_job(content_key)
+            _enqueue_index_job(content_key, user_id)
 
     return ChatResponse(reply=reply, updated_content=updated_content, navigate_to=navigate_to)
 
