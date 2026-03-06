@@ -1,0 +1,16 @@
+{
+  "client_id": "975544297707-kqljfcvjfr47fm2nefnh05bhnrp6fslu.apps.googleusercontent.com",
+  "scopes": [
+    "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/chat.spaces",
+  "https://www.googleapis.com/auth/chat.messages",
+  "https://www.googleapis.com/auth/chat.memberships",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/directory.readonly",
+  "https://www.googleapis.com/auth/presentations.readonly",
+  "https://www.googleapis.com/auth/spreadsheets.readonly"
+  ]
+}

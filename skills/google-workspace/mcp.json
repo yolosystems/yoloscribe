@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "google-workspace": {
+      "url": "https://workspace-mcp-dev.runyolo.dev/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}
