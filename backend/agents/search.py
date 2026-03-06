@@ -88,10 +88,10 @@ class SearchAgent:
             vector_id = r.get("key", "")
             metadata = r.get("metadata", {})
             path = metadata.get("path", "")
-            site_from_path = path.split("/")[0] if path else ""
-            text = self._fetch_chunk(site_from_path, vector_id)
+            site = path.split("/")[0] if path else ""
+            text = self._fetch_chunk(path, vector_id)
             if text:
-                chunks.append({"vector_id": vector_id, "path": path, "site": site_from_path, "text": text})
+                chunks.append({"vector_id": vector_id, "path": path, "site": site, "text": text})
 
         if not chunks:
             summary = f'No readable results found for "{query}".'
@@ -132,9 +132,16 @@ class SearchAgent:
         )
         return resp.get("vectors", [])
 
-    def _fetch_chunk(self, site: str, vector_id: str) -> str:
+    def _fetch_chunk(self, content_key_path: str, vector_id: str) -> str:
+        """Fetch chunk text from S3.
+
+        content_key_path is the full content_key stored in the vector metadata
+        (e.g. "knuth/blog/content.md"). The chunk lives in the .chunks directory
+        co-located with that content.md file.
+        """
         try:
-            key = f"{site}/.chunks/{vector_id}"
+            page_dir = content_key_path.rsplit("/", 1)[0]
+            key = f"{page_dir}/.chunks/{vector_id}"
             obj = self._s3.get_object(Bucket=self._bucket, Key=key)
             data = json.loads(obj["Body"].read())
             return data.get("text", "")

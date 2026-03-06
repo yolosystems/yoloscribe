@@ -178,6 +178,7 @@ def main() -> None:
                 receipt = msg["ReceiptHandle"]
                 try:
                     payload = json.loads(msg["Body"])
+                    log.info("Indexing: %s", payload.get("content_key", "<unknown>"))
                     if LOCAL_RUNNER:
                         _run_local(payload)
                     else:

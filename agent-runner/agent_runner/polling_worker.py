@@ -38,12 +38,16 @@ AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
 
 
-def _safe_k8s_name(*parts: str) -> str:
-    """Build a DNS-label-safe K8s name from parts, max 63 chars."""
+def _safe_k8s_name(*parts: str, max_len: int = 63) -> str:
+    """Build a DNS-label-safe K8s name from parts, truncated to max_len chars.
+
+    Jobs allow up to 63 characters. CronJobs must be <= 52 characters because
+    Kubernetes appends an 11-character suffix when creating triggered Jobs.
+    """
     joined = "-".join(parts).lower()
     safe = re.sub(r"[^a-z0-9-]", "-", joined)
     safe = re.sub(r"-+", "-", safe).strip("-")
-    return safe[:63].strip("-")
+    return safe[:max_len].strip("-")
 
 
 # ── Local runner ───────────────────────────────────────────────────────────────
@@ -183,7 +187,7 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
     pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
 
     if agent_def.schedule:
-        cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id)
+        cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id, max_len=52)
         _upsert_cronjob(
             batch_v1,
             name=cron_name,
@@ -244,9 +248,12 @@ def main() -> None:
                         _run_local(payload)
                     else:
                         _process_message_k8s(batch_v1, s3, payload, image_pull_secrets=image_pull_secrets)
-                    sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt)
                 except Exception:
                     log.exception("Failed to process message %s", msg.get("MessageId"))
+                finally:
+                    # Always delete the message — failed messages must not loop
+                    # forever; use a DLQ if replay is needed.
+                    sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt)
         except Exception:
             log.exception("SQS receive error — retrying in 5s")
             time.sleep(5)

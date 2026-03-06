@@ -48,6 +48,8 @@ app.add_middleware(
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
+S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
+S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
 MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
@@ -82,6 +84,7 @@ s3 = _boto_session.client("s3")
 sqs = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else None
 sqs_indexing = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_INDEXING_QUEUE_URL else None
 sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
+s3vectors = _boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTORS_BUCKET else None
 
 # ── OAuth state (in-memory, TTL ~10 min) ──────────────────────────────────────
 
@@ -140,6 +143,7 @@ SAFE_PATH = re.compile(
 )
 
 SITE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
+PAGE_PATH_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$")
 VALID_THEMES = {"light", "dark", "yolo"}
 
 
@@ -170,6 +174,41 @@ def _delete_s3_prefix(site_name: str) -> None:
         objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
         if objects:
             s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": objects, "Quiet": True})
+
+
+def _delete_site_vectors(site_name: str) -> None:
+    """Delete all S3 Vectors entries for a site (best-effort, never raises).
+
+    Chunk objects live at {site}/.chunks/{uuid} and at
+    {site}/{page}/.chunks/{uuid} (and any depth of child pages).
+    A single list_objects_v2 over the site prefix (no delimiter) returns
+    everything recursively, so we just filter for keys containing "/.chunks/".
+    The vector key for each chunk is the UUID — the final path segment.
+    """
+    if s3vectors is None:
+        return
+    paginator = s3.get_paginator("list_objects_v2")
+    vector_ids: list[str] = []
+    try:
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{site_name}/"):
+            for obj in page.get("Contents", []):
+                if "/.chunks/" in obj["Key"]:
+                    vector_ids.append(obj["Key"].split("/")[-1])
+    except Exception as exc:
+        logging.warning("Failed to list chunks for vector deletion (%s): %s", site_name, exc)
+        return
+    if not vector_ids:
+        return
+    try:
+        for i in range(0, len(vector_ids), 100):
+            s3vectors.delete_vectors(
+                vectorBucketName=S3_VECTORS_BUCKET,
+                indexName=S3_VECTORS_INDEX_NAME,
+                keys=vector_ids[i : i + 100],
+            )
+        logging.info("Deleted %d vectors for site %s", len(vector_ids), site_name)
+    except Exception as exc:
+        logging.warning("Failed to delete vectors for site %s: %s", site_name, exc)
 
 
 def _enqueue_index_job(content_key: str, user_id: str) -> None:
@@ -554,6 +593,11 @@ class ProvisionResponse(BaseModel):
     site_url: str
 
 
+class CreatePageRequest(BaseModel):
+    site: str
+    page_path: str
+
+
 # ── Default welcome content ───────────────────────────────────────────────────
 
 _DEFAULT_WELCOME_MD = """\
@@ -568,6 +612,18 @@ or ask the AI assistant in the Chat panel to help you write and organise your no
 - Use the **Chat** panel to ask the AI to help you write content
 - Navigate to sub-pages by clicking links
 """
+
+
+def _default_child_page_md(title: str) -> str:
+    return (
+        f"# {title}\n\n"
+        f"This is a new wiki page. Edit this content using the editor,\n"
+        f"or ask the AI assistant in the Chat panel to help you write and organise your notes.\n\n"
+        f"## Getting Started\n\n"
+        f"- Click **Edit** to enter edit mode\n"
+        f"- Use the **Chat** panel to ask the AI to help you write content\n"
+        f"- Navigate to sub-pages by clicking links\n"
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -610,6 +666,58 @@ async def list_agents(site: str = "default", page_path: str = "") -> dict:
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"agents": names}
+
+
+@app.get("/pages")
+async def list_pages(site: str = "default", page_path: str = "") -> dict:
+    prefix = f"{site}/{page_path}/" if page_path else f"{site}/"
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix, Delimiter="/")
+    pages = []
+    for cp in resp.get("CommonPrefixes", []):
+        name = cp["Prefix"][len(prefix):].rstrip("/")
+        if name.startswith("."):
+            continue
+        content_key = f"{cp['Prefix']}content.md"
+        check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=content_key, MaxKeys=1)
+        if check.get("KeyCount", 0) > 0:
+            pages.append(name)
+    return {"pages": pages}
+
+
+@app.post("/pages")
+async def create_page(
+    req: CreatePageRequest,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    user_id, user_site = ctx
+    _require_site_owner(req.site, user_site)
+
+    if not PAGE_PATH_RE.match(req.page_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid page path: use lowercase letters, digits, hyphens, and underscores separated by slashes",
+        )
+
+    content_key = f"{req.site}/{req.page_path}/content.md"
+    check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=content_key, MaxKeys=1)
+    if check.get("KeyCount", 0) > 0:
+        raise HTTPException(status_code=409, detail="Page already exists")
+
+    title = req.page_path.split("/")[-1].replace("-", " ").title()
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=content_key,
+        Body=_default_child_page_md(title).encode("utf-8"),
+        ContentType="text/markdown; charset=utf-8",
+    )
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{req.site}/{req.page_path}/.agents/.keep",
+        Body=b"",
+        ContentType="text/plain",
+    )
+    _enqueue_index_job(content_key, user_id)
+    return {"page_path": req.page_path, "content_key": content_key}
 
 
 @app.get("/skills")
@@ -1114,8 +1222,10 @@ async def delete_account(
     """Permanently delete the authenticated user's account and all associated resources."""
     user_id, site_name = ctx
 
-    # 1. Delete S3 prefix (best-effort)
+    # 1. Delete search vectors then S3 prefix (vectors first — chunk keys must
+    #    exist in S3 so we can enumerate their UUIDs as vector IDs).
     if site_name is not None:
+        _delete_site_vectors(site_name)
         try:
             _delete_s3_prefix(site_name)
         except Exception as exc:

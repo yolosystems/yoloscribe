@@ -10,6 +10,8 @@ import CredentialsPanel from './components/CredentialsPanel'
 import LandingPage from './components/LandingPage'
 import OnboardingView from './components/OnboardingView'
 import DeleteAccountModal from './components/DeleteAccountModal'
+import CreatePageModal from './components/CreatePageModal'
+import ChildPagesList from './components/ChildPagesList'
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -104,7 +106,13 @@ function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
 // "{page}/content.md" or "{page}/.agents/*/agent.md"  →  "{page}"
 function getPagePath(filePath: string): string {
   if (filePath === 'content.md' || filePath.startsWith('.agents/')) return ''
-  return filePath.split('/').slice(0, -1).filter((s) => !s.startsWith('.')).join('/')
+  // Child page content: "{page}/content.md"
+  if (filePath.endsWith('/content.md')) return filePath.slice(0, -'/content.md'.length)
+  // Child page agent: "{page}/.agents/{name}/agent.md"
+  // Everything before the first "/.agents/" segment is the page path.
+  const agentsIdx = filePath.indexOf('/.agents/')
+  if (agentsIdx !== -1) return filePath.slice(0, agentsIdx)
+  return ''
 }
 
 type Mode = 'view' | 'edit' | 'credentials'
@@ -121,6 +129,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [createPageOpen, setCreatePageOpen] = useState(false)
   const [mySite, setMySite] = useState<string | null | undefined>(undefined)
 
   // Subscribe to Supabase auth state
@@ -303,6 +312,8 @@ export default function App() {
   }
 
   // appView === 'site'
+  const isContentPage = filePath === 'content.md' || filePath.endsWith('/content.md')
+
   return (
     <>
       <header className="topbar">
@@ -314,6 +325,11 @@ export default function App() {
           >
             {mode === 'credentials' ? '← Back' : 'Credentials'}
           </button>
+          {isContentPage && mode !== 'credentials' && (
+            <button className="btn" onClick={() => setCreatePageOpen(true)}>
+              + New Page
+            </button>
+          )}
           {mode === 'view' && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
@@ -369,6 +385,19 @@ export default function App() {
           }}
         />
       )}
+      {createPageOpen && session && (
+        <CreatePageModal
+          apiBase={API_BASE}
+          site={SITE}
+          token={session.access_token}
+          parentPagePath={getPagePath(filePath)}
+          onSuccess={(pagePath) => {
+            setCreatePageOpen(false)
+            navigate(`${pagePath}/content.md`)
+          }}
+          onClose={() => setCreatePageOpen(false)}
+        />
+      )}
 
       <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
@@ -389,7 +418,7 @@ export default function App() {
             )}
 
             {mode === 'edit' && (
-              <AgentsList agents={agents} activeFilePath={filePath} />
+              <AgentsList agents={agents} activeFilePath={filePath} pagePath={getPagePath(filePath)} />
             )}
 
             <div className="content-area">
@@ -398,7 +427,17 @@ export default function App() {
               ) : content === null ? (
                 <div className="state-center">Loading…</div>
               ) : mode === 'view' ? (
-                <MarkdownViewer content={content} />
+                <div className="view-scroll">
+                  <MarkdownViewer content={content} />
+                  {isContentPage && (
+                    <ChildPagesList
+                      apiBase={API_BASE}
+                      site={SITE}
+                      pagePath={getPagePath(filePath)}
+                      onNavigate={navigate}
+                    />
+                  )}
+                </div>
               ) : (
                 <MarkdownEditor content={content} onChange={setContent} />
               )}

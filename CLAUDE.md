@@ -107,6 +107,8 @@ Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn
 | `AWS_PROFILE` | backend | Optional named AWS profile |
 | `AGENTSCRIBE_MODEL` | backend | Override default Claude model ID |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
+| `S3_VECTORS_BUCKET` | backend | S3 Vectors bucket name (for search index and deletion on account delete) |
+| `S3_VECTORS_INDEX_NAME` | backend | S3 Vectors index name (default: `agentscribe`) |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 

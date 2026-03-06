@@ -54,8 +54,10 @@ You have access to the following tools:
                     page under the current site.
 - runner          — use when the user wants to invoke / run an existing
                     named agent that is defined in an agent.md file. The
-                    agent will be queued for asynchronous execution; pass the
-                    agent_name and the prompt (task) to give it.
+                    agent will be queued for asynchronous execution. Pass
+                    agent_name and an optional prompt. If the user has not
+                    specified a custom task, call runner immediately with an
+                    empty prompt — do NOT ask the user for one first.
 - search          — use when the user wants to search for content across the
                     entire wiki. Returns a summary of matching pages and
                     navigates the user to their search results.
@@ -244,29 +246,50 @@ Current context:
             """Create a new wiki page or child page.
 
             Use this when the user asks to create a new page under the current site.
+            The new page will be created as a child of the current page.
 
             Args:
                 instruction: The user's page creation request (should include
-                             the desired page name/path).
+                             the desired page name and what they want on it).
             """
+            import re as _re
+            if (
+                file_path == ".user/search.md"
+                or "/.agents/" in file_path
+                or file_path.startswith(".agents/")
+            ):
+                return (
+                    "I can't create a child page from this location. "
+                    "Please navigate back to a wiki content page first, then ask me again."
+                )
             agent = PageCreatorAgent(
                 s3_tools=s3_tools,
                 model_id=model_id,
                 site=site,
                 page_path=page_path,
             )
-            return str(agent(f"Site: {site}\nParent page: {page_path or '(root)'}\n\n{instruction}"))
+            result = str(agent(f"Site: {site}\nParent page: {page_path or '(root)'}\n\n{instruction}"))
+            match = _re.search(r"Page '([^']+)' created", result)
+            if match:
+                created_page = match.group(1)
+                shared["navigate_to"] = f"#/{created_page}"
+            return result
 
         @tool
-        def runner(agent_name: str, prompt: str) -> str:
+        def runner(agent_name: str, prompt: str = "") -> str:
             """Queue a named agent for asynchronous execution via SQS.
 
             Use this when the user wants to run or invoke an existing agent.
             Call list_agents first if you need to discover available agents.
+            If the user has not provided a specific task, pass an empty prompt —
+            the agent will run based on its own description. Do NOT ask the user
+            for a prompt before calling this tool unless they have explicitly
+            said they want to customise the task.
 
             Args:
                 agent_name: Name of the agent to run.
-                prompt: The task or instruction to pass to the agent.
+                prompt: Optional task or instruction to pass to the agent.
+                        Leave empty to run with the agent's built-in description.
             """
             if sqs_client is None or not sqs_queue_url:
                 return "Error: SQS is not configured on this server. Agent queuing is unavailable."
@@ -320,12 +343,14 @@ def _oauth_token_exists(sm_client, user_id: str, skill_name: str) -> bool:
 def _page_path_from_file(file_path: str) -> str:
     """Extract page_path from a file_path like 'content.md' or '.agents/x/agent.md'."""
     # Root-page files:  "content.md"  or  ".agents/{name}/agent.md"
-    if file_path in ("content.md",) or file_path.startswith(".agents/"):
+    if file_path == "content.md" or file_path.startswith(".agents/"):
         return ""
-    # Child-page files: "{page}/content.md"  or  "{page}/.agents/{name}/agent.md"
-    parts = file_path.split("/")
-    if parts[-1] in ("content.md", "agent.md"):
-        # Drop the filename (and .agents/{name} if present)
-        candidate = "/".join(p for p in parts[:-1] if not p.startswith("."))
-        return candidate.strip("/")
+    # Child-page content: "{page}/content.md"
+    if file_path.endswith("/content.md"):
+        return file_path[: -len("/content.md")]
+    # Child-page agent: "{page}/.agents/{name}/agent.md"
+    # Everything before the first "/.agents/" segment is the page path.
+    agents_idx = file_path.find("/.agents/")
+    if agents_idx != -1:
+        return file_path[:agents_idx]
     return ""
