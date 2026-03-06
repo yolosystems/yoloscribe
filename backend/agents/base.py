@@ -232,17 +232,33 @@ class S3Tools:
         return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
 
     @tool
-    def create_page(self, site: str, page_path: str) -> str:
-        """Create a new wiki page in S3 with an empty content.md and .agents directory marker.
+    def create_page(self, site: str, page_path: str, content: str = "") -> str:
+        """Create a new wiki page in S3 with a content.md and .agents directory marker.
 
         Args:
             site: The site name.
             page_path: Path of the new page relative to site root.
+            content: Optional markdown content for the page. If omitted, a default
+                     welcome page is written. Supply this when the user has specified
+                     what they want the page to display.
         """
         if not re.match(r"^[a-z0-9][a-z0-9_/-]*$", page_path):
             return f"Error: invalid page path {page_path!r}. Use lowercase alphanumerics, hyphens, underscores, slashes."
+        title = page_path.split("/")[-1].replace("-", " ").title()
+        if not content:
+            page_content = (
+                f"# {title}\n\n"
+                f"This is a new wiki page. Edit this content using the editor,\n"
+                f"or ask the AI assistant in the Chat panel to help you write and organise your notes.\n\n"
+                f"## Getting Started\n\n"
+                f"- Click **Edit** to enter edit mode\n"
+                f"- Use the **Chat** panel to ask the AI to help you write content\n"
+                f"- Navigate to sub-pages by clicking links\n"
+            )
+        else:
+            page_content = content
         content_key = f"{site}/{page_path}/content.md"
-        self.write_text(content_key, f"# {page_path.split('/')[-1].replace('-', ' ').title()}\n\n")
+        self.write_text(content_key, page_content)
         # Write a .agents directory marker (S3 doesn't need it, but keeps structure clear)
         self.write_text(f"{site}/{page_path}/.agents/.keep", "")
         return f"Page '{page_path}' created at {content_key}"

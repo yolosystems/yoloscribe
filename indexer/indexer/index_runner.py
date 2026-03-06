@@ -83,14 +83,19 @@ def main() -> None:
     log.info("Fetching %s from %s", content_key, bucket)
     content = s3.get_object(Bucket=bucket, Key=content_key)["Body"].read().decode("utf-8")
 
-    # b. Extract site name
+    # b. Extract site name and page directory.
+    # content_key examples:
+    #   "knuth/content.md"            → site="knuth",  page_dir="knuth"
+    #   "knuth/blog/content.md"       → site="knuth",  page_dir="knuth/blog"
+    #   "knuth/blog/posts/content.md" → site="knuth",  page_dir="knuth/blog/posts"
     site = content_key.split("/")[0]
-    log.info("Site: %s  user_id: %s", site, user_id)
+    page_dir = content_key.rsplit("/", 1)[0]
+    log.info("Site: %s  page_dir: %s  user_id: %s", site, page_dir, user_id)
 
     # d. Delete existing chunks and their corresponding vectors.
     # The vector key for each chunk is the same UUID as the S3 chunk object's
     # final path segment, so we derive vector IDs directly from the S3 listing.
-    chunks_prefix = f"{site}/.chunks/"
+    chunks_prefix = f"{page_dir}/.chunks/"
     paginator = s3.get_paginator("list_objects_v2")
     existing_chunk_keys = []
     existing_vector_ids = []
@@ -139,7 +144,7 @@ def main() -> None:
         }
         s3.put_object(
             Bucket=bucket,
-            Key=f"{site}/.chunks/{chunk_id}",
+            Key=f"{page_dir}/.chunks/{chunk_id}",
             Body=json.dumps(chunk_data).encode("utf-8"),
             ContentType="application/json",
         )

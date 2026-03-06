@@ -23,6 +23,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 
 log = logging.getLogger(__name__)
@@ -213,6 +214,29 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
     return clients, errors
 
 
+# ── Tool name sanitisation ────────────────────────────────────────────────────
+
+_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+
+def _sanitize_tool_names(tools: list) -> None:
+    """Sanitise MCP tool names in-place so they satisfy Claude's API constraint.
+
+    Claude requires tool names to match ``^[a-zA-Z0-9_-]{1,128}``.  Some MCP
+    servers (e.g. Google Workspace) emit names with dots, colons, or slashes.
+    We replace invalid characters with ``_`` directly on ``_agent_tool_name``
+    — the attribute Strands sends to Claude.  The original ``mcp_tool.name``
+    is preserved, so MCP call routing is unaffected (Strands always uses the
+    original name when calling back to the server).
+    """
+    for t in tools:
+        name = getattr(t, "_agent_tool_name", None)
+        if name and not _TOOL_NAME_RE.match(name):
+            safe = re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
+            log.info("Sanitizing tool name '%s' → '%s'", name, safe)
+            t._agent_tool_name = safe
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -238,34 +262,39 @@ def main() -> None:
     s3 = _s3_client()
     sm = _sm_client()
 
-    # 1. Read and parse agent.md
-    obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
-    agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+    # content holds the current page content; populated in step 2.
+    # We declare it here so the top-level except block can use it for
+    # error reporting even if step 2 never ran.
+    content = ""
 
-    # 2. Read current content.md early — we need it for error reporting too
     try:
-        content_obj = s3.get_object(Bucket=BUCKET, Key=CONTENT_KEY)
-        content = content_obj["Body"].read().decode("utf-8")
-    except Exception:
-        content = ""
+        # 1. Read and parse agent.md
+        obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
+        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
 
-    # 3. Build MCP clients; collect OAuth errors rather than raising immediately
-    mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, s3, sm)
-    if oauth_errors:
-        error_block = (
-            "\n".join(
-                f"> **Agent Error** (skill `{e.skill_name}`): {e.reason}"
-                for e in oauth_errors
+        # 2. Read current content.md early — we need it for error reporting too
+        try:
+            content_obj = s3.get_object(Bucket=BUCKET, Key=CONTENT_KEY)
+            content = content_obj["Body"].read().decode("utf-8")
+        except Exception:
+            content = ""
+
+        # 3. Build MCP clients; collect OAuth errors rather than raising immediately
+        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, s3, sm)
+        if oauth_errors:
+            error_block = (
+                "\n".join(
+                    f"> **Agent Error** (skill `{e.skill_name}`): {e.reason}"
+                    for e in oauth_errors
+                )
+                + "\n\n"
             )
-            + "\n\n"
-        )
-        _write_error_to_content(s3, content, error_block)
-        log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
-        return
+            _write_error_to_content(s3, content, error_block)
+            log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
+            return
 
-    # 4. Run the agent, catching any MCP or execution errors
-    tools = [http_request]
-    try:
+        # 4. Run the agent, catching any MCP or execution errors
+        tools = [http_request]
         with contextlib.ExitStack() as stack:
             for client in mcp_clients:
                 try:
@@ -275,6 +304,7 @@ def main() -> None:
                     continue
                 try:
                     mcp_tools = client.list_tools_sync()
+                    _sanitize_tool_names(mcp_tools)
                     tools.extend(mcp_tools)
                     log.info("Loaded %d tools from MCP client", len(mcp_tools))
                 except Exception as exc:
@@ -304,17 +334,21 @@ def main() -> None:
                     max_delay=120,
                 ),
             )
+            task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
             full_prompt = (
-                f"{AGENT_PROMPT}\n\n"
+                f"{task}\n\n"
                 f"Current content:\n```markdown\n{content}\n```\n\n"
                 "When done, reply with ONLY the updated markdown. No explanations."
             )
             response = agent(full_prompt)
 
     except Exception as exc:
-        log.error("Agent execution failed: %s", exc)
+        log.error("Agent execution failed: %s", exc, exc_info=True)
         error_block = f"> **Agent Error**: The agent encountered an error during execution: {exc}\n\n"
-        _write_error_to_content(s3, content, error_block)
+        try:
+            _write_error_to_content(s3, content, error_block)
+        except Exception as write_exc:
+            log.error("Additionally failed to write error to content: %s", write_exc)
         return
 
     # 5. Strip any preamble the model emitted before the markdown heading

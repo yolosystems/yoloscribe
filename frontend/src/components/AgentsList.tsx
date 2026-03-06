@@ -1,11 +1,20 @@
 interface Props {
   agents: string[]
   activeFilePath: string
+  pagePath: string
 }
 
-export default function AgentsList({ agents, activeFilePath }: Props) {
+export default function AgentsList({ agents, activeFilePath, pagePath }: Props) {
   function navigate(name: string) {
-    window.location.hash = `#/.agents/${name}`
+    const hash = pagePath ? `#/${pagePath}/.agents/${name}` : `#/.agents/${name}`
+    window.location.hash = hash
+  }
+
+  function isActive(name: string) {
+    const expected = pagePath
+      ? `${pagePath}/.agents/${name}/agent.md`
+      : `.agents/${name}/agent.md`
+    return activeFilePath === expected
   }
 
   return (
@@ -18,7 +27,7 @@ export default function AgentsList({ agents, activeFilePath }: Props) {
           agents.map((name) => (
             <button
               key={name}
-              className={`agents-item${activeFilePath === `.agents/${name}/agent.md` ? ' active' : ''}`}
+              className={`agents-item${isActive(name) ? ' active' : ''}`}
               onClick={() => navigate(name)}
             >
               {name}

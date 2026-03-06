@@ -313,14 +313,24 @@ body {
   overflow: hidden;
 }
 
-/* ── Markdown viewer ── */
-.markdown-viewer {
+/* ── View scroll wrapper (view mode only: markdown + child pages) ── */
+.view-scroll {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Markdown viewer ── */
+.markdown-viewer {
   padding: 2.5rem;
   max-width: 860px;
   width: 100%;
   margin: 0 auto;
+}
+
+.view-scroll .markdown-viewer {
+  flex: 0 0 auto;
 }
 
 .markdown-viewer h1,
@@ -874,4 +884,41 @@ body {
   font-size: 0.8rem;
   color: var(--text);
   font-weight: 500;
+}
+
+/* ── Child pages list ── */
+.child-pages-list {
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 2.5rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.child-pages-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.25rem;
+}
+
+.child-pages-item {
+  background: none;
+  border: none;
+  color: var(--link);
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.25rem 0;
+  font-family: inherit;
+}
+
+.child-pages-item:hover {
+  text-decoration: underline;
 }
