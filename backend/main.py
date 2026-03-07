@@ -756,9 +756,18 @@ async def get_content(
     visibility = settings.get("visibility", "private")
 
     if visibility == "public":
+        access = "view"
+        if credentials is not None:
+            try:
+                claims = _decode_jwt(credentials)
+                user_site = _get_site_for_user(claims.user_id)
+                if user_site == site:
+                    access = "full-control"
+            except HTTPException:
+                pass  # invalid token — serve as public view
         content = _get_content(site, path)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
-        resp.headers["X-Page-Access"] = "view"
+        resp.headers["X-Page-Access"] = access
         return resp
 
     # private or shared — authentication required
