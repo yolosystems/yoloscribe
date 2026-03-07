@@ -736,6 +736,11 @@ async def get_content(
     page_path = _page_path_from_file_path(path)
     is_content_path = path == "content.md" or path.endswith("/content.md")
 
+    # config.json is always public — the frontend reads it unauthenticated to set the theme
+    if path == "config.json":
+        content = _get_content(site, path)
+        return Response(content=content, media_type="application/json")
+
     # Non-content paths (agents, settings, notifications, search) are always owner-only
     if not is_content_path:
         claims = _decode_jwt(credentials)
