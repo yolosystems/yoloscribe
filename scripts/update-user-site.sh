@@ -100,11 +100,9 @@ $AWS s3 cp "${SRC}index.html" "${DST}index.html" \
 # ── Update config.json to record the active theme ─────────────────────────────
 
 echo "Updating config.json (theme: $THEME)"
-$AWS s3 cp \
+echo "{\"theme\": \"$THEME\"}" | $AWS s3 cp - "${DST}config.json" \
   --content-type "application/json" \
-  --cache-control "no-cache" \
-  <(echo "{\"theme\": \"$THEME\"}") \
-  "${DST}config.json"
+  --cache-control "no-cache"
 
 # ── Invalidate CloudFront cache ────────────────────────────────────────────────
 
