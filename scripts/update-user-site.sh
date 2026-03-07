@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Push a pre-built theme bundle to an existing user site in S3.
+# Copies from _themes/{theme}/ → {site_name}/ without touching user content.
+#
+# Usage:
+#   ./scripts/update-user-site.sh --site-name knuth --theme yolo
+#
+# Required env (or set in .env at project root):
+#   S3_BUCKET   — S3 bucket name
+#
+# Optional env:
+#   AWS_PROFILE — named AWS profile (omit to use the default credential chain)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# ── Parse arguments ────────────────────────────────────────────────────────────
+
+SITE_NAME=""
+THEME=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --site-name) SITE_NAME="$2"; shift 2 ;;
+    --theme)     THEME="$2";     shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ -z "$SITE_NAME" || -z "$THEME" ]]; then
+  echo "Usage: $0 --site-name <name> --theme <light|dark|yolo>" >&2
+  exit 1
+fi
+
+VALID_THEMES="light dark yolo"
+if ! echo "$VALID_THEMES" | grep -qw "$THEME"; then
+  echo "Error: theme must be one of: $VALID_THEMES" >&2
+  exit 1
+fi
+
+# ── Load S3_BUCKET ─────────────────────────────────────────────────────────────
+
+if [[ -z "${S3_BUCKET:-}" ]]; then
+  ENV_FILE="$ROOT_DIR/.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck disable=SC1090
+    set -a; source "$ENV_FILE"; set +a
+  fi
+fi
+
+if [[ -z "${S3_BUCKET:-}" ]]; then
+  echo "Error: S3_BUCKET is not set" >&2
+  exit 1
+fi
+
+# ── Build AWS CLI invocation ───────────────────────────────────────────────────
+
+if [[ -n "${AWS_PROFILE:-}" ]]; then
+  AWS="aws --profile $AWS_PROFILE"
+else
+  AWS="aws"
+fi
+
+SRC="s3://$S3_BUCKET/_themes/$THEME/"
+DST="s3://$S3_BUCKET/$SITE_NAME/"
+
+# ── Verify source theme exists ─────────────────────────────────────────────────
+
+echo "Checking source theme: $SRC"
+THEME_KEY_COUNT=$($AWS s3 ls "$SRC" | wc -l | tr -d ' ')
+if [[ "$THEME_KEY_COUNT" -eq 0 ]]; then
+  echo "Error: theme '$THEME' not found at $SRC" >&2
+  echo "Run scripts/build-themes.sh first to build and upload the theme bundles." >&2
+  exit 1
+fi
+
+# ── Copy static assets (long cache TTL, skip index.html) ──────────────────────
+
+echo "Syncing assets: $SRC → $DST"
+$AWS s3 sync "$SRC" "$DST" \
+  --exclude "index.html" \
+  --cache-control "max-age=31536000,immutable" \
+  --no-progress
+
+# ── Copy index.html (no-cache so updates are picked up immediately) ────────────
+
+echo "Updating index.html (no-cache)"
+$AWS s3 cp "${SRC}index.html" "${DST}index.html" \
+  --cache-control "no-cache" \
+  --content-type "text/html"
+
+# ── Update config.json to record the active theme ─────────────────────────────
+
+echo "Updating config.json (theme: $THEME)"
+$AWS s3 cp \
+  --content-type "application/json" \
+  --cache-control "no-cache" \
+  <(echo "{\"theme\": \"$THEME\"}") \
+  "${DST}config.json"
+
+echo ""
+echo "Done. Site '$SITE_NAME' is now running the '$THEME' theme."
