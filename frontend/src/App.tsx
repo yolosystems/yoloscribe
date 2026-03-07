@@ -128,7 +128,7 @@ function getPagePath(filePath: string): string {
 }
 
 type Mode = 'view' | 'edit' | 'credentials'
-type AppView = 'loading' | 'landing' | 'onboarding' | 'site' | 'auth-wall'
+type AppView = 'loading' | 'landing' | 'onboarding' | 'site'
 
 export default function App() {
   const [filePath, setFilePath] = useState(getFilePath)
@@ -339,26 +339,6 @@ export default function App() {
     )
   }
 
-  if (appView === 'auth-wall') {
-    return (
-      <>
-        <header className="topbar">
-          <span className="topbar-title">Yolo Scribe</span>
-          <div className="topbar-actions">
-            <button className="btn" onClick={signIn}>Sign in</button>
-          </div>
-        </header>
-        <div className="auth-wall">
-          <div className="auth-wall-content">
-            <p>This is a private site. Sign in to view its contents.</p>
-            <button className="btn btn-primary auth-wall-btn" onClick={signIn}>
-              Sign in with Google
-            </button>
-          </div>
-        </div>
-      </>
-    )
-  }
 
   // appView === 'site'
   const isContentPage = filePath === 'content.md' || filePath.endsWith('/content.md')
@@ -389,7 +369,7 @@ export default function App() {
               {settingsOpen ? '← Back' : 'Settings'}
             </button>
           )}
-          {canEdit && mode === 'view' && accessLevel !== 'denied' && (
+          {canEdit && mode === 'view' && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
             </button>
