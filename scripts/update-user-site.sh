@@ -4,6 +4,7 @@
 #
 # Usage:
 #   ./scripts/update-user-site.sh --site-name knuth --theme yolo
+#   ./scripts/update-user-site.sh --root --theme dark   # updates the bucket root (main site)
 #
 # Required env (or set in .env at project root):
 #   S3_BUCKET                  — S3 bucket name
@@ -22,17 +23,25 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 SITE_NAME=""
 THEME=""
+ROOT_SITE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --site-name) SITE_NAME="$2"; shift 2 ;;
     --theme)     THEME="$2";     shift 2 ;;
+    --root)      ROOT_SITE=true; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
-if [[ -z "$SITE_NAME" || -z "$THEME" ]]; then
+if [[ -z "$THEME" ]]; then
   echo "Usage: $0 --site-name <name> --theme <light|dark|yolo>" >&2
+  echo "       $0 --root --theme <light|dark|yolo>" >&2
+  exit 1
+fi
+
+if [[ "$ROOT_SITE" == false && -z "$SITE_NAME" ]]; then
+  echo "Error: provide either --site-name <name> or --root" >&2
   exit 1
 fi
 
@@ -70,7 +79,13 @@ else
 fi
 
 SRC="s3://$S3_BUCKET/_themes/$THEME/"
-DST="s3://$S3_BUCKET/$SITE_NAME/"
+if [[ "$ROOT_SITE" == true ]]; then
+  DST="s3://$S3_BUCKET/"
+  CF_INVALIDATION_PATHS=("/index.html")  # root site has no config.json theme
+else
+  DST="s3://$S3_BUCKET/$SITE_NAME/"
+  CF_INVALIDATION_PATHS=("/$SITE_NAME/index.html" "/$SITE_NAME/config.json")
+fi
 
 # ── Verify source theme exists ─────────────────────────────────────────────────
 
@@ -97,20 +112,22 @@ $AWS s3 cp "${SRC}index.html" "${DST}index.html" \
   --cache-control "no-cache" \
   --content-type "text/html"
 
-# ── Update config.json to record the active theme ─────────────────────────────
+# ── Update config.json to record the active theme (user sites only) ────────────
 
-echo "Updating config.json (theme: $THEME)"
-echo "{\"theme\": \"$THEME\"}" | $AWS s3 cp - "${DST}config.json" \
-  --content-type "application/json" \
-  --cache-control "no-cache"
+if [[ "$ROOT_SITE" == false ]]; then
+  echo "Updating config.json (theme: $THEME)"
+  echo "{\"theme\": \"$THEME\"}" | $AWS s3 cp - "${DST}config.json" \
+    --content-type "application/json" \
+    --cache-control "no-cache"
+fi
 
 # ── Invalidate CloudFront cache ────────────────────────────────────────────────
 
 if [[ -n "$CF_DIST_ID" ]]; then
-  echo "Invalidating CloudFront cache for /$SITE_NAME/index.html and /$SITE_NAME/config.json"
+  echo "Invalidating CloudFront cache for: ${CF_INVALIDATION_PATHS[*]}"
   $AWS cloudfront create-invalidation \
     --distribution-id "$CF_DIST_ID" \
-    --paths "/$SITE_NAME/index.html" "/$SITE_NAME/config.json" \
+    --paths "${CF_INVALIDATION_PATHS[@]}" \
     --query 'Invalidation.Id' \
     --output text
 else
@@ -119,4 +136,8 @@ else
 fi
 
 echo ""
-echo "Done. Site '$SITE_NAME' is now running the '$THEME' theme."
+if [[ "$ROOT_SITE" == true ]]; then
+  echo "Done. Root (main) site is now running the '$THEME' theme."
+else
+  echo "Done. Site '$SITE_NAME' is now running the '$THEME' theme."
+fi
