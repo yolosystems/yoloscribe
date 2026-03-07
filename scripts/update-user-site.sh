@@ -6,10 +6,12 @@
 #   ./scripts/update-user-site.sh --site-name knuth --theme yolo
 #
 # Required env (or set in .env at project root):
-#   S3_BUCKET   — S3 bucket name
+#   S3_BUCKET                  — S3 bucket name
 #
 # Optional env:
-#   AWS_PROFILE — named AWS profile (omit to use the default credential chain)
+#   AWS_PROFILE                — named AWS profile (omit to use the default credential chain)
+#   CLOUDFRONT_DISTRIBUTION_ID — if set, invalidates index.html and config.json
+#                                so the CDN serves the new files immediately
 
 set -euo pipefail
 
@@ -40,7 +42,7 @@ if ! echo "$VALID_THEMES" | grep -qw "$THEME"; then
   exit 1
 fi
 
-# ── Load S3_BUCKET ─────────────────────────────────────────────────────────────
+# ── Load env vars ─────────────────────────────────────────────────────────────
 
 if [[ -z "${S3_BUCKET:-}" ]]; then
   ENV_FILE="$ROOT_DIR/.env"
@@ -54,6 +56,10 @@ if [[ -z "${S3_BUCKET:-}" ]]; then
   echo "Error: S3_BUCKET is not set" >&2
   exit 1
 fi
+
+# CLOUDFRONT_DISTRIBUTION_ID is optional; if set, the script will invalidate
+# the affected paths so the CDN serves the new files immediately.
+CF_DIST_ID="${CLOUDFRONT_DISTRIBUTION_ID:-}"
 
 # ── Build AWS CLI invocation ───────────────────────────────────────────────────
 
@@ -99,6 +105,20 @@ $AWS s3 cp \
   --cache-control "no-cache" \
   <(echo "{\"theme\": \"$THEME\"}") \
   "${DST}config.json"
+
+# ── Invalidate CloudFront cache ────────────────────────────────────────────────
+
+if [[ -n "$CF_DIST_ID" ]]; then
+  echo "Invalidating CloudFront cache for /$SITE_NAME/index.html and /$SITE_NAME/config.json"
+  $AWS cloudfront create-invalidation \
+    --distribution-id "$CF_DIST_ID" \
+    --paths "/$SITE_NAME/index.html" "/$SITE_NAME/config.json" \
+    --query 'Invalidation.Id' \
+    --output text
+else
+  echo "Warning: CLOUDFRONT_DISTRIBUTION_ID is not set — skipping cache invalidation." >&2
+  echo "         Set it in .env or export it to avoid stale cached responses." >&2
+fi
 
 echo ""
 echo "Done. Site '$SITE_NAME' is now running the '$THEME' theme."
