@@ -20,7 +20,7 @@ type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
 // In production the build sets VITE_API_BASE to the ALB URL at build time.
-const API_BASE = import.meta.env.DEV ? '/api' : (import.meta.env.VITE_API_BASE ?? '/api')
+const API_BASE = import.meta.env.DEV ? '/api' : (import.meta.env.VITE_API_BASE || '/api')
 
 // Derive the site name from the first URL path segment so the frontend always
 // knows which S3 prefix it is operating under.
