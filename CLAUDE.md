@@ -29,12 +29,18 @@ Every "site" is an S3 prefix. The bucket layout is:
 ```
 {site}/
   content.md                          # root page content
+  settings.json                       # root page access-control settings
   {page}/content.md                   # child page content
+  {page}/settings.json                # child page access-control settings
   .agents/{name}/agent.md             # root-page agent definition
   {page}/.agents/{name}/agent.md      # child-page agent definition
   .skills/{name}/skill.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
+  .user/notifications.md              # owner notification inbox (access requests)
 ```
+
+`settings.json` schema: `{"visibility": "public"|"private"|"shared", "shared_with": [{"email": "...", "access": "view"|"write"}]}`
+Default when absent: `{"visibility": "private", "shared_with": []}`
 
 Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under `{page}/.agents/`).
 
@@ -49,8 +55,12 @@ Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under 
 All writable paths must pass `SAFE_PATH` in `main.py`. Allowed patterns:
 - `content.md`
 - `{page}/content.md`
+- `settings.json`
+- `{page}/settings.json`
 - `.agents/{name}/agent.md`
 - `{page}/.agents/{name}/agent.md`
+- `.user/search.md`
+- `.user/notifications.md`
 
 This is validated on both `PUT /content` and `POST /chat`.
 

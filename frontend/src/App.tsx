@@ -12,6 +12,10 @@ import OnboardingView from './components/OnboardingView'
 import DeleteAccountModal from './components/DeleteAccountModal'
 import CreatePageModal from './components/CreatePageModal'
 import ChildPagesList from './components/ChildPagesList'
+import PageSettingsPanel from './components/PageSettingsPanel'
+import AccessDeniedView from './components/AccessDeniedView'
+
+type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -47,6 +51,8 @@ function getFilePath(): string {
   if (!path) return 'content.md'
   // .user/search
   if (path === '.user/search') return '.user/search.md'
+  // .user/notifications
+  if (path === '.user/notifications') return '.user/notifications.md'
   // {page}/.agents/{name}  or  .agents/{name}
   const agentMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)$/)
   if (agentMatch) return `${agentMatch[1] ?? ''}.agents/${agentMatch[2]}/agent.md`
@@ -57,6 +63,7 @@ function getFilePath(): string {
 function filePathToHash(fp: string): string {
   if (fp === 'content.md') return ''
   if (fp === '.user/search.md') return '#/.user/search'
+  if (fp === '.user/notifications.md') return '#/.user/notifications'
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
   if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
   const pageMatch = fp.match(/^(.+)\/content\.md$/)
@@ -70,6 +77,11 @@ function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
 
   if (fp === '.user/search.md') {
     crumbs.push({ label: 'Search Results', filePath: fp })
+    return crumbs
+  }
+
+  if (fp === '.user/notifications.md') {
+    crumbs.push({ label: 'Notifications', filePath: fp })
     return crumbs
   }
 
@@ -131,6 +143,9 @@ export default function App() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [createPageOpen, setCreatePageOpen] = useState(false)
   const [mySite, setMySite] = useState<string | null | undefined>(undefined)
+  const [accessLevel, setAccessLevel] = useState<AccessLevel>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [hasNotifications, setHasNotifications] = useState(false)
 
   // Subscribe to Supabase auth state
   useEffect(() => {
@@ -173,10 +188,13 @@ export default function App() {
       .catch(() => setMySite(null))
   }, [session])
 
-  // Determine which view to show
+  // Determine which view to show.
+  // Non-main sites no longer show a blanket auth-wall when unauthenticated —
+  // public pages are accessible without login, and the content fetch sets
+  // accessLevel to 'denied' when the page requires authentication.
   const appView: AppView = (() => {
     if (session === undefined) return 'loading'
-    if (session === null) return IS_MAIN_SITE ? 'landing' : 'auth-wall'
+    if (session === null && IS_MAIN_SITE) return 'landing'
     if (IS_MAIN_SITE) {
       if (mySite === undefined) return 'loading'
       return 'onboarding'
@@ -214,28 +232,59 @@ export default function App() {
       .catch(() => setAgents([]))
   }, [mode, filePath])
 
+  // Stable identity key: re-fetch when page changes or when user logs in/out,
+  // but NOT on every token refresh (which changes access_token but not user.id).
+  const sessionUserId = session?.user.id ?? null
+
   // Fetch the markdown file through the API (works in dev and production).
   useEffect(() => {
     const controller = new AbortController()
     setContent(null)
     setError(null)
+    setAccessLevel(null)
+    setMode('view')
+    const headers: Record<string, string> = {}
+    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
     fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, {
       signal: controller.signal,
+      headers,
     })
-      .then((res) => {
+      .then(async (res) => {
+        if (res.status === 403) {
+          setAccessLevel('denied')
+          setContent('')
+          return
+        }
         if (!res.ok) throw new Error(`Failed to load content: ${res.status}`)
-        return res.text()
-      })
-      .then((text) => {
+        const level = (res.headers.get('X-Page-Access') ?? 'view') as AccessLevel
+        setAccessLevel(level)
+        const text = await res.text()
         setContent(text)
         setSavedContent(text)
       })
       .catch((err) => { if (err.name !== 'AbortError') setError(err.message) })
     return () => controller.abort()
-  }, [filePath])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, sessionUserId])
+
+  const isOwner = accessLevel === 'full-control'
+  const canEdit = accessLevel === 'full-control' || accessLevel === 'write'
+  const canRunAgents = accessLevel === 'full-control'
+
+  // Poll notifications badge when the user is the site owner
+  useEffect(() => {
+    if (!isOwner || !session) return
+    fetch(
+      `${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent('.user/notifications.md')}`,
+      { headers: { Authorization: `Bearer ${session.access_token}` } },
+    )
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((text) => setHasNotifications(text.trim().length > 0))
+      .catch(() => {})
+  }, [isOwner, session, filePath])
 
   async function save() {
-    if (content === null) return
+    if (content === null || !session) return
     setSaving(true)
     try {
       const res = await fetch(
@@ -244,7 +293,7 @@ export default function App() {
           method: 'PUT',
           headers: {
             'Content-Type': 'text/plain',
-            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            Authorization: `Bearer ${session.access_token}`,
           },
           body: content,
         }
@@ -294,7 +343,7 @@ export default function App() {
     return (
       <>
         <header className="topbar">
-          <span className="topbar-title">AgentScribe</span>
+          <span className="topbar-title">Yolo Scribe</span>
           <div className="topbar-actions">
             <button className="btn" onClick={signIn}>Sign in</button>
           </div>
@@ -317,25 +366,35 @@ export default function App() {
   return (
     <>
       <header className="topbar">
-        <span className="topbar-title">AgentScribe</span>
+        <span className="topbar-title">Yolo Scribe</span>
         <div className="topbar-actions">
-          <button
-            className={`btn${mode === 'credentials' ? ' btn-primary' : ''}`}
-            onClick={() => setMode(mode === 'credentials' ? 'view' : 'credentials')}
-          >
-            {mode === 'credentials' ? '← Back' : 'Credentials'}
-          </button>
-          {isContentPage && mode !== 'credentials' && (
+          {isOwner && (
+            <button
+              className={`btn${mode === 'credentials' ? ' btn-primary' : ''}`}
+              onClick={() => setMode(mode === 'credentials' ? 'view' : 'credentials')}
+            >
+              {mode === 'credentials' ? '← Back' : 'Credentials'}
+            </button>
+          )}
+          {isOwner && isContentPage && mode !== 'credentials' && (
             <button className="btn" onClick={() => setCreatePageOpen(true)}>
               + New Page
             </button>
           )}
-          {mode === 'view' && (
+          {isOwner && isContentPage && mode !== 'credentials' && (
+            <button
+              className={`btn${settingsOpen ? ' btn-primary' : ''}`}
+              onClick={() => setSettingsOpen((o) => !o)}
+            >
+              {settingsOpen ? '← Back' : 'Settings'}
+            </button>
+          )}
+          {canEdit && mode === 'view' && accessLevel !== 'denied' && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
             </button>
           )}
-          {mode === 'edit' && (
+          {canEdit && mode === 'edit' && (
             <>
               <button className="btn btn-danger" onClick={discard}>
                 Discard
@@ -352,26 +411,49 @@ export default function App() {
               </button>
             </>
           )}
-          <div className="auth-avatar-wrap">
-            <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
-              {(session!.user.user_metadata?.full_name ?? session!.user.email ?? '?')[0].toUpperCase()}
+          {isOwner && (
+            <button
+              className="btn"
+              style={{ position: 'relative' }}
+              onClick={() => navigate('.user/notifications.md')}
+              title="Notifications"
+            >
+              🔔{hasNotifications && (
+                <span style={{
+                  position: 'absolute', top: 2, right: 2,
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: 'var(--danger, #e53e3e)',
+                  display: 'inline-block',
+                }} />
+              )}
             </button>
-            {avatarOpen && (
-              <>
-                <div className="auth-overlay" onClick={() => setAvatarOpen(false)} />
-                <div className="auth-avatar-menu">
-                  <div className="auth-avatar-email">{session!.user.email}</div>
-                  <button className="btn" onClick={signOut}>Sign out</button>
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => { setAvatarOpen(false); setDeleteModalOpen(true) }}
-                  >
-                    Delete Account
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+          )}
+          {session ? (
+            <div className="auth-avatar-wrap">
+              <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
+                {(session.user.user_metadata?.full_name ?? session.user.email ?? '?')[0].toUpperCase()}
+              </button>
+              {avatarOpen && (
+                <>
+                  <div className="auth-overlay" onClick={() => setAvatarOpen(false)} />
+                  <div className="auth-avatar-menu">
+                    <div className="auth-avatar-email">{session.user.email}</div>
+                    <button className="btn" onClick={signOut}>Sign out</button>
+                    {isOwner && (
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => { setAvatarOpen(false); setDeleteModalOpen(true) }}
+                      >
+                        Delete Account
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button className="btn" onClick={signIn}>Sign in</button>
+          )}
         </div>
       </header>
       {deleteModalOpen && session && (
@@ -402,11 +484,39 @@ export default function App() {
       <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
       <div className="workspace">
-        {mode === 'credentials' ? (
+        {accessLevel === 'denied' ? (
+          <div className="content-area">
+            <AccessDeniedView
+              isAuthenticated={!!session}
+              onSignIn={signIn}
+              onRequestAccess={async () => {
+                if (!session) return
+                await fetch(`${API_BASE}/request-access`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${session.access_token}`,
+                  },
+                  body: JSON.stringify({ site: SITE, path: filePath }),
+                })
+              }}
+            />
+          </div>
+        ) : mode === 'credentials' && isOwner ? (
           <CredentialsPanel apiBase={API_BASE} token={session!.access_token} />
+        ) : settingsOpen && isOwner ? (
+          <div className="content-area">
+            <PageSettingsPanel
+              apiBase={API_BASE}
+              site={SITE}
+              filePath={filePath}
+              token={session!.access_token}
+              onClose={() => setSettingsOpen(false)}
+            />
+          </div>
         ) : (
           <>
-            {mode === 'edit' && content !== null && (
+            {canRunAgents && mode === 'edit' && content !== null && (
               <ChatPanel
                 content={content}
                 onContentUpdate={setContent}
@@ -417,7 +527,7 @@ export default function App() {
               />
             )}
 
-            {mode === 'edit' && (
+            {canRunAgents && mode === 'edit' && (
               <AgentsList agents={agents} activeFilePath={filePath} pagePath={getPagePath(filePath)} />
             )}
 

@@ -54,7 +54,7 @@ export default function OnboardingView({ apiBase, token, defaultSiteName, onSucc
   return (
     <>
       <header className="topbar">
-        <span className="topbar-title">AgentScribe</span>
+        <span className="topbar-title">Yolo Scribe</span>
       </header>
       <div className="onboarding-page">
         <div className="onboarding-content">

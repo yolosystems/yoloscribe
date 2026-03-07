@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -41,6 +42,7 @@ app.add_middleware(
     allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Page-Access"],
 )
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -85,6 +87,14 @@ sqs = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else 
 sqs_indexing = _boto_session.client("sqs", region_name=AWS_REGION) if SQS_INDEXING_QUEUE_URL else None
 sm = _boto_session.client("secretsmanager", region_name=AWS_REGION)
 s3vectors = _boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTORS_BUCKET else None
+
+# ── JWT claims ────────────────────────────────────────────────────────────────
+
+@dataclasses.dataclass
+class _JWTClaims:
+    user_id: str
+    email: str | None
+
 
 # ── OAuth state (in-memory, TTL ~10 min) ──────────────────────────────────────
 
@@ -135,10 +145,13 @@ SAFE_PATH = re.compile(
     r"^("
     r"content\.md"
     r"|config\.json"
+    r"|settings\.json"
     rf"|{PAGE_SEG}/content\.md"
+    rf"|{PAGE_SEG}/settings\.json"
     rf"|\.agents/{AGENT_NAME_SEG}/agent\.md"
     rf"|{PAGE_SEG}/\.agents/{AGENT_NAME_SEG}/agent\.md"
     r"|\.user/search\.md"
+    r"|\.user/notifications\.md"
     r")$"
 )
 
@@ -224,13 +237,67 @@ def _enqueue_index_job(content_key: str, user_id: str) -> None:
         logging.warning("Failed to enqueue indexing job for %s", content_key, exc_info=True)
 
 
+# ── Page settings cache ───────────────────────────────────────────────────────
+
+_settings_cache: dict[str, tuple[dict, float]] = {}
+_settings_cache_lock = threading.Lock()
+_SETTINGS_CACHE_TTL = 60.0  # seconds
+
+
+def _page_path_from_file_path(path: str) -> str:
+    """Return the page_path (S3 prefix segment) for a given file path.
+
+    Examples:
+        "content.md"              → ""
+        "blog/content.md"         → "blog"
+        "blog/posts/content.md"   → "blog/posts"
+        "settings.json"           → ""
+        "blog/settings.json"      → "blog"
+        ".agents/foo/agent.md"    → ""
+        "blog/.agents/foo/agent.md" → "blog"
+    """
+    if "/" not in path:
+        return ""
+    # Strip the final segment(s) that are meta-files
+    for suffix in ("/content.md", "/settings.json"):
+        if path.endswith(suffix):
+            return path[: -len(suffix)]
+    agents_idx = path.find("/.agents/")
+    if agents_idx != -1:
+        return path[:agents_idx]
+    return ""
+
+
+def _get_page_settings(site: str, page_path: str) -> dict:
+    """Return parsed settings.json for a page (with in-memory TTL cache)."""
+    cache_key = f"{site}/{page_path}"
+    now = time.time()
+    with _settings_cache_lock:
+        if cache_key in _settings_cache:
+            data, ts = _settings_cache[cache_key]
+            if now - ts < _SETTINGS_CACHE_TTL:
+                return data
+    s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
+    raw = _get_content(site, s3_path)
+    data: dict = json.loads(raw) if raw else {"visibility": "private", "shared_with": []}
+    with _settings_cache_lock:
+        _settings_cache[cache_key] = (data, now)
+    return data
+
+
+def _invalidate_settings_cache(site: str, page_path: str) -> None:
+    cache_key = f"{site}/{page_path}"
+    with _settings_cache_lock:
+        _settings_cache.pop(cache_key, None)
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-def _decode_jwt(credentials: HTTPAuthorizationCredentials | None) -> str:
-    """Validate Supabase JWT and return user_id."""
+def _decode_jwt(credentials: HTTPAuthorizationCredentials | None) -> _JWTClaims:
+    """Validate Supabase JWT and return user_id + email."""
     if _jwks_client is None:
         raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured")
     if credentials is None:
@@ -244,7 +311,7 @@ def _decode_jwt(credentials: HTTPAuthorizationCredentials | None) -> str:
             algorithms=["RS256", "ES256"],
             audience="authenticated",
         )
-        return payload["sub"]
+        return _JWTClaims(user_id=payload["sub"], email=payload.get("email"))
     except pyjwt.exceptions.PyJWTError as exc:
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
 
@@ -274,15 +341,22 @@ def _get_user_id(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> str:
     """Extract user_id from JWT (backwards-compatible for /secrets routes)."""
-    return _decode_jwt(credentials)
+    return _decode_jwt(credentials).user_id
 
 
 def _get_user_context(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> tuple[str, str | None]:
     """Extract user_id from JWT and look up site_name from user_site table."""
-    user_id = _decode_jwt(credentials)
-    return user_id, _get_site_for_user(user_id)
+    claims = _decode_jwt(credentials)
+    return claims.user_id, _get_site_for_user(claims.user_id)
+
+
+def _get_jwt_claims(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> _JWTClaims:
+    """Extract and validate JWT, returning full claims including email."""
+    return _decode_jwt(credentials)
 
 
 def _require_site_owner(requested_site: str, user_site: str | None) -> None:
@@ -598,6 +672,21 @@ class CreatePageRequest(BaseModel):
     page_path: str
 
 
+class SharedUser(BaseModel):
+    email: str
+    access: str  # "view" | "write"
+
+
+class PageSettings(BaseModel):
+    visibility: str  # "public" | "private" | "shared"
+    shared_with: list[SharedUser] = []
+
+
+class AccessRequest(BaseModel):
+    site: str
+    path: str
+
+
 # ── Default welcome content ───────────────────────────────────────────────────
 
 _DEFAULT_WELCOME_MD = """\
@@ -635,11 +724,62 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/content")
-async def get_content(site: str = "default", path: str = "content.md") -> Response:
+async def get_content(
+    site: str = "default",
+    path: str = "content.md",
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> Response:
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
-    content = _get_content(site, path)
-    return Response(content=content, media_type="text/plain; charset=utf-8")
+
+    # Determine the page_path for settings lookup
+    page_path = _page_path_from_file_path(path)
+    is_content_path = path == "content.md" or path.endswith("/content.md")
+
+    # Non-content paths (agents, settings, notifications, search) are always owner-only
+    if not is_content_path:
+        claims = _decode_jwt(credentials)
+        user_site = _get_site_for_user(claims.user_id)
+        _require_site_owner(site, user_site)
+        content = _get_content(site, path)
+        resp = Response(content=content, media_type="text/plain; charset=utf-8")
+        resp.headers["X-Page-Access"] = "full-control"
+        return resp
+
+    # Content pages: check visibility settings
+    settings = _get_page_settings(site, page_path)
+    visibility = settings.get("visibility", "private")
+
+    if visibility == "public":
+        content = _get_content(site, path)
+        resp = Response(content=content, media_type="text/plain; charset=utf-8")
+        resp.headers["X-Page-Access"] = "view"
+        return resp
+
+    # private or shared — authentication required
+    if credentials is None:
+        raise HTTPException(status_code=403, detail="Authentication required")
+
+    claims = _decode_jwt(credentials)
+    user_site = _get_site_for_user(claims.user_id)
+
+    if user_site == site:
+        content = _get_content(site, path)
+        resp = Response(content=content, media_type="text/plain; charset=utf-8")
+        resp.headers["X-Page-Access"] = "full-control"
+        return resp
+
+    if visibility == "shared":
+        user_email = claims.email
+        shared_with = settings.get("shared_with", [])
+        match = next((u for u in shared_with if u.get("email") == user_email), None)
+        if match:
+            content = _get_content(site, path)
+            resp = Response(content=content, media_type="text/plain; charset=utf-8")
+            resp.headers["X-Page-Access"] = match.get("access", "view")
+            return resp
+
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 @app.put("/content")
@@ -647,16 +787,37 @@ async def put_content(
     request: Request,
     site: str = "default",
     path: str = "content.md",
-    ctx: tuple[str, str | None] = Depends(_get_user_context),
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> dict[str, str]:
-    user_id, user_site = ctx
-    _require_site_owner(site, user_site)
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
+
+    claims = _decode_jwt(credentials)
+    user_site = _get_site_for_user(claims.user_id)
+
+    is_content_path = path == "content.md" or path.endswith("/content.md")
+
+    if user_site == site:
+        # Site owner: full access
+        pass
+    elif is_content_path:
+        # Non-owner may write content.md if they have shared "write" access for this page
+        page_path = _page_path_from_file_path(path)
+        settings = _get_page_settings(site, page_path)
+        if settings.get("visibility") != "shared":
+            raise HTTPException(status_code=403, detail="Access denied")
+        shared_with = settings.get("shared_with", [])
+        match = next((u for u in shared_with if u.get("email") == claims.email), None)
+        if not match or match.get("access") != "write":
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        # Non-owner cannot write agent definitions or other meta-files
+        raise HTTPException(status_code=403, detail="Access denied: not your site")
+
     body = await request.body()
     _put_content(site, path, body.decode("utf-8"))
-    if path == "content.md" or path.endswith("/content.md"):
-        _enqueue_index_job(f"{site}/{path}", user_id)
+    if is_content_path:
+        _enqueue_index_job(f"{site}/{path}", claims.user_id)
     return {"status": "saved"}
 
 
@@ -716,6 +877,12 @@ async def create_page(
         Body=b"",
         ContentType="text/plain",
     )
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{req.site}/{req.page_path}/settings.json",
+        Body=json.dumps({"visibility": "private", "shared_with": []}).encode("utf-8"),
+        ContentType="application/json",
+    )
     _enqueue_index_job(content_key, user_id)
     return {"page_path": req.page_path, "content_key": content_key}
 
@@ -726,6 +893,79 @@ async def list_skills() -> dict:
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"skills": names}
+
+
+@app.get("/settings")
+async def get_settings(
+    site: str = "default",
+    path: str = "content.md",
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Return access-control settings for a page (site owner only)."""
+    user_id, user_site = ctx
+    _require_site_owner(site, user_site)
+    page_path = _page_path_from_file_path(path)
+    return _get_page_settings(site, page_path)
+
+
+@app.put("/settings")
+async def put_settings(
+    settings: PageSettings,
+    site: str = "default",
+    path: str = "content.md",
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict[str, str]:
+    """Update access-control settings for a page (site owner only)."""
+    user_id, user_site = ctx
+    _require_site_owner(site, user_site)
+
+    valid_visibilities = {"public", "private", "shared"}
+    if settings.visibility not in valid_visibilities:
+        raise HTTPException(status_code=400, detail=f"visibility must be one of: {', '.join(sorted(valid_visibilities))}")
+    valid_accesses = {"view", "write"}
+    for su in settings.shared_with:
+        if su.access not in valid_accesses:
+            raise HTTPException(status_code=400, detail=f"shared_with access must be 'view' or 'write'")
+
+    page_path = _page_path_from_file_path(path)
+    s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
+    _put_content(site, s3_path, json.dumps(settings.model_dump()))
+    _invalidate_settings_cache(site, page_path)
+    return {"status": "saved"}
+
+
+@app.post("/request-access")
+async def request_access(
+    req: AccessRequest,
+    claims: _JWTClaims = Depends(_get_jwt_claims),
+) -> dict[str, str]:
+    """Append an access-request notification to the site owner's notifications file."""
+    if not req.site or not req.path:
+        raise HTTPException(status_code=400, detail="site and path are required")
+
+    # Verify the page exists
+    page_path = _page_path_from_file_path(req.path)
+    content_key = f"{req.site}/{req.path}"
+    check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=content_key, MaxKeys=1)
+    if check.get("KeyCount", 0) == 0:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    # Check user doesn't already have access (avoid notification spam)
+    settings = _get_page_settings(req.site, page_path)
+    if claims.email:
+        already_shared = any(
+            u.get("email") == claims.email for u in settings.get("shared_with", [])
+        )
+        if already_shared:
+            raise HTTPException(status_code=409, detail="You already have access to this page")
+
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    requester = claims.email or claims.user_id
+    entry = f"- [{ts}] **{requester}** requested access to `{req.path}`\n"
+
+    existing = _get_content(req.site, ".user/notifications.md")
+    _put_content(req.site, ".user/notifications.md", existing + entry)
+    return {"status": "ok"}
 
 
 # ── Secrets (credentials) — no LLM involved ───────────────────────────────────
@@ -1171,6 +1411,12 @@ async def provision(
         Bucket=S3_BUCKET,
         Key=f"{req.site_name}/config.json",
         Body=json.dumps({"theme": req.theme}).encode("utf-8"),
+        ContentType="application/json",
+    )
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{req.site_name}/settings.json",
+        Body=json.dumps({"visibility": "private", "shared_with": []}).encode("utf-8"),
         ContentType="application/json",
     )
 
