@@ -6,7 +6,7 @@ export default function LandingPage({ onSignIn }: Props) {
   return (
     <>
       <header className="topbar">
-        <span className="topbar-title">AgentScribe</span>
+        <span className="topbar-title">Yolo Scribe</span>
         <div className="topbar-actions">
           <button className="btn" onClick={onSignIn}>Sign in</button>
         </div>
