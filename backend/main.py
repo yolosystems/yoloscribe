@@ -35,7 +35,33 @@ from agents.base import DEFAULT_MODEL, agents_prefix, skills_prefix
 import jwt as pyjwt
 from jwt import PyJWKClient
 
-app = FastAPI(title="AgentScribe API")
+_OPENAPI_TAGS = [
+    {"name": "health", "description": "Service liveness check."},
+    {"name": "content", "description": "Read and write page content stored in S3."},
+    {"name": "pages", "description": "List and create wiki pages within a site."},
+    {"name": "agents", "description": "List AI agent definitions for a page."},
+    {"name": "skills", "description": "List site-scoped MCP skill definitions."},
+    {"name": "settings", "description": "Read and update per-page access-control settings."},
+    {"name": "access", "description": "Request access to a private or shared page."},
+    {"name": "chat", "description": "Send a message to the ChatAgent orchestrator."},
+    {"name": "site", "description": "Provision, inspect, and delete user sites."},
+    {"name": "secrets", "description": "Manage per-user credentials stored in AWS Secrets Manager."},
+    {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
+    {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems."},
+]
+
+app = FastAPI(
+    title="AgentScribe API",
+    description=(
+        "Backend API for AgentScribe — an AI-powered wiki where every page "
+        "can be edited by an LLM agent.\n\n"
+        "**Authentication:** most write endpoints require a Supabase JWT passed as "
+        "`Authorization: Bearer <token>`.\n\n"
+        "**Docs:** interactive Swagger UI is at `/docs`; ReDoc is at `/redoc`."
+    ),
+    version="1.0.0",
+    openapi_tags=_OPENAPI_TAGS,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -718,12 +744,22 @@ def _default_child_page_md(title: str) -> str:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"], summary="Health check")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/content")
+@app.get(
+    "/content",
+    tags=["content"],
+    summary="Get page content",
+    description=(
+        "Return the raw content of a page file from S3. Visibility rules apply: "
+        "public pages are readable without auth; private/shared pages require a JWT. "
+        "The `X-Page-Access` response header indicates the caller's access level "
+        "(`full-control` | `write` | `view`)."
+    ),
+)
 async def get_content(
     site: str = "default",
     path: str = "content.md",
@@ -796,7 +832,15 @@ async def get_content(
     raise HTTPException(status_code=403, detail="Access denied")
 
 
-@app.put("/content")
+@app.put(
+    "/content",
+    tags=["content"],
+    summary="Update page content",
+    description=(
+        "Write raw content to a page file in S3. Requires a JWT. "
+        "Site owners can write any allowed path; shared-write users may only update `content.md`."
+    ),
+)
 async def put_content(
     request: Request,
     site: str = "default",
@@ -835,7 +879,7 @@ async def put_content(
     return {"status": "saved"}
 
 
-@app.get("/agents")
+@app.get("/agents", tags=["agents"], summary="List agents for a page")
 async def list_agents(site: str = "default", page_path: str = "") -> dict:
     prefix = agents_prefix(site, page_path)
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
@@ -843,7 +887,7 @@ async def list_agents(site: str = "default", page_path: str = "") -> dict:
     return {"agents": names}
 
 
-@app.get("/pages")
+@app.get("/pages", tags=["pages"], summary="List child pages")
 async def list_pages(site: str = "default", page_path: str = "") -> dict:
     prefix = f"{site}/{page_path}/" if page_path else f"{site}/"
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix, Delimiter="/")
@@ -859,7 +903,7 @@ async def list_pages(site: str = "default", page_path: str = "") -> dict:
     return {"pages": pages}
 
 
-@app.post("/pages")
+@app.post("/pages", tags=["pages"], summary="Create a new page")
 async def create_page(
     req: CreatePageRequest,
     ctx: tuple[str, str | None] = Depends(_get_user_context),
@@ -901,7 +945,7 @@ async def create_page(
     return {"page_path": req.page_path, "content_key": content_key}
 
 
-@app.get("/skills")
+@app.get("/skills", tags=["skills"], summary="List available skills")
 async def list_skills() -> dict:
     prefix = skills_prefix()
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
@@ -909,7 +953,7 @@ async def list_skills() -> dict:
     return {"skills": names}
 
 
-@app.get("/settings")
+@app.get("/settings", tags=["settings"], summary="Get page access-control settings")
 async def get_settings(
     site: str = "default",
     path: str = "content.md",
@@ -922,7 +966,7 @@ async def get_settings(
     return _get_page_settings(site, page_path)
 
 
-@app.put("/settings")
+@app.put("/settings", tags=["settings"], summary="Update page access-control settings")
 async def put_settings(
     settings: PageSettings,
     site: str = "default",
@@ -948,7 +992,7 @@ async def put_settings(
     return {"status": "saved"}
 
 
-@app.post("/request-access")
+@app.post("/request-access", tags=["access"], summary="Request access to a page")
 async def request_access(
     req: AccessRequest,
     claims: _JWTClaims = Depends(_get_jwt_claims),
@@ -1088,7 +1132,7 @@ def _save_oauth_token(user_id: str, skill_name: str, token_blob: dict) -> None:
         )
 
 
-@app.get("/secrets/status")
+@app.get("/secrets/status", tags=["secrets"], summary="Get credential status for all skills")
 async def get_secrets_status(user_id: str = Depends(_get_user_id)) -> dict:
     """Return all skills with their credential status for this user.
 
@@ -1131,7 +1175,7 @@ async def get_secrets_status(user_id: str = Depends(_get_user_id)) -> dict:
     return {"skills": skills}
 
 
-@app.post("/oauth/initiate/{skill_name}")
+@app.post("/oauth/initiate/{skill_name}", tags=["oauth"], summary="Initiate OAuth flow for a skill")
 async def oauth_initiate(
     skill_name: str,
     ctx: tuple[str, str | None] = Depends(_get_user_context),
@@ -1250,7 +1294,7 @@ async def oauth_initiate(
     return {"auth_url": auth_url}
 
 
-@app.get("/oauth/callback")
+@app.get("/oauth/callback", tags=["oauth"], summary="OAuth authorization code callback")
 async def oauth_callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
@@ -1328,7 +1372,7 @@ async def oauth_callback(
     return _frontend_redirect(pending.site, f"oauth_success={pending.skill_name}")
 
 
-@app.put("/secrets/{var_name}")
+@app.put("/secrets/{var_name}", tags=["secrets"], summary="Store or update a credential")
 async def put_secret(
     var_name: str,
     body: SecretValue,
@@ -1351,7 +1395,18 @@ async def put_secret(
     return {"status": "stored"}
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    tags=["chat"],
+    summary="Chat with the AI agent",
+    description=(
+        "Send a user message to the ChatAgent orchestrator. The agent may read/write "
+        "page content, create agents, create pages, or enqueue async runner jobs. "
+        "Requires site ownership. Returns the agent's reply and optionally updated content "
+        "or a navigation target."
+    ),
+    response_model=ChatResponse,
+)
 async def chat(
     req: ChatRequest,
     ctx: tuple[str, str | None] = Depends(_get_user_context),
@@ -1387,7 +1442,16 @@ async def chat(
     return ChatResponse(reply=reply, updated_content=updated_content, navigate_to=navigate_to)
 
 
-@app.post("/provision")
+@app.post(
+    "/provision",
+    tags=["site"],
+    summary="Provision a new site",
+    description=(
+        "Create a new site in S3, insert the user→site mapping in Supabase, "
+        "and provision IAM/K8s/Secrets Manager infrastructure. Each user may only "
+        "provision one site. Returns the public URL of the new site."
+    ),
+)
 async def provision(
     req: ProvisionRequest,
     ctx: tuple[str, str | None] = Depends(_get_user_context),
@@ -1466,7 +1530,7 @@ async def provision(
     return ProvisionResponse(site_url=site_url)
 
 
-@app.get("/my-site")
+@app.get("/my-site", tags=["site"], summary="Get the current user's site name")
 async def my_site(
     ctx: tuple[str, str | None] = Depends(_get_user_context),
 ) -> dict:
@@ -1475,7 +1539,7 @@ async def my_site(
     return {"site_name": site_name}
 
 
-@app.delete("/account")
+@app.delete("/account", tags=["site"], summary="Delete account and all associated resources")
 async def delete_account(
     ctx: tuple[str, str | None] = Depends(_get_user_context),
 ) -> dict[str, str]:
@@ -1504,7 +1568,7 @@ async def delete_account(
     return {"status": "deleted"}
 
 
-@app.post("/webhooks/user-created")
+@app.post("/webhooks/user-created", tags=["webhooks"], summary="Webhook: provision infrastructure for a new user")
 async def user_created(request: Request, event: UserCreatedEvent) -> dict[str, str]:
     """Provision IAM role, K8s ServiceAccount, and Secrets Manager placeholder for a new user."""
     secret = request.headers.get("x-webhook-secret", "")

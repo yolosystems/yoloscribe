@@ -25,7 +25,7 @@ serviceAccount:
 
 config:
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
-  cloudfrontDomain: "d2uffddt57s4t6.cloudfront.net"
+  cloudfrontDomain: "scribe.runyolo.dev"
   s3Bucket: "agentscribe-dev"
   allowedOrigins: "*"
   model: "claude-opus-4-6"
