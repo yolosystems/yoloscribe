@@ -29,6 +29,12 @@ ingress:
   enabled: true
   host: ""
   certificateArn: ""
+  # ALB Ingress Group — set group.name to share an ALB with mcp-helm.
+  # Both charts must use the same group.name. AgentScribe owns the catch-all
+  # path (/) so it should have the highest group.order number (lowest priority).
+  group:
+    name: ""    # e.g. yolo-prod; leave empty for a dedicated ALB
+    order: 20   # lowest priority — catch-all route
   annotations:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing

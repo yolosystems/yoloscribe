@@ -12,6 +12,9 @@ ingress:
   enabled: true
   host: agentscribe-dev.runyolo.dev
   certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"
+  group:
+    name: "agentscribe-dev"    # e.g. yolo-prod; leave empty for a dedicated ALB
+    order: 20
   annotations:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing

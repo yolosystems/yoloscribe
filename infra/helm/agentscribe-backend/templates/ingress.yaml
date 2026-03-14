@@ -11,6 +11,10 @@ metadata:
     {{- if .Values.ingress.certificateArn }}
     alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
     {{- end }}
+    {{- if .Values.ingress.group.name }}
+    alb.ingress.kubernetes.io/group.name: {{ .Values.ingress.group.name | quote }}
+    alb.ingress.kubernetes.io/group.order: {{ .Values.ingress.group.order | default 20 | quote }}
+    {{- end }}
 spec:
   rules:
     - host: {{ .Values.ingress.host | quote }}
