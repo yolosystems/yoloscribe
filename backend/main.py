@@ -30,7 +30,7 @@ from mcp_oauth.oauth_flow import exchange_code
 from pydantic import BaseModel
 
 from agents import ChatAgent
-from agents.base import DEFAULT_MODEL, agents_prefix, skills_prefix
+from agents.base import DEFAULT_MODEL, agents_prefix, tools_prefix, skills_prefix
 
 import jwt as pyjwt
 from jwt import PyJWKClient
@@ -40,7 +40,8 @@ _OPENAPI_TAGS = [
     {"name": "content", "description": "Read and write page content stored in S3."},
     {"name": "pages", "description": "List and create wiki pages within a site."},
     {"name": "agents", "description": "List AI agent definitions for a page."},
-    {"name": "skills", "description": "List site-scoped MCP skill definitions."},
+    {"name": "tools", "description": "List and manage top-level MCP tool definitions."},
+    {"name": "skills", "description": "List and manage per-site skill definitions."},
     {"name": "settings", "description": "Read and update per-page access-control settings."},
     {"name": "access", "description": "Request access to a private or shared page."},
     {"name": "chat", "description": "Send a message to the ChatAgent orchestrator."},
@@ -126,7 +127,7 @@ class _JWTClaims:
 
 @dataclasses.dataclass
 class _OAuthPendingState:
-    skill_name: str
+    tool_name: str
     user_id: str
     site: str
     server_url: str
@@ -144,6 +145,31 @@ def _cleanup_oauth_state() -> None:
     cutoff = time.time() - 600
     for k in [k for k, v in _oauth_pending.items() if v.created_at < cutoff]:
         del _oauth_pending[k]
+
+
+# ── AWS SSO state (in-memory, TTL = expiresIn from StartDeviceAuthorization) ──
+
+@dataclasses.dataclass
+class _AwsSsoPendingState:
+    user_id: str
+    site: str
+    sso_region: str
+    sso_start_url: str
+    client_id: str
+    client_secret: str
+    device_code: str
+    created_at: float
+    expires_in: int
+    interval: int
+
+
+_aws_sso_pending: dict[str, _AwsSsoPendingState] = {}
+
+
+def _cleanup_aws_sso_state() -> None:
+    cutoff = time.time()
+    for k in [k for k, v in _aws_sso_pending.items() if cutoff > v.created_at + v.expires_in]:
+        del _aws_sso_pending[k]
 
 
 # ── ChatAgent ─────────────────────────────────────────────────────────────────
@@ -176,6 +202,7 @@ SAFE_PATH = re.compile(
     rf"|{PAGE_SEG}/settings\.json"
     rf"|\.agents/{AGENT_NAME_SEG}/agent\.md"
     rf"|{PAGE_SEG}/\.agents/{AGENT_NAME_SEG}/agent\.md"
+    rf"|\.skills/{AGENT_NAME_SEG}/SKILL\.md"
     r"|\.user/search\.md"
     r"|\.user/notifications\.md"
     r")$"
@@ -512,10 +539,10 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
             "Resource": f"{s3_bucket_arn}/{site_name}/*",
         },
         {
-            "Sid": "S3ReadSkillsPrefix",
+            "Sid": "S3ReadToolsPrefix",
             "Effect": "Allow",
             "Action": "s3:GetObject",
-            "Resource": f"{s3_bucket_arn}/.skills/*",
+            "Resource": f"{s3_bucket_arn}/.tools/*",
         },
         {
             "Sid": "S3ListUserPrefix",
@@ -523,7 +550,7 @@ async def _provision_user_infrastructure(user_id: str, site_name: str) -> None:
             "Action": "s3:ListBucket",
             "Resource": s3_bucket_arn,
             "Condition": {
-                "StringLike": {"s3:prefix": [f"{site_name}/*", ".skills/*"]}
+                "StringLike": {"s3:prefix": [f"{site_name}/*", ".tools/*"]}
             },
         },
     ]
@@ -945,9 +972,15 @@ async def create_page(
     return {"page_path": req.page_path, "content_key": content_key}
 
 
-@app.get("/skills", tags=["skills"], summary="List available skills")
-async def list_skills() -> dict:
-    prefix = skills_prefix()
+@app.get("/skills", tags=["skills"], summary="List skills for a site")
+async def list_skills(
+    site: str = "default",
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Return all skill names defined in the site's .skills directory."""
+    user_id, user_site = ctx
+    _require_site_owner(site, user_site)
+    prefix = skills_prefix(site)
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"skills": names}
@@ -1037,13 +1070,13 @@ def _secret_id(user_id: str, var_name: str) -> str:
     return f"{_SM_SECRET_PREFIX}/{user_id}/{var_name}"
 
 
-def _oauth_secret_id(user_id: str, skill_name: str) -> str:
-    return f"{_SM_SECRET_PREFIX}/{user_id}/oauth/{skill_name}"
+def _oauth_secret_id(user_id: str, tool_name: str) -> str:
+    return f"{_SM_SECRET_PREFIX}/{user_id}/oauth/{tool_name}"
 
 
-def _is_remote_skill(skill_name: str) -> bool:
-    """Return True if the skill's mcp.json uses remote HTTP transport."""
-    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+def _is_remote_tool(tool_name: str) -> bool:
+    """Return True if the tool's mcp.json uses remote HTTP transport."""
+    key = f"{tools_prefix()}/{tool_name}/mcp.json"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
         config = json.loads(obj["Body"].read())
@@ -1052,9 +1085,9 @@ def _is_remote_skill(skill_name: str) -> bool:
         return False
 
 
-def _skill_required_vars(skill_name: str) -> list[str]:
-    """Read a stdio skill's mcp.json from S3 and return required ${VAR} names."""
-    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+def _tool_required_vars(tool_name: str) -> list[str]:
+    """Read a stdio tool's mcp.json from S3 and return required ${VAR} names."""
+    key = f"{tools_prefix()}/{tool_name}/mcp.json"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
         raw = obj["Body"].read().decode("utf-8")
@@ -1073,16 +1106,16 @@ def _secret_exists(user_id: str, var_name: str) -> bool:
         return False
 
 
-def _load_skill_oauth_client(skill_name: str) -> dict | None:
-    """Load pre-registered OAuth client config from S3 for a skill.
+def _load_tool_oauth_client(tool_name: str) -> dict | None:
+    """Load pre-registered OAuth client config from S3 for a tool.
 
     Returns the parsed oauth_client.json dict, or None if the file does not exist.
-    This file is present for skills whose MCP servers do not support DCR (e.g. GitHub).
+    This file is present for tools whose MCP servers do not support DCR (e.g. GitHub).
     Format: {"client_id": "...", "scopes": ["repo", ...]}  (scopes is optional)
     The corresponding client_secret is stored in Secrets Manager at
-    agentscribe/platform/oauth/{skill_name}.
+    agentscribe/platform/oauth/{tool_name}.
     """
-    key = f"{skills_prefix()}/{skill_name}/oauth_client.json"
+    key = f"{tools_prefix()}/{tool_name}/oauth_client.json"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
         return json.loads(obj["Body"].read())
@@ -1090,15 +1123,54 @@ def _load_skill_oauth_client(skill_name: str) -> dict | None:
         return None
 
 
-def _load_platform_client_secret(skill_name: str) -> str | None:
+def _get_tool_auth_type(tool_name: str) -> str:
+    """Return the auth type from a tool's mcp.json: 'oauth', 'aws-sso', 'none', or 'key'.
+
+    'key'  — stdio tool using ${VAR} substitution (no URL)
+    'none' — remote HTTP tool with no authentication
+    'oauth'— remote HTTP tool using standard OAuth 2.0
+    'aws-sso' — remote HTTP tool using AWS IAM Identity Center SSO
+    """
+    key = f"{tools_prefix()}/{tool_name}/mcp.json"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+        config = json.loads(obj["Body"].read())
+        for srv in config.get("mcpServers", {}).values():
+            if "url" in srv:
+                return srv.get("auth", "none")
+        return "key"
+    except Exception:
+        return "key"
+
+
+def _get_aws_sso_client_config(site: str) -> dict | None:
+    """Read {site}/.aws-sso/aws-sso-client.json from S3, or None if absent."""
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"{site}/.aws-sso/aws-sso-client.json")
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _save_aws_sso_client_config(site: str, config: dict) -> None:
+    """Write {site}/.aws-sso/aws-sso-client.json to S3."""
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{site}/.aws-sso/aws-sso-client.json",
+        Body=json.dumps(config).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _load_platform_client_secret(tool_name: str) -> str | None:
     """Load the platform-level OAuth client_secret from Secrets Manager.
 
-    Secret path: agentscribe/platform/oauth/{skill_name}
+    Secret path: agentscribe/platform/oauth/{tool_name}
     Expected format: {"client_secret": "..."}
     The backend IAM role must have secretsmanager:GetSecretValue on this path.
     Returns None if the secret does not exist or cannot be read.
     """
-    secret_id = f"agentscribe/platform/oauth/{skill_name}"
+    secret_id = f"agentscribe/platform/oauth/{tool_name}"
     try:
         resp = sm.get_secret_value(SecretId=secret_id)
         data = json.loads(resp["SecretString"])
@@ -1107,10 +1179,10 @@ def _load_platform_client_secret(skill_name: str) -> str | None:
         return None
 
 
-def _load_oauth_token(user_id: str, skill_name: str) -> dict | None:
+def _load_oauth_token(user_id: str, tool_name: str) -> dict | None:
     """Load a stored OAuth token blob from Secrets Manager, or None if not found."""
     try:
-        resp = sm.get_secret_value(SecretId=_oauth_secret_id(user_id, skill_name))
+        resp = sm.get_secret_value(SecretId=_oauth_secret_id(user_id, tool_name))
         return json.loads(resp["SecretString"])
     except sm.exceptions.ResourceNotFoundException:
         return None
@@ -1118,9 +1190,9 @@ def _load_oauth_token(user_id: str, skill_name: str) -> dict | None:
         return None
 
 
-def _save_oauth_token(user_id: str, skill_name: str, token_blob: dict) -> None:
+def _save_oauth_token(user_id: str, tool_name: str, token_blob: dict) -> None:
     """Create or update the OAuth token blob in Secrets Manager."""
-    secret_id = _oauth_secret_id(user_id, skill_name)
+    secret_id = _oauth_secret_id(user_id, tool_name)
     secret_string = json.dumps(token_blob)
     try:
         sm.put_secret_value(SecretId=secret_id, SecretString=secret_string)
@@ -1128,62 +1200,250 @@ def _save_oauth_token(user_id: str, skill_name: str, token_blob: dict) -> None:
         sm.create_secret(
             Name=secret_id,
             SecretString=secret_string,
-            Description=f"OAuth tokens for user {user_id} skill {skill_name}",
+            Description=f"OAuth tokens for user {user_id} tool {tool_name}",
         )
 
 
-@app.get("/secrets/status", tags=["secrets"], summary="Get credential status for all skills")
-async def get_secrets_status(user_id: str = Depends(_get_user_id)) -> dict:
-    """Return all skills with their credential status for this user.
+# ── User settings (enabled tools) ────────────────────────────────────────────
 
-    Remote OAuth skills return: {type: "oauth", authenticated, expires_at, scope}
-    Stdio key-based skills return: {type: "key", vars, stored}
+
+def _get_user_settings(site: str) -> dict:
+    """Read {site}/.user/settings.json from S3; return {} if absent."""
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"{site}/.user/settings.json")
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except s3.exceptions.NoSuchKey:
+        return {}
+    except Exception:
+        return {}
+
+
+def _save_user_settings(site: str, settings: dict) -> None:
+    """Write {site}/.user/settings.json to S3."""
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{site}/.user/settings.json",
+        Body=json.dumps(settings).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+@app.get("/tools", tags=["tools"], summary="List all tools with per-user status")
+async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) -> dict:
+    """Return all tools with enabled state and credential status for this user.
+
+    Remote OAuth tools return: {type: "oauth", enabled, authenticated, expires_at, scope}
+    Stdio key-based tools return: {type: "key", enabled, vars, stored}
     """
-    prefix = skills_prefix()
-    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
-    skill_names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
+    user_id, user_site = ctx
+    if user_site is None:
+        raise HTTPException(status_code=403, detail="No site provisioned for this user")
 
-    skills: dict = {}
-    for skill_name in skill_names:
-        if _is_remote_skill(skill_name):
-            token = _load_oauth_token(user_id, skill_name)
-            if token:
+    prefix = tools_prefix()
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
+    tool_names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
+
+    settings = _get_user_settings(user_site)
+    enabled_tools: list[str] = settings.get("enabled_tools", [])
+
+    # Load the shared AWS SSO token once — all aws-sso tools share it.
+    _aws_sso_token: dict | None = None
+    _aws_sso_token_loaded = False
+    _aws_sso_config: dict | None = None
+    _aws_sso_config_loaded = False
+
+    def _get_aws_sso_token() -> dict | None:
+        nonlocal _aws_sso_token, _aws_sso_token_loaded
+        if not _aws_sso_token_loaded:
+            _aws_sso_token = _load_oauth_token(user_id, "aws-sso")
+            _aws_sso_token_loaded = True
+        return _aws_sso_token
+
+    def _get_sso_config() -> tuple[bool, str | None, str | None]:
+        nonlocal _aws_sso_config, _aws_sso_config_loaded
+        if not _aws_sso_config_loaded:
+            _aws_sso_config = _get_aws_sso_client_config(user_site or "")
+            _aws_sso_config_loaded = True
+        if _aws_sso_config and _aws_sso_config.get("sso_start_url"):
+            return (
+                True,
+                _aws_sso_config.get("sso_start_url"),
+                _aws_sso_config.get("sso_region", "us-east-1"),
+            )
+        return False, None, None
+
+    tools_out: dict = {}
+    for tool_name in tool_names:
+        enabled = tool_name in enabled_tools
+        auth_type = _get_tool_auth_type(tool_name)
+
+        if auth_type == "aws-sso":
+            token = _get_aws_sso_token() if enabled else None
+            configured, sso_start_url_val, sso_region_val = _get_sso_config()
+            if enabled and token:
                 expires_at = token.get("expires_at")
                 expires_str = (
                     datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc).isoformat()
-                    if expires_at
-                    else None
+                    if expires_at else None
                 )
-                skills[skill_name] = {
-                    "type": "oauth",
+                tools_out[tool_name] = {
+                    "type": "aws-sso",
+                    "enabled": True,
+                    "configured": configured,
+                    "sso_start_url": sso_start_url_val,
+                    "sso_region": sso_region_val,
                     "authenticated": True,
+                    "account_id": token.get("account_id"),
+                    "role_name": token.get("role_name"),
                     "expires_at": expires_str,
-                    "scope": token.get("scope") or None,
+                }
+            elif enabled:
+                tools_out[tool_name] = {
+                    "type": "aws-sso",
+                    "enabled": True,
+                    "configured": configured,
+                    "sso_start_url": sso_start_url_val,
+                    "sso_region": sso_region_val,
+                    "authenticated": False,
+                    "account_id": None,
+                    "role_name": None,
+                    "expires_at": None,
                 }
             else:
-                skills[skill_name] = {
+                tools_out[tool_name] = {
+                    "type": "aws-sso",
+                    "enabled": False,
+                    "configured": configured,
+                    "sso_start_url": sso_start_url_val,
+                    "sso_region": sso_region_val,
+                    "authenticated": False,
+                    "account_id": None,
+                    "role_name": None,
+                    "expires_at": None,
+                }
+
+        elif auth_type in ("oauth", "none"):
+            if enabled:
+                token = _load_oauth_token(user_id, tool_name)
+                if token:
+                    expires_at = token.get("expires_at")
+                    expires_str = (
+                        datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc).isoformat()
+                        if expires_at else None
+                    )
+                    tools_out[tool_name] = {
+                        "type": "oauth",
+                        "enabled": True,
+                        "authenticated": True,
+                        "expires_at": expires_str,
+                        "scope": token.get("scope") or None,
+                    }
+                else:
+                    tools_out[tool_name] = {
+                        "type": "oauth",
+                        "enabled": True,
+                        "authenticated": False,
+                        "expires_at": None,
+                        "scope": None,
+                    }
+            else:
+                tools_out[tool_name] = {
                     "type": "oauth",
+                    "enabled": False,
                     "authenticated": False,
                     "expires_at": None,
                     "scope": None,
                 }
-        else:
-            vars_needed = _skill_required_vars(skill_name)
-            stored = {v: _secret_exists(user_id, v) for v in vars_needed}
-            skills[skill_name] = {"type": "key", "vars": vars_needed, "stored": stored}
 
-    return {"skills": skills}
+        else:  # "key" — stdio tool
+            if enabled:
+                vars_needed = _tool_required_vars(tool_name)
+                stored = {v: _secret_exists(user_id, v) for v in vars_needed}
+                tools_out[tool_name] = {"type": "key", "enabled": True, "vars": vars_needed, "stored": stored}
+            else:
+                tools_out[tool_name] = {"type": "key", "enabled": False, "vars": [], "stored": {}}
+
+    return {"tools": tools_out}
 
 
-@app.post("/oauth/initiate/{skill_name}", tags=["oauth"], summary="Initiate OAuth flow for a skill")
+@app.post("/tools/{tool_name}/enable", tags=["tools"], summary="Enable a tool for the current user")
+async def enable_tool(
+    tool_name: str,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict[str, str]:
+    """Add tool_name to the user's enabled_tools list in their site settings."""
+    user_id, user_site = ctx
+    if user_site is None:
+        raise HTTPException(status_code=403, detail="No site provisioned for this user")
+    settings = _get_user_settings(user_site)
+    enabled: list[str] = settings.get("enabled_tools", [])
+    if tool_name not in enabled:
+        enabled.append(tool_name)
+        settings["enabled_tools"] = enabled
+        _save_user_settings(user_site, settings)
+    return {"status": "enabled"}
+
+
+@app.post("/tools/{tool_name}/disable", tags=["tools"], summary="Disable a tool for the current user")
+async def disable_tool(
+    tool_name: str,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict[str, str]:
+    """Remove tool_name from the user's enabled_tools list and delete stored credentials."""
+    user_id, user_site = ctx
+    if user_site is None:
+        raise HTTPException(status_code=403, detail="No site provisioned for this user")
+
+    # Update settings
+    settings = _get_user_settings(user_site)
+    enabled: list[str] = settings.get("enabled_tools", [])
+    if tool_name in enabled:
+        enabled.remove(tool_name)
+        settings["enabled_tools"] = enabled
+        _save_user_settings(user_site, settings)
+
+    # Delete stored OAuth token (best-effort).
+    # aws-sso tokens are shared across all aws-sso tools so we don't delete them
+    # when a single tool is disabled — the user must re-authenticate explicitly.
+    if _get_tool_auth_type(tool_name) not in ("aws-sso",):
+        try:
+            secret_id = _oauth_secret_id(user_id, tool_name)
+            sm.delete_secret(SecretId=secret_id, ForceDeleteWithoutRecovery=True)
+        except sm.exceptions.ResourceNotFoundException:
+            pass
+        except Exception as exc:
+            logging.warning("Failed to delete OAuth token for tool %s user %s: %s", tool_name, user_id, exc)
+
+    # Delete stored key-based vars (best-effort)
+    for var_name in _tool_required_vars(tool_name):
+        try:
+            sm.delete_secret(SecretId=_secret_id(user_id, var_name), ForceDeleteWithoutRecovery=True)
+        except sm.exceptions.ResourceNotFoundException:
+            pass
+        except Exception as exc:
+            logging.warning("Failed to delete secret %s for user %s: %s", var_name, user_id, exc)
+
+    return {"status": "disabled"}
+
+
+@app.get("/secrets/status", tags=["secrets"], summary="Get credential status for all tools (legacy alias)")
+async def get_secrets_status(ctx: tuple[str, str | None] = Depends(_get_user_context)) -> dict:
+    """Return all tools with their credential status for this user.
+
+    This is an alias for GET /tools kept for backwards compatibility.
+    """
+    return await get_tools(ctx)
+
+
+@app.post("/oauth/initiate/{tool_name}", tags=["oauth"], summary="Initiate OAuth flow for a tool")
 async def oauth_initiate(
-    skill_name: str,
+    tool_name: str,
     ctx: tuple[str, str | None] = Depends(_get_user_context),
 ) -> dict:
-    """Begin the OAuth flow for a remote MCP skill.
+    """Begin the OAuth flow for a remote MCP tool.
 
     Performs OAuth discovery, then either:
-    - Uses a pre-registered client from .skills/{skill_name}/oauth_client.json in S3
+    - Uses a pre-registered client from .tools/{tool_name}/oauth_client.json in S3
       (for servers like GitHub that don't support Dynamic Client Registration), or
     - Performs Dynamic Client Registration (RFC 7591) for servers that support it.
 
@@ -1192,13 +1452,18 @@ async def oauth_initiate(
     user_id, user_site = ctx
     if user_site is None:
         raise HTTPException(status_code=403, detail="No site provisioned for this user")
-    # Load the skill's mcp.json and extract the remote server URL
-    key = f"{skills_prefix()}/{skill_name}/mcp.json"
+
+    # AWS SSO uses a completely different flow — device authorization grant.
+    if tool_name == "aws-sso":
+        return await _initiate_aws_sso(user_id, user_site)
+
+    # Load the tool's mcp.json and extract the remote server URL
+    key = f"{tools_prefix()}/{tool_name}/mcp.json"
     try:
         obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
         mcp_config = json.loads(obj["Body"].read())
     except Exception:
-        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found or has no mcp.json")
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found or has no mcp.json")
 
     server_url: str | None = None
     for server_cfg in mcp_config.get("mcpServers", {}).values():
@@ -1206,14 +1471,14 @@ async def oauth_initiate(
             server_url = server_cfg["url"]
             break
     if not server_url:
-        raise HTTPException(status_code=400, detail=f"Skill '{skill_name}' is not a remote MCP skill")
+        raise HTTPException(status_code=400, detail=f"Tool '{tool_name}' is not a remote MCP tool")
 
     _cleanup_oauth_state()
 
-    # Check for a pre-registered OAuth client (skills whose servers don't support DCR).
-    # oauth_client.json lives in S3 at .skills/{skill_name}/oauth_client.json and is
+    # Check for a pre-registered OAuth client (tools whose servers don't support DCR).
+    # oauth_client.json lives in S3 at .tools/{tool_name}/oauth_client.json and is
     # managed by the platform operator (not per-user).
-    pre_registered = _load_skill_oauth_client(skill_name)
+    pre_registered = _load_tool_oauth_client(tool_name)
 
     # Discover OAuth metadata
     try:
@@ -1237,10 +1502,10 @@ async def oauth_initiate(
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    f"Skill '{skill_name}' has no pre-registered OAuth client "
+                    f"Tool '{tool_name}' has no pre-registered OAuth client "
                     f"and the MCP server at {server_url} does not support "
                     f"Dynamic Client Registration. Upload an oauth_client.json "
-                    f"to .skills/{skill_name}/ in S3 with the pre-registered client_id."
+                    f"to .tools/{tool_name}/ in S3 with the pre-registered client_id."
                 ),
             )
         try:
@@ -1273,7 +1538,7 @@ async def oauth_initiate(
     )
 
     _oauth_pending[state] = _OAuthPendingState(
-        skill_name=skill_name,
+        tool_name=tool_name,
         user_id=user_id,
         site=user_site,
         server_url=server_url,
@@ -1348,7 +1613,7 @@ async def oauth_callback(
             client_secret=pending.client_secret,
         )
     except Exception as exc:
-        logging.warning("OAuth code exchange failed for user %s skill %s: %s", pending.user_id, pending.skill_name, exc)
+        logging.warning("OAuth code exchange failed for user %s tool %s: %s", pending.user_id, pending.tool_name, exc)
         return _frontend_redirect(pending.site, f"oauth_error={exc}")
 
     token_blob = {
@@ -1364,12 +1629,274 @@ async def oauth_callback(
     }
 
     try:
-        _save_oauth_token(pending.user_id, pending.skill_name, token_blob)
+        _save_oauth_token(pending.user_id, pending.tool_name, token_blob)
     except Exception as exc:
-        logging.error("Failed to store OAuth token for user %s skill %s: %s", pending.user_id, pending.skill_name, exc)
+        logging.error("Failed to store OAuth token for user %s tool %s: %s", pending.user_id, pending.tool_name, exc)
         return _frontend_redirect(pending.site, f"oauth_error=Failed+to+store+token")
 
-    return _frontend_redirect(pending.site, f"oauth_success={pending.skill_name}")
+    return _frontend_redirect(pending.site, f"oauth_success={pending.tool_name}")
+
+
+# ── AWS SSO ────────────────────────────────────────────────────────────────────
+
+
+async def _initiate_aws_sso(user_id: str, site: str) -> dict:
+    """Start the AWS SSO device authorization flow.
+
+    Uses sso-oidc:RegisterClient (dynamic) + sso-oidc:StartDeviceAuthorization,
+    matching the flow used by 'aws sso login'. Returns a verification URL for the
+    frontend to open in a new tab, plus a session key to poll for completion.
+    """
+    config = _get_aws_sso_client_config(site)
+    if not config:
+        raise HTTPException(
+            status_code=400,
+            detail="AWS SSO is not configured. Use GET/PUT /aws-sso/setup to set your SSO start URL and region.",
+        )
+    sso_start_url: str = config.get("sso_start_url", "").strip().rstrip("/")
+    sso_region: str = config.get("sso_region", "us-east-1").strip()
+    if not sso_start_url:
+        raise HTTPException(status_code=400, detail="sso_start_url is missing from AWS SSO config.")
+
+    logging.info("Starting AWS SSO device auth: start_url=%r region=%r", sso_start_url, sso_region)
+
+    oidc = boto3.client("sso-oidc", region_name=sso_region)
+
+    try:
+        reg = oidc.register_client(
+            clientName="AgentScribe",
+            clientType="public",
+        )
+    except Exception as exc:
+        logging.error("RegisterClient failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"AWS SSO client registration failed: {exc}") from exc
+
+    client_id: str = reg["clientId"]
+    client_secret: str = reg["clientSecret"]
+    logging.info("RegisterClient OK: client_id=%r", client_id)
+
+    try:
+        auth = oidc.start_device_authorization(
+            clientId=client_id,
+            clientSecret=client_secret,
+            startUrl=sso_start_url,
+        )
+    except Exception as exc:
+        logging.error("StartDeviceAuthorization failed (start_url=%r region=%r): %s", sso_start_url, sso_region, exc, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"AWS SSO device authorization failed (start_url={sso_start_url!r}, region={sso_region!r}): {exc}",
+        ) from exc
+
+    _cleanup_aws_sso_state()
+    state = secrets.token_urlsafe(32)
+    _aws_sso_pending[state] = _AwsSsoPendingState(
+        user_id=user_id,
+        site=site,
+        sso_region=sso_region,
+        sso_start_url=sso_start_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        device_code=auth["deviceCode"],
+        created_at=time.time(),
+        expires_in=auth.get("expiresIn", 600),
+        interval=auth.get("interval", 5),
+    )
+
+    return {
+        "auth_url": auth["verificationUriComplete"],
+        "user_code": auth.get("userCode", ""),
+        "session": state,
+        "polling_interval": auth.get("interval", 5),
+        "expires_in": auth.get("expiresIn", 600),
+    }
+
+
+class _AwsSsoSetupRequest(BaseModel):
+    sso_start_url: str
+    sso_region: str
+
+
+class _AwsSsoSelectRoleRequest(BaseModel):
+    account_id: str
+    role_name: str
+
+
+@app.get("/aws-sso/setup", tags=["oauth"], summary="Get AWS SSO configuration for a site")
+async def aws_sso_get_setup(
+    site: str = Query(...),
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Return the current AWS SSO configuration (sso_start_url, sso_region) for the site."""
+    user_id, user_site = ctx
+    if user_site is None or user_site != site:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return _get_aws_sso_client_config(site) or {}
+
+
+@app.put("/aws-sso/setup", tags=["oauth"], summary="Save AWS SSO configuration for a site")
+async def aws_sso_put_setup(
+    body: _AwsSsoSetupRequest,
+    site: str = Query(...),
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Write sso_start_url and sso_region to {site}/.aws-sso/aws-sso-client.json."""
+    user_id, user_site = ctx
+    if user_site is None or user_site != site:
+        raise HTTPException(status_code=403, detail="Access denied")
+    _save_aws_sso_client_config(site, {
+        "sso_start_url": body.sso_start_url,
+        "sso_region": body.sso_region,
+    })
+    return {"status": "ok"}
+
+
+@app.get("/aws-sso/auth-status", tags=["oauth"], summary="Poll AWS SSO device authorization status")
+async def aws_sso_auth_status(
+    session: str = Query(...),
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Poll for completion of the AWS SSO device authorization flow.
+
+    Returns:
+      {"status": "pending"}   — user has not yet approved in the browser
+      {"status": "authorized", "accounts": [...]}  — approved; accounts listed for role picker
+      {"status": "expired"}   — the device code has expired; user must restart
+      {"status": "error", "error": "..."}  — unexpected error
+    """
+    user_id, _ = ctx
+
+    _cleanup_aws_sso_state()
+    pending = _aws_sso_pending.get(session)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Session not found or expired. Please re-authenticate.")
+    if pending.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    oidc = _boto_session.client("sso-oidc", region_name=pending.sso_region)
+    try:
+        token_response = oidc.create_token(
+            clientId=pending.client_id,
+            clientSecret=pending.client_secret,
+            grantType="urn:ietf:params:oauth:grant-type:device_code",
+            deviceCode=pending.device_code,
+        )
+    except oidc.exceptions.AuthorizationPendingException:
+        return {"status": "pending"}
+    except oidc.exceptions.SlowDownException:
+        return {"status": "pending"}
+    except oidc.exceptions.ExpiredTokenException:
+        del _aws_sso_pending[session]
+        return {"status": "expired"}
+    except Exception as exc:
+        del _aws_sso_pending[session]
+        logging.warning("AWS SSO token exchange failed for user %s: %s", user_id, exc)
+        return {"status": "error", "error": str(exc)}
+
+    access_token: str = token_response["accessToken"]
+    del _aws_sso_pending[session]
+
+    # Persist token as pending (no account/role yet) in Secrets Manager.
+    pending_blob = {
+        "access_token": access_token,
+        "refresh_token": token_response.get("refreshToken"),
+        "expires_at": int(time.time()) + int(token_response.get("expiresIn", 3600)),
+        "client_id": pending.client_id,
+        "client_secret": pending.client_secret,
+        "sso_region": pending.sso_region,
+        "sso_start_url": pending.sso_start_url,
+    }
+    _save_oauth_token(user_id, "aws-sso-pending", pending_blob)
+
+    # Fetch available accounts for the role picker.
+    sso_client = _boto_session.client("sso", region_name=pending.sso_region)
+    try:
+        accounts_resp = sso_client.list_accounts(accessToken=access_token, maxResults=100)
+        accounts = [
+            {
+                "account_id": a["accountId"],
+                "account_name": a["accountName"],
+                "email": a.get("emailAddress", ""),
+            }
+            for a in accounts_resp.get("accountList", [])
+        ]
+    except Exception as exc:
+        logging.warning("Failed to list SSO accounts for user %s: %s", user_id, exc)
+        accounts = []
+
+    return {"status": "authorized", "accounts": accounts}
+
+
+@app.get("/aws-sso/roles/{account_id}", tags=["oauth"], summary="List roles for an AWS SSO account")
+async def aws_sso_list_roles(
+    account_id: str,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Return the permission set roles available in an AWS account for the pending SSO token."""
+    user_id, _ = ctx
+    token = _load_oauth_token(user_id, "aws-sso-pending")
+    if not token:
+        raise HTTPException(status_code=404, detail="No pending AWS SSO session. Please re-authenticate.")
+
+    sso_region: str = token.get("sso_region", "us-east-1")
+    sso_client = _boto_session.client("sso", region_name=sso_region)
+    try:
+        roles_resp = sso_client.list_account_roles(
+            accessToken=token["access_token"],
+            accountId=account_id,
+            maxResults=100,
+        )
+        roles = [{"role_name": r["roleName"]} for r in roles_resp.get("roleList", [])]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to list roles: {exc}") from exc
+
+    return {"roles": roles}
+
+
+@app.post("/aws-sso/select-role", tags=["oauth"], summary="Confirm AWS account and role selection")
+async def aws_sso_select_role(
+    body: _AwsSsoSelectRoleRequest,
+    ctx: tuple[str, str | None] = Depends(_get_user_context),
+) -> dict:
+    """Attach the chosen account_id and role_name to the pending token and promote it to active.
+
+    Verifies the credentials work before storing, then cleans up the pending secret.
+    """
+    user_id, _ = ctx
+    token = _load_oauth_token(user_id, "aws-sso-pending")
+    if not token:
+        raise HTTPException(status_code=404, detail="No pending AWS SSO session. Please re-authenticate.")
+
+    sso_region: str = token.get("sso_region", "us-east-1")
+    sso_client = _boto_session.client("sso", region_name=sso_region)
+
+    # Verify the selection is valid before committing.
+    try:
+        sso_client.get_role_credentials(
+            accountId=body.account_id,
+            roleName=body.role_name,
+            accessToken=token["access_token"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not get credentials for {body.role_name} in account {body.account_id}: {exc}",
+        ) from exc
+
+    token["account_id"] = body.account_id
+    token["role_name"] = body.role_name
+    _save_oauth_token(user_id, "aws-sso", token)
+
+    # Clean up the pending secret (best-effort).
+    try:
+        sm.delete_secret(
+            SecretId=_oauth_secret_id(user_id, "aws-sso-pending"),
+            ForceDeleteWithoutRecovery=True,
+        )
+    except Exception:
+        pass
+
+    return {"status": "ok", "account_id": body.account_id, "role_name": body.role_name}
 
 
 @app.put("/secrets/{var_name}", tags=["secrets"], summary="Store or update a credential")
