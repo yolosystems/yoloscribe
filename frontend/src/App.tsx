@@ -6,7 +6,8 @@ import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
 import AgentsList from './components/AgentsList'
 import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
-import CredentialsPanel from './components/CredentialsPanel'
+import ToolsPanel from './components/ToolsPanel'
+import SkillsPanel from './components/SkillsPanel'
 import LandingPage from './components/LandingPage'
 import OnboardingView from './components/OnboardingView'
 import DeleteAccountModal from './components/DeleteAccountModal'
@@ -41,6 +42,7 @@ const IS_MAIN_SITE = SITE === 'default'
 //   #/{page}                     →  {page}/content.md       (child page)
 //   #/.agents/{name}             →  .agents/{name}/agent.md (root agent)
 //   #/{page}/.agents/{name}      →  {page}/.agents/{name}/agent.md
+//   #/.skills/{name}             →  .skills/{name}/SKILL.md (site skill)
 
 function getFilePath(): string {
   const hash = window.location.hash
@@ -53,6 +55,9 @@ function getFilePath(): string {
   if (path === '.user/search') return '.user/search.md'
   // .user/notifications
   if (path === '.user/notifications') return '.user/notifications.md'
+  // .skills/{name}
+  const skillMatch = path.match(/^\.skills\/([a-z0-9][a-z0-9_-]*)$/)
+  if (skillMatch) return `.skills/${skillMatch[1]}/SKILL.md`
   // {page}/.agents/{name}  or  .agents/{name}
   const agentMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)$/)
   if (agentMatch) return `${agentMatch[1] ?? ''}.agents/${agentMatch[2]}/agent.md`
@@ -64,6 +69,8 @@ function filePathToHash(fp: string): string {
   if (fp === 'content.md') return ''
   if (fp === '.user/search.md') return '#/.user/search'
   if (fp === '.user/notifications.md') return '#/.user/notifications'
+  const skillMatch = fp.match(/^\.skills\/([a-z0-9][a-z0-9_-]*)\/SKILL\.md$/)
+  if (skillMatch) return `#/.skills/${skillMatch[1]}`
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
   if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
   const pageMatch = fp.match(/^(.+)\/content\.md$/)
@@ -82,6 +89,13 @@ function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
 
   if (fp === '.user/notifications.md') {
     crumbs.push({ label: 'Notifications', filePath: fp })
+    return crumbs
+  }
+
+  const skillMatch = fp.match(/^\.skills\/([a-z0-9][a-z0-9_-]*)\/SKILL\.md$/)
+  if (skillMatch) {
+    crumbs.push({ label: '.skills', filePath: null })
+    crumbs.push({ label: skillMatch[1], filePath: fp })
     return crumbs
   }
 
@@ -127,7 +141,7 @@ function getPagePath(filePath: string): string {
   return ''
 }
 
-type Mode = 'view' | 'edit' | 'credentials'
+type Mode = 'view' | 'edit' | 'tools'
 type AppView = 'loading' | 'landing' | 'onboarding' | 'site'
 
 export default function App() {
@@ -145,6 +159,7 @@ export default function App() {
   const [mySite, setMySite] = useState<string | null | undefined>(undefined)
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
 
   // Subscribe to Supabase auth state
@@ -348,28 +363,12 @@ export default function App() {
       <header className="topbar">
         <span className="topbar-title">Yolo Scribe</span>
         <div className="topbar-actions">
-          {isOwner && (
-            <button
-              className={`btn${mode === 'credentials' ? ' btn-primary' : ''}`}
-              onClick={() => setMode(mode === 'credentials' ? 'view' : 'credentials')}
-            >
-              {mode === 'credentials' ? '← Back' : 'Credentials'}
-            </button>
-          )}
-          {isOwner && isContentPage && mode !== 'credentials' && (
+          {isContentPage && mode !== 'tools' && !skillsOpen && (
             <button className="btn" onClick={() => setCreatePageOpen(true)}>
               + New Page
             </button>
           )}
-          {isOwner && isContentPage && mode !== 'credentials' && (
-            <button
-              className={`btn${settingsOpen ? ' btn-primary' : ''}`}
-              onClick={() => setSettingsOpen((o) => !o)}
-            >
-              {settingsOpen ? '← Back' : 'Settings'}
-            </button>
-          )}
-          {canEdit && mode === 'view' && (
+          {canEdit && mode === 'view' && !skillsOpen && (
             <button className="btn" onClick={() => setMode('edit')}>
               Edit
             </button>
@@ -387,9 +386,33 @@ export default function App() {
                 {saving ? 'Saving…' : 'Save'}
               </button>
               <button className="btn" onClick={() => setMode('view')}>
-                Preview
+                View
               </button>
             </>
+          )}
+          {isOwner && (
+            <button
+              className={`btn${mode === 'tools' ? ' btn-primary' : ''}`}
+              onClick={() => { setMode(mode === 'tools' ? 'view' : 'tools'); setSkillsOpen(false) }}
+            >
+              Tools
+            </button>
+          )}
+          {isOwner && (
+            <button
+              className={`btn${skillsOpen ? ' btn-primary' : ''}`}
+              onClick={() => { setSkillsOpen((o) => !o); setMode('view') }}
+            >
+              {skillsOpen ? 'Back' : 'Skills'}
+            </button>
+          )}
+          {isOwner && isContentPage && mode !== 'tools' && !skillsOpen && (
+            <button
+              className={`btn${settingsOpen ? ' btn-primary' : ''}`}
+              onClick={() => setSettingsOpen((o) => !o)}
+            >
+              Settings
+            </button>
           )}
           {isOwner && (
             <button
@@ -482,8 +505,10 @@ export default function App() {
               }}
             />
           </div>
-        ) : mode === 'credentials' && isOwner ? (
-          <CredentialsPanel apiBase={API_BASE} token={session!.access_token} />
+        ) : mode === 'tools' && isOwner ? (
+          <ToolsPanel apiBase={API_BASE} token={session!.access_token} site={SITE} />
+        ) : skillsOpen && isOwner ? (
+          <SkillsPanel apiBase={API_BASE} site={SITE} token={session!.access_token} />
         ) : settingsOpen && isOwner ? (
           <div className="content-area">
             <PageSettingsPanel

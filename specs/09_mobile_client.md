@@ -2,8 +2,6 @@
 
 This document describes the design for a native mobile client (iOS and Android) for AgentScribe using the existing FastAPI backend without modification.
 
-> **DO NOT IMPLEMENT NOW.** This is a planning document only.
-
 ---
 
 ### Overview
