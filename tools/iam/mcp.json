@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "iam": {
+      "url": "http://iam.yolo.svc.cluster.local:8080/mcp",
+      "transport": "streamable-http",
+      "auth": "aws-sso"
+    }
+  }
+}

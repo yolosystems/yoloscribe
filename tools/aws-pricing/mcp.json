@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "aws-pricing": {
+      "url": "http://aws-pricing.yolo.svc.cluster.local:80/mcp",
+      "transport": "streamable-http",
+      "auth": "aws-sso"
+    }
+  }
+}

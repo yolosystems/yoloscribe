@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "google-workspace": {
-      "url": "https://workspace-mcp-dev.runyolo.dev/mcp",
+      "url": "http://google-workspace.yolo.svc.cluster.local/mcp",
       "transport": "streamable-http",
       "auth": "oauth"
     }

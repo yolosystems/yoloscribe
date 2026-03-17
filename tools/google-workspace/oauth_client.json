@@ -1,5 +1,9 @@
 {
   "client_id": "975544297707-kqljfcvjfr47fm2nefnh05bhnrp6fslu.apps.googleusercontent.com",
+  "issuer": "https://accounts.google.com",
+  "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+  "token_endpoint": "https://oauth2.googleapis.com/token",
+  "code_challenge_methods_supported": ["S256"],
   "scopes": [
     "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/drive",

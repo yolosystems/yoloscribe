@@ -32,9 +32,58 @@ def agents_prefix(site: str, page_path: str = "") -> str:
     return f"{site}/.agents"
 
 
-def skills_prefix() -> str:
-    """Return the S3 prefix for the shared .skills directory (bucket root)."""
-    return ".skills"
+def tools_prefix() -> str:
+    """Return the S3 prefix for the shared .tools directory (bucket root)."""
+    return ".tools"
+
+
+def skills_prefix(site: str) -> str:
+    """Return the S3 prefix for the per-site .skills directory."""
+    return f"{site}/.skills"
+
+
+# ── Frontmatter parser ────────────────────────────────────────────────────────
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse YAML-style frontmatter from a markdown string.
+
+    Returns (frontmatter_dict, body_text).  The frontmatter must be delimited
+    by ``---`` lines at the very start of the file.  Only the simple types
+    needed for SKILL.md are supported: string scalars and string lists.
+    """
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    fm_text = text[3:end].strip()
+    body = text[end + 4:].lstrip("\n")
+
+    fm: dict = {}
+    current_key: str | None = None
+    for line in fm_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- "):
+            # List item under the current key
+            item = stripped[2:].strip().strip("\"'")
+            if current_key is not None:
+                if not isinstance(fm.get(current_key), list):
+                    fm[current_key] = []
+                fm[current_key].append(item)
+        elif ":" in stripped:
+            key, _, value = stripped.partition(":")
+            key = key.strip()
+            value = value.strip().strip("\"'")
+            current_key = key
+            if value:
+                fm[key] = value
+            else:
+                fm[key] = []
+
+    return fm, body
 
 
 # ── S3Tools (class-based tools) ───────────────────────────────────────────────
@@ -95,86 +144,141 @@ class S3Tools:
         self.write_text(key, content)
         return f"Saved content to {key}"
 
-    @tool
-    def list_skills(self) -> str:
-        """List all available skills and summarise what each one does.
+    # ── Tools (bucket-root, admin-managed) ────────────────────────────────────
 
-        Reads the skill.md for every skill in the shared .skills directory
-        so the caller can understand the available capabilities.
-        """
-        prefix = skills_prefix()
-        names = self.list_prefixes(prefix)
-        if not names:
-            return "No skills are currently configured on this server."
-        parts = []
-        for name in names:
-            key = f"{prefix}/{name}/skill.md"
-            try:
-                description = self.read_text(key)
-                parts.append(f"### {name}\n\n{description.strip()}")
-            except Exception:
-                parts.append(f"### {name}\n\n(No description available.)")
-        return "## Available Skills\n\n" + "\n\n---\n\n".join(parts)
+    def list_tool_names(self) -> list[str]:
+        """Return names of all tools in the shared .tools directory."""
+        return self.list_prefixes(tools_prefix())
 
-    @tool
-    def get_skill(self, skill_name: str) -> str:
-        """Retrieve the skill.md definition for a named skill.
+    def get_tool_mcp_config(self, tool_name: str) -> dict:
+        """Read .tools/{tool_name}/mcp.json and return as a dict."""
+        key = f"{tools_prefix()}/{tool_name}/mcp.json"
+        raw = self.read_text(key)
+        return json.loads(raw)
 
-        Args:
-            skill_name: Name of the skill to retrieve.
-        """
-        key = f"{skills_prefix()}/{skill_name}/skill.md"
-        return self.read_text(key)
-
-    @tool
-    def get_skill_mcp_config(self, skill_name: str) -> str:
-        """Retrieve the mcp.json for a named skill.
-
-        Args:
-            skill_name: Skill name.
-        """
-        key = f"{skills_prefix()}/{skill_name}/mcp.json"
-        return self.read_text(key)
-
-    def is_remote_skill(self, skill_name: str) -> bool:
-        """Return True if the skill uses remote HTTP transport (has a 'url' key in mcp.json)."""
-        key = f"{skills_prefix()}/{skill_name}/mcp.json"
+    def is_remote_tool(self, tool_name: str) -> bool:
+        """Return True if the tool's mcp.json uses remote HTTP transport."""
         try:
-            raw = self.read_text(key)
-            config = json.loads(raw)
+            config = self.get_tool_mcp_config(tool_name)
             return any("url" in srv for srv in config.get("mcpServers", {}).values())
         except Exception:
             return False
 
-    @tool
-    def get_skill_required_vars(self, skill_name: str) -> str:
-        """Return the credential requirements for a skill's mcp.json.
-
-        For remote OAuth skills, explains that OAuth authentication is required.
-        For stdio skills, lists the ${VAR_NAME} environment variable placeholders.
-        Call this after selecting a skill to know what credentials the user must provide.
-
-        Args:
-            skill_name: Name of the skill to inspect.
-        """
-        key = f"{skills_prefix()}/{skill_name}/mcp.json"
+    def get_tool_required_vars(self, tool_name: str) -> list[str]:
+        """Return the list of ${VAR_NAME} placeholders in a stdio tool's mcp.json."""
+        key = f"{tools_prefix()}/{tool_name}/mcp.json"
         try:
             raw = self.read_text(key)
+            return list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
         except Exception:
-            return f"Skill '{skill_name}' has no mcp.json — no credentials required."
+            return []
+
+    def get_tool_oauth_client(self, tool_name: str) -> dict | None:
+        """Read .tools/{tool_name}/oauth_client.json, or None if absent."""
+        key = f"{tools_prefix()}/{tool_name}/oauth_client.json"
         try:
-            config = json.loads(raw)
-            if any("url" in srv for srv in config.get("mcpServers", {}).values()):
-                return (
-                    f"Skill '{skill_name}' uses remote OAuth authentication — no API keys required. "
-                    f"Users must authenticate via OAuth in the Credentials panel before this skill can be used."
-                )
+            raw = self.read_text(key)
+            return json.loads(raw)
         except Exception:
-            pass
-        vars_found = list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
-        if not vars_found:
-            return f"Skill '{skill_name}' requires no API keys or environment variables."
-        return f"Skill '{skill_name}' requires: {', '.join(vars_found)}"
+            return None
+
+    # ── Skills (per-site, user-managed) ───────────────────────────────────────
+
+    @tool
+    def list_skills(self, site: str) -> str:
+        """List all skills available in the user's site and summarise what each one does.
+
+        Reads the SKILL.md for every skill in the site's .skills directory.
+
+        Args:
+            site: The site name.
+        """
+        prefix = skills_prefix(site)
+        names = self.list_prefixes(prefix)
+        if not names:
+            return "No skills are currently defined for this site."
+        parts = []
+        for name in names:
+            key = f"{prefix}/{name}/SKILL.md"
+            try:
+                text = self.read_text(key)
+                fm, _ = _parse_frontmatter(text)
+                description = fm.get("description", "(No description)")
+                tool_list = fm.get("tools", [])
+                tools_str = ", ".join(tool_list) if tool_list else "none"
+                parts.append(f"### {name}\n\n{description}\n\nTools: {tools_str}")
+            except Exception:
+                parts.append(f"### {name}\n\n(No description available.)")
+        return "## Available Skills\n\n" + "\n\n---\n\n".join(parts)
+
+    def get_skill(self, site: str, skill_name: str) -> "SkillDefinition":
+        """Read and parse {site}/.skills/{skill_name}/SKILL.md.
+
+        Args:
+            site: The site name.
+            skill_name: Name of the skill to retrieve.
+        """
+        key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
+        text = self.read_text(key)
+        fm, body = _parse_frontmatter(text)
+        tools_list = fm.get("tools", [])
+        if isinstance(tools_list, str):
+            tools_list = [tools_list]
+        return SkillDefinition(
+            name=skill_name,
+            description=fm.get("description", ""),
+            tools=tools_list,
+            body=body,
+        )
+
+    def get_skill_tools(self, site: str, skill_name: str) -> list[str]:
+        """Return the list of tool names referenced by a skill's frontmatter.
+
+        Args:
+            site: The site name.
+            skill_name: Skill name.
+        """
+        try:
+            return self.get_skill(site, skill_name).tools
+        except Exception:
+            return []
+
+    @tool
+    def get_skill_required_vars(self, site: str, skill_name: str) -> str:
+        """Return the credential variable names required by all tools in a skill.
+
+        Reads the skill's tool list from its frontmatter, then collects the
+        ${VAR_NAME} placeholders from each tool's mcp.json.  Returns a plain
+        text summary suitable for showing to the user.
+
+        Args:
+            site: The site name.
+            skill_name: Name of the skill to inspect.
+        """
+        tool_names = self.get_skill_tools(site, skill_name)
+        if not tool_names:
+            return f"Skill '{skill_name}' uses no tools, so no credentials are required."
+        all_vars: list[str] = []
+        for tool_name in tool_names:
+            vars_ = self.get_tool_required_vars(tool_name)
+            all_vars.extend(v for v in vars_ if v not in all_vars)
+        if not all_vars:
+            return f"Skill '{skill_name}' requires no credentials."
+        return (
+            f"Skill '{skill_name}' requires the following credentials: "
+            + ", ".join(all_vars)
+        )
+
+    def put_skill(self, site: str, skill_name: str, markdown: str) -> None:
+        """Write a SKILL.md to {site}/.skills/{skill_name}/SKILL.md.
+
+        Args:
+            site: The site name.
+            skill_name: Skill name (must match AGENT_NAME_RE).
+            markdown: Full SKILL.md content including frontmatter.
+        """
+        key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
+        self.write_text(key, markdown)
 
     @tool
     def list_agents(self, site: str, page_path: str = "") -> str:
@@ -264,7 +368,7 @@ class S3Tools:
         return f"Page '{page_path}' created at {content_key}"
 
 
-# ── AgentDefinition + parser ──────────────────────────────────────────────────
+# ── AgentDefinition + SkillDefinition + parsers ───────────────────────────────
 
 
 @dataclasses.dataclass
@@ -274,6 +378,14 @@ class AgentDefinition:
     skills: list[str]
     schedule: str = ""
     timezone: str = ""
+
+
+@dataclasses.dataclass
+class SkillDefinition:
+    name: str
+    description: str   # from YAML frontmatter
+    tools: list[str]   # tool names from .tools/ referenced in frontmatter
+    body: str          # full SKILL.md body (injected as system prompt context at runtime)
 
 
 def parse_agent_md(text: str) -> AgentDefinition:

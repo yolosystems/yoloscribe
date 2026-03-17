@@ -155,6 +155,7 @@ class _AwsSsoPendingState:
     site: str
     sso_region: str
     sso_start_url: str
+    aws_region: str
     client_id: str
     client_secret: str
     device_code: str
@@ -1265,12 +1266,14 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) ->
             _aws_sso_config = _get_aws_sso_client_config(user_site or "")
             _aws_sso_config_loaded = True
         if _aws_sso_config and _aws_sso_config.get("sso_start_url"):
+            sso_r = _aws_sso_config.get("sso_region", "us-east-1")
             return (
                 True,
                 _aws_sso_config.get("sso_start_url"),
-                _aws_sso_config.get("sso_region", "us-east-1"),
+                sso_r,
+                _aws_sso_config.get("aws_region", sso_r),
             )
-        return False, None, None
+        return False, None, None, None
 
     tools_out: dict = {}
     for tool_name in tool_names:
@@ -1279,7 +1282,7 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) ->
 
         if auth_type == "aws-sso":
             token = _get_aws_sso_token() if enabled else None
-            configured, sso_start_url_val, sso_region_val = _get_sso_config()
+            configured, sso_start_url_val, sso_region_val, aws_region_val = _get_sso_config()
             if enabled and token:
                 expires_at = token.get("expires_at")
                 expires_str = (
@@ -1292,6 +1295,7 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) ->
                     "configured": configured,
                     "sso_start_url": sso_start_url_val,
                     "sso_region": sso_region_val,
+                    "aws_region": aws_region_val,
                     "authenticated": True,
                     "account_id": token.get("account_id"),
                     "role_name": token.get("role_name"),
@@ -1304,6 +1308,7 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) ->
                     "configured": configured,
                     "sso_start_url": sso_start_url_val,
                     "sso_region": sso_region_val,
+                    "aws_region": aws_region_val,
                     "authenticated": False,
                     "account_id": None,
                     "role_name": None,
@@ -1316,6 +1321,7 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(_get_user_context)) ->
                     "configured": configured,
                     "sso_start_url": sso_start_url_val,
                     "sso_region": sso_region_val,
+                    "aws_region": aws_region_val,
                     "authenticated": False,
                     "account_id": None,
                     "role_name": None,
@@ -1480,19 +1486,34 @@ async def oauth_initiate(
     # managed by the platform operator (not per-user).
     pre_registered = _load_tool_oauth_client(tool_name)
 
-    # Discover OAuth metadata
-    try:
-        _prm, auth_meta = await discover(server_url)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"OAuth discovery failed for {server_url}: {exc}") from exc
-    if auth_meta is None:
-        raise HTTPException(status_code=502, detail=f"No OAuth authorization server found for {server_url}")
+    # Discover OAuth metadata.
+    # For pre-registered clients whose oauth_client.json already contains
+    # authorization_endpoint + token_endpoint (e.g. Google Workspace running
+    # behind an internal K8s URL that can't serve well-known endpoints), we skip
+    # network discovery entirely and build the metadata from the stored values.
+    auth_meta: AuthorizationServerMetadata | None = None
+    if pre_registered and pre_registered.get("authorization_endpoint") and pre_registered.get("token_endpoint"):
+        auth_meta = AuthorizationServerMetadata(
+            issuer=pre_registered.get("issuer", pre_registered["authorization_endpoint"]),
+            authorization_endpoint=pre_registered["authorization_endpoint"],
+            token_endpoint=pre_registered["token_endpoint"],
+            registration_endpoint=pre_registered.get("registration_endpoint"),
+            scopes_supported=pre_registered.get("scopes", []),
+            code_challenge_methods_supported=pre_registered.get("code_challenge_methods_supported", ["S256"]),
+        )
+    else:
+        try:
+            _prm, auth_meta = await discover(server_url)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"OAuth discovery failed for {server_url}: {exc}") from exc
+        if auth_meta is None:
+            raise HTTPException(status_code=502, detail=f"No OAuth authorization server found for {server_url}")
 
     if pre_registered:
         # Use the platform-registered client — no DCR needed.
         client_id: str = pre_registered["client_id"]
-        client_secret: str | None = _load_platform_client_secret(skill_name)
-        # Skill-level scope override takes priority; fall back to server-advertised scopes.
+        client_secret: str | None = _load_platform_client_secret(tool_name)
+        # oauth_client.json scopes take priority; fall back to server-advertised scopes.
         scopes: list[str] = pre_registered.get("scopes") or (
             list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
         )
@@ -1655,6 +1676,7 @@ async def _initiate_aws_sso(user_id: str, site: str) -> dict:
         )
     sso_start_url: str = config.get("sso_start_url", "").strip().rstrip("/")
     sso_region: str = config.get("sso_region", "us-east-1").strip()
+    aws_region: str = config.get("aws_region", sso_region).strip()
     if not sso_start_url:
         raise HTTPException(status_code=400, detail="sso_start_url is missing from AWS SSO config.")
 
@@ -1695,6 +1717,7 @@ async def _initiate_aws_sso(user_id: str, site: str) -> dict:
         site=site,
         sso_region=sso_region,
         sso_start_url=sso_start_url,
+        aws_region=aws_region,
         client_id=client_id,
         client_secret=client_secret,
         device_code=auth["deviceCode"],
@@ -1715,6 +1738,7 @@ async def _initiate_aws_sso(user_id: str, site: str) -> dict:
 class _AwsSsoSetupRequest(BaseModel):
     sso_start_url: str
     sso_region: str
+    aws_region: str = ""
 
 
 class _AwsSsoSelectRoleRequest(BaseModel):
@@ -1747,6 +1771,7 @@ async def aws_sso_put_setup(
     _save_aws_sso_client_config(site, {
         "sso_start_url": body.sso_start_url,
         "sso_region": body.sso_region,
+        "aws_region": body.aws_region or body.sso_region,
     })
     return {"status": "ok"}
 
@@ -1805,6 +1830,7 @@ async def aws_sso_auth_status(
         "client_secret": pending.client_secret,
         "sso_region": pending.sso_region,
         "sso_start_url": pending.sso_start_url,
+        "aws_region": pending.aws_region,
     }
     _save_oauth_token(user_id, "aws-sso-pending", pending_blob)
 

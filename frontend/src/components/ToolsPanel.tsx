@@ -23,6 +23,7 @@ interface AwsSsoTool {
   configured: boolean
   sso_start_url: string | null
   sso_region: string | null
+  aws_region: string | null
   authenticated: boolean
   account_id: string | null
   role_name: string | null
@@ -73,7 +74,7 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
   const [toggling, setToggling] = useState<Record<string, boolean>>({})
   const [oauthBanner, setOAuthBanner] = useState<{ tool: string; kind: 'success' | 'error'; message: string } | null>(null)
   // AWS SSO setup form
-  const [ssoSetup, setSsoSetup] = useState<{ start_url: string; region: string }>({ start_url: '', region: 'us-east-1' })
+  const [ssoSetup, setSsoSetup] = useState<{ start_url: string; region: string; aws_region: string }>({ start_url: '', region: 'us-east-1', aws_region: '' })
   const [savingSsoSetup, setSavingSsoSetup] = useState(false)
   // AWS SSO device-authorization flow
   const [ssoFlow, setSsoFlow] = useState<SsoFlow | null>(null)
@@ -122,6 +123,7 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
           setSsoSetup({
             start_url: ssoTool.sso_start_url ?? '',
             region: ssoTool.sso_region ?? 'us-east-1',
+            aws_region: ssoTool.aws_region ?? '',
           })
         }
       })
@@ -281,13 +283,14 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
   async function saveAwsSsoSetup() {
     const start_url = ssoSetup.start_url.trim()
     const region = ssoSetup.region.trim() || 'us-east-1'
+    const aws_region = ssoSetup.aws_region.trim() || region
     if (!start_url) return
     setSavingSsoSetup(true)
     try {
       const res = await fetch(`${apiBase}/aws-sso/setup?site=${encodeURIComponent(site)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
-        body: JSON.stringify({ sso_start_url: start_url, sso_region: region }),
+        body: JSON.stringify({ sso_start_url: start_url, sso_region: region, aws_region }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       loadStatus()
@@ -354,12 +357,12 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
           <p className="credentials-empty">No tools configured on this server.</p>
         )}
         {tools.map(([toolName, tool]) => (
-          <div key={toolName} className="credentials-skill">
-            <div className="credentials-skill-name" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span>{toolName}</span>
+          <div key={toolName} className="tool-card">
+            {/* ── Card header ── */}
+            <div className="tool-card-header">
+              <span className="tool-card-name">{toolName}</span>
               <button
-                className={`btn${tool.enabled ? ' btn-primary' : ''}`}
-                style={{ marginLeft: 'auto', padding: '2px 10px', fontSize: '0.75rem' }}
+                className={`btn tool-toggle-btn${tool.enabled ? ' btn-primary' : ''}`}
                 onClick={() => toggleEnabled(toolName, !tool.enabled)}
                 disabled={toggling[toolName]}
               >
@@ -367,209 +370,201 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
               </button>
             </div>
 
-            {tool.type === 'oauth' ? (
-              // ── OAuth tool ────────────────────────────────────────────────
-              <div className="credentials-oauth">
-                {tool.authenticated ? (
-                  <div className="credentials-oauth-status">
-                    <span className="credentials-badge credentials-badge--stored">Authenticated ✓</span>
-                    {tool.expires_at && (
-                      <span className="credentials-oauth-expiry">
-                        expires {new Date(tool.expires_at).toLocaleDateString()}
-                      </span>
-                    )}
-                    {tool.scope && (
-                      <span className="credentials-oauth-scope">scope: {tool.scope}</span>
-                    )}
-                  </div>
-                ) : (
-                  <span className="credentials-badge credentials-badge--missing">Not authenticated</span>
-                )}
-                <button
-                  className="btn btn-primary"
-                  onClick={() => startOAuth(toolName)}
-                  disabled={initiating[toolName]}
-                >
-                  {initiating[toolName]
-                    ? 'Redirecting…'
-                    : tool.authenticated
-                    ? 'Re-authenticate'
-                    : 'Authenticate via OAuth'}
-                </button>
-              </div>
-            ) : tool.type === 'aws-sso' ? (
-              // ── AWS SSO tool ──────────────────────────────────────────────
-              <div className="credentials-oauth">
-                {/* Config form — always shown so users can update URL/region */}
-                <div className="credentials-var">
-                  <div className="credentials-var-row" style={{ flexDirection: 'column', gap: '0.4rem' }}>
-                    <input
-                      className="credentials-input"
-                      placeholder="SSO start URL  (e.g. https://my-org.awsapps.com/start)"
-                      value={ssoSetup.start_url}
-                      onChange={(e) => setSsoSetup((p) => ({ ...p, start_url: e.target.value }))}
-                    />
-                    <input
-                      className="credentials-input"
-                      placeholder="SSO region  (e.g. us-east-1)"
-                      value={ssoSetup.region}
-                      onChange={(e) => setSsoSetup((p) => ({ ...p, region: e.target.value }))}
-                    />
-                    <button
-                      className="btn btn-primary"
-                      onClick={saveAwsSsoSetup}
-                      disabled={savingSsoSetup || !ssoSetup.start_url.trim()}
-                    >
-                      {savingSsoSetup ? 'Saving…' : 'Save SSO configuration'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* SSO error banner */}
-                {ssoError && (
-                  <div className="credentials-banner credentials-banner--error" style={{ margin: '0.5rem 0' }}>
-                    {ssoError}
-                    <button className="credentials-banner-dismiss" onClick={() => setSsoError(null)}>✕</button>
-                  </div>
-                )}
-
-                {/* Active device-authorization flow */}
-                {ssoFlow ? (
-                  <div style={{ marginTop: '0.75rem' }}>
-                    {ssoFlow.status === 'waiting' && (
-                      <>
-                        <p style={{ margin: '0 0 0.4rem', fontSize: '0.85rem' }}>
-                          AWS SSO sign-in opened in a new tab. Confirm this code on that page:
-                        </p>
-                        <div style={{
-                          fontSize: '1.6rem',
-                          fontWeight: 700,
-                          letterSpacing: '0.15em',
-                          fontFamily: 'monospace',
-                          margin: '0.4rem 0 0.75rem',
-                        }}>
-                          {ssoFlow.user_code}
-                        </div>
-                        <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', opacity: 0.7 }}>
-                          Waiting for approval…
-                        </p>
-                        <button className="btn" onClick={cancelSsoFlow}>Cancel</button>
-                      </>
-                    )}
-
-                    {ssoFlow.status === 'selecting-account' && (
-                      <>
-                        <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem' }}>Select an AWS account:</p>
-                        {ssoFlow.accounts.map((acc) => (
-                          <button
-                            key={acc.account_id}
-                            className="btn"
-                            onClick={() => selectSsoAccount(acc.account_id)}
-                            style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: '0.25rem' }}
-                          >
-                            {acc.account_name} <span style={{ opacity: 0.6, fontSize: '0.85em' }}>({acc.account_id})</span>
-                          </button>
-                        ))}
-                        <button className="btn" onClick={cancelSsoFlow} style={{ marginTop: '0.25rem' }}>Cancel</button>
-                      </>
-                    )}
-
-                    {ssoFlow.status === 'selecting-role' && (
-                      <>
-                        <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem' }}>Select a role:</p>
-                        {ssoFlow.roles.length === 0 && (
-                          <p style={{ opacity: 0.6, fontSize: '0.85rem' }}>Loading roles…</p>
-                        )}
-                        {ssoFlow.roles.map((r) => (
-                          <button
-                            key={r.role_name}
-                            className="btn"
-                            onClick={() => selectSsoRole(r.role_name)}
-                            style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: '0.25rem' }}
-                          >
-                            {r.role_name}
-                          </button>
-                        ))}
-                        <button className="btn" onClick={cancelSsoFlow} style={{ marginTop: '0.25rem' }}>Cancel</button>
-                      </>
-                    )}
-                  </div>
-                ) : tool.configured ? (
-                  // Sign-in status + button (no active flow)
-                  <>
+            {/* ── Card body ── */}
+            <div className="tool-card-body">
+              {tool.type === 'oauth' ? (
+                // ── OAuth tool ──────────────────────────────────────────────
+                <>
+                  <div className="tool-auth-status">
                     {tool.authenticated ? (
-                      <div className="credentials-oauth-status">
-                        <span className="credentials-badge credentials-badge--stored">Signed in ✓</span>
-                        {tool.account_id && (
-                          <span className="credentials-oauth-scope">account: {tool.account_id}</span>
-                        )}
-                        {tool.role_name && (
-                          <span className="credentials-oauth-scope">role: {tool.role_name}</span>
-                        )}
-                        {tool.expires_at && (
-                          <span className="credentials-oauth-expiry">
-                            expires {new Date(tool.expires_at).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
+                      <span className="credentials-badge credentials-badge--stored">Authenticated ✓</span>
                     ) : (
-                      <span className="credentials-badge credentials-badge--missing">Not signed in</span>
+                      <span className="credentials-badge credentials-badge--missing">Not authenticated</span>
                     )}
-                    <button
-                      className="btn btn-primary"
-                      onClick={startAwsSso}
-                      disabled={initiating['aws-sso']}
-                    >
-                      {initiating['aws-sso']
-                        ? 'Opening browser…'
-                        : tool.authenticated
-                        ? 'Re-authenticate'
-                        : 'Sign in with AWS SSO'}
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ) : tool.type === 'key' ? (
-              // ── Key-based tool ────────────────────────────────────────────
-              tool.vars.length === 0 ? (
-                <p className="credentials-no-vars">No credentials required.</p>
-              ) : (
-                tool.vars.map((varName) => (
-                  <div key={varName} className="credentials-var">
-                    <div className="credentials-var-label">
-                      <code className="credentials-var-name">{varName}</code>
-                      {tool.stored[varName] ? (
-                        <span className="credentials-badge credentials-badge--stored">Stored ✓</span>
-                      ) : (
-                        <span className="credentials-badge credentials-badge--missing">Not stored</span>
-                      )}
-                    </div>
-                    <div className="credentials-var-row">
+                    {tool.authenticated && (
+                      <div className="tool-auth-meta">
+                        {tool.expires_at && <span>Expires {new Date(tool.expires_at).toLocaleDateString()}</span>}
+                        {tool.scope && <span>Scope: {tool.scope}</span>}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => startOAuth(toolName)}
+                    disabled={initiating[toolName]}
+                  >
+                    {initiating[toolName]
+                      ? 'Redirecting…'
+                      : tool.authenticated
+                      ? 'Re-authenticate'
+                      : 'Authenticate via OAuth'}
+                  </button>
+                </>
+              ) : tool.type === 'aws-sso' ? (
+                // ── AWS SSO tool ────────────────────────────────────────────
+                <>
+                  {/* SSO config subsection */}
+                  <div className="tool-section">
+                    <div className="tool-section-label">Configuration</div>
+                    <div className="tool-section-fields">
                       <input
-                        type="password"
                         className="credentials-input"
-                        placeholder={tool.stored[varName] ? 'Enter new value to update…' : 'Enter value…'}
-                        value={inputs[varName] ?? ''}
-                        onChange={(e) =>
-                          setInputs((prev) => ({ ...prev, [varName]: e.target.value }))
-                        }
-                        onKeyDown={(e) => e.key === 'Enter' && saveVar(varName)}
+                        placeholder="SSO start URL (e.g. https://my-org.awsapps.com/start)"
+                        value={ssoSetup.start_url}
+                        onChange={(e) => setSsoSetup((p) => ({ ...p, start_url: e.target.value }))}
+                      />
+                      <input
+                        className="credentials-input"
+                        placeholder="SSO region (e.g. us-east-1)"
+                        value={ssoSetup.region}
+                        onChange={(e) => setSsoSetup((p) => ({ ...p, region: e.target.value }))}
+                      />
+                      <input
+                        className="credentials-input"
+                        placeholder="AWS resource region (e.g. us-west-2 — leave blank to use SSO region)"
+                        value={ssoSetup.aws_region}
+                        onChange={(e) => setSsoSetup((p) => ({ ...p, aws_region: e.target.value }))}
                       />
                       <button
                         className="btn btn-primary"
-                        onClick={() => saveVar(varName)}
-                        disabled={saving[varName] || !inputs[varName]?.trim()}
+                        onClick={saveAwsSsoSetup}
+                        disabled={savingSsoSetup || !ssoSetup.start_url.trim()}
                       >
-                        {flashSaved[varName] ? 'Saved!' : saving[varName] ? 'Saving…' : 'Save'}
+                        {savingSsoSetup ? 'Saving…' : 'Save'}
                       </button>
                     </div>
                   </div>
-                ))
-              )
-            ) : (
-              // ── No-auth tool ──────────────────────────────────────────────
-              <p className="credentials-no-vars">No credentials required.</p>
-            )}
+
+                  {/* SSO auth subsection */}
+                  {tool.configured && (
+                    <div className="tool-section">
+                      <div className="tool-section-label">Authentication</div>
+
+                      {ssoError && (
+                        <div className="credentials-banner credentials-banner--error">
+                          {ssoError}
+                          <button className="credentials-banner-dismiss" onClick={() => setSsoError(null)}>✕</button>
+                        </div>
+                      )}
+
+                      <div className="tool-auth-status">
+                        {tool.authenticated ? (
+                          <span className="credentials-badge credentials-badge--stored">Signed in ✓</span>
+                        ) : (
+                          <span className="credentials-badge credentials-badge--missing">Not signed in</span>
+                        )}
+                        {tool.authenticated && (
+                          <div className="tool-auth-meta">
+                            {tool.account_id && <span>Account: {tool.account_id}</span>}
+                            {tool.role_name && <span>Role: {tool.role_name}</span>}
+                            {tool.expires_at && <span>Expires {new Date(tool.expires_at).toLocaleDateString()}</span>}
+                          </div>
+                        )}
+                      </div>
+
+                      {ssoFlow ? (
+                        <div className="tool-sso-flow">
+                          {ssoFlow.status === 'waiting' && (
+                            <>
+                              <p className="tool-sso-hint">
+                                AWS SSO sign-in opened in a new tab. Confirm this code:
+                              </p>
+                              <div className="tool-sso-code">{ssoFlow.user_code}</div>
+                              <p className="tool-sso-waiting">Waiting for approval…</p>
+                              <button className="btn" onClick={cancelSsoFlow}>Cancel</button>
+                            </>
+                          )}
+                          {ssoFlow.status === 'selecting-account' && (
+                            <>
+                              <p className="tool-sso-hint">Select an AWS account:</p>
+                              {ssoFlow.accounts.map((acc) => (
+                                <button
+                                  key={acc.account_id}
+                                  className="btn tool-sso-option"
+                                  onClick={() => selectSsoAccount(acc.account_id)}
+                                >
+                                  {acc.account_name}
+                                  <span className="tool-sso-option-sub">{acc.account_id}</span>
+                                </button>
+                              ))}
+                              <button className="btn" onClick={cancelSsoFlow}>Cancel</button>
+                            </>
+                          )}
+                          {ssoFlow.status === 'selecting-role' && (
+                            <>
+                              <p className="tool-sso-hint">Select a role:</p>
+                              {ssoFlow.roles.length === 0 && (
+                                <p className="tool-sso-waiting">Loading roles…</p>
+                              )}
+                              {ssoFlow.roles.map((r) => (
+                                <button
+                                  key={r.role_name}
+                                  className="btn tool-sso-option"
+                                  onClick={() => selectSsoRole(r.role_name)}
+                                >
+                                  {r.role_name}
+                                </button>
+                              ))}
+                              <button className="btn" onClick={cancelSsoFlow}>Cancel</button>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          className="btn btn-primary"
+                          onClick={startAwsSso}
+                          disabled={initiating['aws-sso']}
+                        >
+                          {initiating['aws-sso']
+                            ? 'Opening browser…'
+                            : tool.authenticated
+                            ? 'Re-authenticate'
+                            : 'Sign in with AWS SSO'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : tool.type === 'key' ? (
+                // ── Key-based tool ───────────────────────────────────────────
+                tool.vars.length === 0 ? (
+                  <p className="credentials-no-vars">No credentials required.</p>
+                ) : (
+                  tool.vars.map((varName) => (
+                    <div key={varName} className="credentials-var">
+                      <div className="credentials-var-label">
+                        <code className="credentials-var-name">{varName}</code>
+                        {tool.stored[varName] ? (
+                          <span className="credentials-badge credentials-badge--stored">Stored ✓</span>
+                        ) : (
+                          <span className="credentials-badge credentials-badge--missing">Not stored</span>
+                        )}
+                      </div>
+                      <div className="credentials-var-row">
+                        <input
+                          type="password"
+                          className="credentials-input"
+                          placeholder={tool.stored[varName] ? 'Enter new value to update…' : 'Enter value…'}
+                          value={inputs[varName] ?? ''}
+                          onChange={(e) => setInputs((prev) => ({ ...prev, [varName]: e.target.value }))}
+                          onKeyDown={(e) => e.key === 'Enter' && saveVar(varName)}
+                        />
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => saveVar(varName)}
+                          disabled={saving[varName] || !inputs[varName]?.trim()}
+                        >
+                          {flashSaved[varName] ? 'Saved!' : saving[varName] ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )
+              ) : (
+                // ── No-auth tool ─────────────────────────────────────────────
+                <p className="credentials-no-vars">No credentials required.</p>
+              )}
+            </div>
           </div>
         ))}
       </div>

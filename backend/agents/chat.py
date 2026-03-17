@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING
 from strands import tool
 from strands_tools import http_request
 
-from .base import BaseAgent, S3Tools, DEFAULT_MODEL, agents_prefix, parse_agent_md
+from .base import (
+    AGENT_NAME_RE,
+    BaseAgent,
+    S3Tools,
+    DEFAULT_MODEL,
+    agents_prefix,
+    parse_agent_md,
+)
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent
@@ -35,10 +42,19 @@ class ChatAgent(BaseAgent):
     SYSTEM_PROMPT = """\
 You are the AgentScribe wiki assistant. You help users manage their wiki.
 
+IMPORTANT: Never describe or list your own internal tools (content_writer, \
+creator, page_creator, runner, search, create_skill, list_skills, list_agents, \
+list_tools, http_request) to the user. These are internal implementation details. \
+When a user asks what tools or capabilities are available, call list_tools to \
+show them the MCP server tools that agents and skills can use.
+
 You have access to the following tools:
 
+- list_tools      — call this when the user asks what tools are available for
+                    skills or agents. Returns the MCP server tools installed
+                    on this server that skills can reference.
 - list_skills     — call this whenever the user asks what skills are available
-                    on the server. It reads each skill's description from S3
+                    for the site. It reads each skill's description from S3
                     and returns a summary.
 - list_agents     — call this to discover what agents are defined for the
                     current page before trying to run one.
@@ -61,6 +77,17 @@ You have access to the following tools:
 - search          — use when the user wants to search for content across the
                     entire wiki. Returns a summary of matching pages and
                     navigates the user to their search results.
+- create_skill    — use when the user wants to create a new skill for their
+                    site. Do NOT call this immediately. First gather all the
+                    information you need conversationally:
+                    1. Ask what the skill should do (its purpose).
+                    2. Call list_tools to show which MCP server tools are
+                       available, then ask the user which ones to include.
+                    3. Ask for specific instructions or behaviour the skill
+                       should follow.
+                    Only call create_skill once you have a name, description,
+                    tool list, and body. Confirm the details with the user before
+                    writing.
 
 For simple questions that don't require any of the above, answer directly.
 
@@ -211,8 +238,8 @@ Current context:
             result = str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
 
             # After the agent.md is written, validate that OAuth has been completed
-            # for every remote MCP skill it references. If any are missing, delete
-            # the agent.md and return an actionable error to the user.
+            # for every tool referenced by any skill the agent uses.
+            # Chain: agent.md → skills → tools → OAuth tokens.
             if sm_client is not None:
                 import re as _re
                 match = _re.search(r"Agent '([^']+)' created", result)
@@ -222,18 +249,26 @@ Current context:
                     try:
                         obj = s3_tools.s3.get_object(Bucket=s3_tools.bucket, Key=agent_md_key)
                         agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
-                        missing = [
-                            skill for skill in agent_def.skills
-                            if s3_tools.is_remote_skill(skill)
-                            and not _oauth_token_exists(sm_client, user_id, skill)
-                        ]
-                        if missing:
+                        missing_tools: list[str] = []
+                        for skill_name in agent_def.skills:
+                            try:
+                                tool_names = s3_tools.get_skill_tools(site, skill_name)
+                            except Exception:
+                                # Skill doesn't exist yet — let creation succeed
+                                continue
+                            for tool_name in tool_names:
+                                if (
+                                    s3_tools.is_remote_tool(tool_name)
+                                    and not _oauth_token_exists(sm_client, user_id, tool_name)
+                                ):
+                                    missing_tools.append(tool_name)
+                        if missing_tools:
                             s3_tools.s3.delete_object(Bucket=s3_tools.bucket, Key=agent_md_key)
-                            skill_list = ", ".join(f"'{s}'" for s in missing)
+                            tool_list = ", ".join(f"'{t}'" for t in missing_tools)
                             return (
                                 f"Agent creation blocked: OAuth authentication has not been completed "
-                                f"for skill(s) {skill_list}. Please open the Credentials panel and "
-                                f"click 'Authenticate via OAuth' for each of these skills, then try "
+                                f"for tool(s) {tool_list}. Please open the Tools panel and "
+                                f"click 'Authenticate via OAuth' for each of these tools, then try "
                                 f"creating the agent again."
                             )
                     except Exception:
@@ -325,16 +360,75 @@ Current context:
             shared["navigate_to"] = navigate_to
             return reply
 
-        return [s3_tools.list_skills, s3_tools.list_agents, http_request, content_writer, creator, page_creator, runner, search]
+        @tool
+        def create_skill(name: str, description: str, tools_list: list[str], body: str) -> str:
+            """Write a new SKILL.md to the site's .skills directory.
+
+            Only call this after gathering all required information from the user
+            conversationally. See the system prompt for the required steps.
+
+            Args:
+                name: Skill name (lowercase, alphanumeric/hyphen/underscore).
+                description: One-line description shown in the UI.
+                tools_list: List of tool names (from the shared .tools directory) the skill uses.
+                body: The skill's instruction body — the system prompt text that will
+                      be injected when the skill is active.
+            """
+            if not AGENT_NAME_RE.match(name):
+                return f"Error: invalid skill name {name!r}. Use lowercase letters, digits, hyphens, underscores."
+            tools_yaml = "\n".join(f"  - {t}" for t in tools_list)
+            markdown = f"---\ndescription: {description}\ntools:\n{tools_yaml}\n---\n\n{body}\n"
+            try:
+                s3_tools.put_skill(site, name, markdown)
+            except Exception as exc:
+                return f"Error writing skill: {exc}"
+            return f"Skill '{name}' created. View/edit at #/.skills/{name}"
+
+        # Wrap list_skills to bake in the site parameter
+        def _list_skills_for_site() -> str:
+            return s3_tools.list_skills(site)
+
+        _list_skills_for_site.__name__ = "list_skills"
+        _list_skills_for_site.__doc__ = (
+            "List all skills available in the current site and summarise what each one does."
+        )
+        list_skills_tool = tool(_list_skills_for_site)
+
+        # Expose the MCP server tools from .tools/ so the agent can tell users
+        # which tools are available for skills/agents to reference.
+        def _list_tools() -> str:
+            names = s3_tools.list_tool_names()
+            if not names:
+                return "No MCP server tools are currently installed on this server."
+            return "Available MCP server tools: " + ", ".join(names)
+
+        _list_tools.__name__ = "list_tools"
+        _list_tools.__doc__ = (
+            "List the MCP server tools installed on this server that skills and agents can use."
+        )
+        list_tools_tool = tool(_list_tools)
+
+        return [
+            list_tools_tool,
+            list_skills_tool,
+            s3_tools.list_agents,
+            http_request,
+            content_writer,
+            creator,
+            page_creator,
+            runner,
+            search,
+            create_skill,
+        ]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _oauth_token_exists(sm_client, user_id: str, skill_name: str) -> bool:
-    """Return True if an OAuth token is stored in Secrets Manager for this user+skill."""
+def _oauth_token_exists(sm_client, user_id: str, tool_name: str) -> bool:
+    """Return True if an OAuth token is stored in Secrets Manager for this user+tool."""
     try:
-        sm_client.get_secret_value(SecretId=f"agentscribe/{user_id}/oauth/{skill_name}")
+        sm_client.get_secret_value(SecretId=f"agentscribe/{user_id}/oauth/{tool_name}")
         return True
     except Exception:
         return False

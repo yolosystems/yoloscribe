@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "aws-support": {
+      "url": "http://aws-support.yolo.svc.cluster.local:8080/mcp",
+      "transport": "streamable-http",
+      "auth": "aws-sso"
+    }
+  }
+}

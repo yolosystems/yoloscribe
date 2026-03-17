@@ -76,16 +76,16 @@ def _enqueue_index_job(content_key: str) -> None:
 
 
 class OAuthTokenError(Exception):
-    """Raised when an OAuth token cannot be loaded or refreshed for a skill."""
+    """Raised when an OAuth token cannot be loaded or refreshed for a tool."""
 
-    def __init__(self, skill_name: str, reason: str) -> None:
-        super().__init__(f"OAuth error for skill '{skill_name}': {reason}")
-        self.skill_name = skill_name
+    def __init__(self, tool_name: str, reason: str) -> None:
+        super().__init__(f"OAuth error for tool '{tool_name}': {reason}")
+        self.tool_name = tool_name
         self.reason = reason
 
 
-def _load_and_refresh_oauth_token(skill_name: str, user_id: str, sm) -> dict:
-    """Load the OAuth token for a skill from Secrets Manager.
+def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
+    """Load the OAuth token for a tool from Secrets Manager.
 
     If the token is within 5 minutes of expiry and a refresh token is available,
     refreshes proactively and writes the updated token back to Secrets Manager.
@@ -96,17 +96,17 @@ def _load_and_refresh_oauth_token(skill_name: str, user_id: str, sm) -> dict:
     from mcp_oauth import refresh_access_token as _refresh
     from mcp_oauth.discovery import AuthorizationServerMetadata
 
-    secret_id = f"agentscribe/{user_id}/oauth/{skill_name}"
+    secret_id = f"agentscribe/{user_id}/oauth/{tool_name}"
     try:
         resp = sm.get_secret_value(SecretId=secret_id)
         token_data: dict = json.loads(resp["SecretString"])
     except sm.exceptions.ResourceNotFoundException:
         raise OAuthTokenError(
-            skill_name,
-            "No OAuth token found. Please open the Credentials panel and authenticate this skill.",
+            tool_name,
+            "No OAuth token found. Please open the Tools panel and authenticate this tool.",
         )
     except Exception as exc:
-        raise OAuthTokenError(skill_name, f"Failed to read token from Secrets Manager: {exc}")
+        raise OAuthTokenError(tool_name, f"Failed to read token from Secrets Manager: {exc}")
 
     # Proactive refresh: refresh if the token expires within 5 minutes
     expires_at = token_data.get("expires_at", 0)
@@ -149,24 +149,118 @@ def _load_and_refresh_oauth_token(skill_name: str, user_id: str, sm) -> dict:
 
         try:
             sm.put_secret_value(SecretId=secret_id, SecretString=json.dumps(token_data))
-            log.info("Refreshed and persisted OAuth token for skill '%s'", skill_name)
+            log.info("Refreshed and persisted OAuth token for tool '%s'", tool_name)
         except Exception as exc:
-            log.warning("Failed to persist refreshed token for skill '%s': %s", skill_name, exc)
+            log.warning("Failed to persist refreshed token for tool '%s': %s", tool_name, exc)
 
     return token_data
+
+
+def _get_aws_sso_credential_headers(user_id: str, sm) -> dict[str, str]:
+    """Exchange the stored AWS SSO access token for temporary IAM credentials.
+
+    Reads the aws-sso secret from Secrets Manager, calls sso:GetRoleCredentials,
+    and returns credential headers to inject into internal MCP server requests.
+
+    Raises OAuthTokenError if the token is missing, expired, or the exchange fails.
+    """
+    secret_id = f"agentscribe/{user_id}/oauth/aws-sso"
+    try:
+        resp = sm.get_secret_value(SecretId=secret_id)
+        token_data: dict = json.loads(resp["SecretString"])
+    except sm.exceptions.ResourceNotFoundException:
+        raise OAuthTokenError(
+            "aws-sso",
+            "No AWS SSO token found. Please open the Tools panel and sign in with AWS SSO.",
+        )
+    except Exception as exc:
+        raise OAuthTokenError("aws-sso", f"Failed to read AWS SSO token: {exc}")
+
+    access_token: str = token_data.get("access_token", "")
+    account_id: str = token_data.get("account_id", "")
+    role_name: str = token_data.get("role_name", "")
+    sso_region: str = token_data.get("sso_region", "us-east-1")
+    aws_region: str = token_data.get("aws_region", sso_region)
+
+    if not access_token or not account_id or not role_name:
+        raise OAuthTokenError(
+            "aws-sso",
+            "AWS SSO token is incomplete (missing account_id or role_name). Please re-authenticate.",
+        )
+
+    # Check token expiry
+    expires_at = token_data.get("expires_at", 0)
+    if time.time() > expires_at - 60:
+        raise OAuthTokenError(
+            "aws-sso",
+            "AWS SSO token has expired. Please open the Tools panel and sign in with AWS SSO again.",
+        )
+
+    sso = _session.client("sso", region_name=sso_region)
+    try:
+        creds_resp = sso.get_role_credentials(
+            accountId=account_id,
+            roleName=role_name,
+            accessToken=access_token,
+        )
+    except Exception as exc:
+        raise OAuthTokenError("aws-sso", f"Failed to get role credentials: {exc}")
+
+    role_creds = creds_resp["roleCredentials"]
+    return {
+        "X-Aws-Access-Key-Id": role_creds["accessKeyId"],
+        "X-Aws-Secret-Access-Key": role_creds["secretAccessKey"],
+        "X-Aws-Session-Token": role_creds.get("sessionToken", ""),
+        "X-Aws-Region": aws_region,
+    }
+
+
+# ── Frontmatter parser ────────────────────────────────────────────────────────
+
+
+def _parse_skill_tools(text: str) -> list[str]:
+    """Extract the tools list from a SKILL.md frontmatter block.
+
+    Returns an empty list if parsing fails or the tools key is absent.
+    """
+    if not text.startswith("---"):
+        return []
+    end = text.find("\n---", 3)
+    if end == -1:
+        return []
+    fm_text = text[3:end].strip()
+    tools: list[str] = []
+    in_tools = False
+    for line in fm_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("tools:"):
+            in_tools = True
+            value = stripped[len("tools:"):].strip()
+            if value:  # inline list or scalar
+                tools = [v.strip().strip("\"'") for v in value.strip("[]").split(",") if v.strip()]
+            continue
+        if in_tools and stripped.startswith("- "):
+            tools.append(stripped[2:].strip().strip("\"'"))
+        elif ":" in stripped and not stripped.startswith("- "):
+            in_tools = False
+    return tools
 
 
 # ── MCP client construction ───────────────────────────────────────────────────
 
 
-def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuthTokenError]]:
-    """Build Strands MCPClient instances for all skills.
+def _build_mcp_clients(skill_names: list[str], site: str, s3, sm) -> tuple[list, list[OAuthTokenError]]:
+    """Build Strands MCPClient instances for all skills used by an agent.
+
+    Resolution chain: agent.md → skill names → SKILL.md (tools list) → .tools/{name}/mcp.json
 
     Returns (clients, oauth_errors). OAuth errors are collected rather than
     raised so all missing tokens can be reported together.
 
-    Remote skills with "auth": "oauth": connects via streamable HTTP with a Bearer token.
-    Remote skills without "auth" (or "auth": "none"): connects via streamable HTTP unauthenticated.
+    Remote tools with "auth": "oauth": connects via streamable HTTP with a Bearer token.
+    Remote tools without "auth" (or "auth": "none"): connects via streamable HTTP unauthenticated.
     """
     try:
         from mcp.client.streamable_http import streamablehttp_client
@@ -178,38 +272,63 @@ def _build_mcp_clients(skill_names: list[str], s3, sm) -> tuple[list, list[OAuth
     clients: list = []
     errors: list[OAuthTokenError] = []
 
-    for skill in skill_names:
-        key = f".skills/{skill}/mcp.json"
+    for skill_name in skill_names:
+        # Step 1: load SKILL.md to get the list of tool names
+        skill_key = f"{site}/.skills/{skill_name}/SKILL.md"
         try:
-            obj = s3.get_object(Bucket=BUCKET, Key=key)
-            config = json.loads(obj["Body"].read().decode("utf-8"))
+            obj = s3.get_object(Bucket=BUCKET, Key=skill_key)
+            skill_text = obj["Body"].read().decode("utf-8")
+            tool_names = _parse_skill_tools(skill_text)
         except Exception as exc:
-            log.warning("Failed to read mcp.json for skill '%s': %s", skill, exc)
+            log.warning("Failed to read SKILL.md for skill '%s': %s", skill_name, exc)
             continue
 
-        for server_name, server_cfg in config.get("mcpServers", {}).items():
-            if "url" not in server_cfg:
-                log.warning("Skipping non-remote MCP server '%s' in skill '%s'", server_name, skill)
+        if not tool_names:
+            log.warning("Skill '%s' has no tools defined — skipping", skill_name)
+            continue
+
+        # Step 2: for each tool, load mcp.json and build an MCP client
+        for tool_name in tool_names:
+            tool_key = f".tools/{tool_name}/mcp.json"
+            try:
+                obj = s3.get_object(Bucket=BUCKET, Key=tool_key)
+                config = json.loads(obj["Body"].read().decode("utf-8"))
+            except Exception as exc:
+                log.warning("Failed to read mcp.json for tool '%s': %s", tool_name, exc)
                 continue
 
-            auth = server_cfg.get("auth", "none")
-            headers: dict[str, str] = {}
-            if auth == "oauth":
-                try:
-                    token_data = _load_and_refresh_oauth_token(skill, USER_ID, sm)
-                except OAuthTokenError as exc:
-                    errors.append(exc)
+            for server_name, server_cfg in config.get("mcpServers", {}).items():
+                if "url" not in server_cfg:
+                    log.warning("Skipping non-remote MCP server '%s' in tool '%s'", server_name, tool_name)
                     continue
-                headers["Authorization"] = f"Bearer {token_data['access_token']}"
 
-            server_url = server_cfg["url"]
-            log.info("Building remote MCP client for skill '%s' server '%s' (auth=%s)", skill, server_name, auth)
-            clients.append(
-                MCPClient(
-                    lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
-                    prefix=skill,
+                auth = server_cfg.get("auth", "none")
+                headers: dict[str, str] = {}
+                if auth == "oauth":
+                    try:
+                        token_data = _load_and_refresh_oauth_token(tool_name, USER_ID, sm)
+                    except OAuthTokenError as exc:
+                        errors.append(exc)
+                        continue
+                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
+                elif auth == "aws-sso":
+                    try:
+                        headers = _get_aws_sso_credential_headers(USER_ID, sm)
+                    except OAuthTokenError as exc:
+                        errors.append(exc)
+                        continue
+
+                server_url = server_cfg["url"]
+                log.info(
+                    "Building remote MCP client for tool '%s' server '%s' (auth=%s, skill=%s)",
+                    tool_name, server_name, auth, skill_name,
                 )
-            )
+                clients.append(
+                    MCPClient(
+                        lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
+                        prefix=tool_name,
+                    )
+                )
 
     return clients, errors
 
@@ -280,11 +399,12 @@ def main() -> None:
             content = ""
 
         # 3. Build MCP clients; collect OAuth errors rather than raising immediately
-        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, s3, sm)
+        site = AGENT_MD_KEY.split("/")[0]
+        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, sm)
         if oauth_errors:
             error_block = (
                 "\n".join(
-                    f"> **Agent Error** (skill `{e.skill_name}`): {e.reason}"
+                    f"> **Agent Error** (tool `{e.tool_name}`): {e.reason}"
                     for e in oauth_errors
                 )
                 + "\n\n"
