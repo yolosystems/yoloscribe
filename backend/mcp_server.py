@@ -22,7 +22,7 @@ import uuid
 from typing import Any
 
 import httpx
-import pyjwt
+import jwt as pyjwt
 from fastmcp import Context, FastMCP
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware

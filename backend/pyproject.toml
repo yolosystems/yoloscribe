@@ -4,10 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.115.0",
-    "uvicorn[standard]==0.30.6",
+    "uvicorn[standard]>=0.35.0",
     "boto3>=1.42.0",
     "python-multipart==0.0.9",
-    "pydantic==2.8.2",
+    "pydantic>=2.12.2",
     "strands-agents[anthropic]>=0.1.0",
     "strands-agents-tools>=0.1.0",
     "kubernetes>=29.0.0",
