@@ -88,11 +88,18 @@ async def _lookup_site(user_id: str, supabase_url: str, supabase_key: str) -> st
 
 
 class _MCPAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, jwks_client, supabase_url: str, supabase_key: str) -> None:
+    def __init__(self, app, jwks_client, supabase_url: str, supabase_key: str, base_url: str = "") -> None:
         super().__init__(app)
         self._jwks = jwks_client
         self._supa_url = supabase_url
         self._supa_key = supabase_key
+        self._base_url = base_url
+
+    def _www_authenticate(self) -> str:
+        if self._base_url:
+            metadata_url = f"{self._base_url}/.well-known/oauth-authorization-server"
+            return f'Bearer realm="AgentScribe", resource_metadata="{metadata_url}"'
+        return 'Bearer realm="AgentScribe"'
 
     async def dispatch(self, request: Request, call_next):
         # CORS preflights pass through; CORS headers are added by the parent app.
@@ -104,6 +111,7 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "Missing or invalid Authorization header"},
                 status_code=401,
+                headers={"WWW-Authenticate": self._www_authenticate()},
             )
 
         token = auth[7:]
@@ -118,7 +126,11 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
             user_id: str = payload["sub"]
             email: str | None = payload.get("email")
         except pyjwt.exceptions.PyJWTError as exc:
-            return JSONResponse({"error": f"Invalid token: {exc}"}, status_code=401)
+            return JSONResponse(
+                {"error": f"Invalid token: {exc}"},
+                status_code=401,
+                headers={"WWW-Authenticate": self._www_authenticate()},
+            )
 
         site = await _lookup_site(user_id, self._supa_url, self._supa_key)
         if not site:
@@ -197,6 +209,7 @@ def create_mcp_app(
     supabase_service_role_key: str,
     sqs_indexing_client,
     sqs_indexing_queue_url: str,
+    base_url: str = "",
 ):
     """Create and return the FastMCP ASGI app, ready to mount at /mcp/v1."""
     mcp = FastMCP(
@@ -728,6 +741,7 @@ def create_mcp_app(
                 jwks_client=jwks_client,
                 supabase_url=supabase_url,
                 supabase_key=supabase_service_role_key,
+                base_url=base_url,
             )
         ],
     )

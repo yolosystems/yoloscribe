@@ -268,6 +268,7 @@ if _jwks_client is not None:
         supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY,
         sqs_indexing_client=sqs_indexing,
         sqs_indexing_queue_url=SQS_INDEXING_QUEUE_URL,
+        base_url=_mcp_api_base(),
     )
     app.mount("/mcp/v1", _mcp_app)
     logging.info("MCP server mounted at /mcp/v1")
