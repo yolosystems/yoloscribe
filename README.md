@@ -190,4 +190,3 @@ Agents run asynchronously when triggered via the chat interface or the MCP serve
 
 [GNU Affero General Public License v3.0](LICENSE) — if you run a modified version as a service, you must open source your changes.
 
-For a managed, hosted version without the operational overhead, [Yolo Scribe Cloud](https://runyolo.dev) is coming soon.
