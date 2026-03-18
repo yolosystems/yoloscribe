@@ -2327,12 +2327,16 @@ async def mcp_oauth_authorize(
         raise HTTPException(status_code=400, detail="Only response_type=code is supported")
     if code_challenge_method != "S256":
         raise HTTPException(status_code=400, detail="Only S256 code_challenge_method is supported")
-    if client_id not in _mcp_dcr_clients:
-        raise HTTPException(status_code=401, detail="Unknown client_id — register via POST /mcp/oauth/register")
 
-    registered = _mcp_dcr_clients[client_id]
-    if redirect_uri not in registered.redirect_uris:
-        raise HTTPException(status_code=400, detail="redirect_uri not registered for this client")
+    # Validate redirect_uri: must be loopback (Claude Code) or registered via DCR.
+    # We don't require prior DCR registration here — server reloads wipe in-memory
+    # state and Claude Code would silently re-register anyway. PKCE (S256) provides
+    # the actual security; client_id is just a correlation identifier.
+    parsed_redir = urllib.parse.urlparse(redirect_uri)
+    is_loopback = parsed_redir.hostname in ("localhost", "127.0.0.1", "::1")
+    registered = _mcp_dcr_clients.get(client_id)
+    if not is_loopback and (registered is None or redirect_uri not in registered.redirect_uris):
+        raise HTTPException(status_code=400, detail="redirect_uri must be a loopback address or pre-registered via DCR")
 
     if not SUPABASE_URL:
         raise HTTPException(status_code=503, detail="Supabase is not configured on this server")
