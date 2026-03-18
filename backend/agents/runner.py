@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from strands import tool
 
 from .base import BaseAgent, S3Tools, agents_prefix
+from .models import resolve_model_key
 
 if TYPE_CHECKING:
     import mypy_boto3_sqs
@@ -41,12 +42,10 @@ Current context:
         s3_tools: S3Tools,
         sqs_queue_url: str,
         sqs_client: "mypy_boto3_sqs.SQSClient",
-        model_id: str = "",
+        model_key: str = "",
         user_id: str = "knuth",
         **kwargs,
     ) -> None:
-        from .base import DEFAULT_MODEL
-
         queue_tool = _make_queue_tool(
             s3_tools=s3_tools,
             sqs_client=sqs_client,
@@ -55,7 +54,7 @@ Current context:
         )
         super().__init__(
             tools=[s3_tools.list_agents, queue_tool],
-            model_id=model_id or DEFAULT_MODEL,
+            model_key=model_key or resolve_model_key("AGENTSCRIBE_RUNNER_MODEL", "AGENTSCRIBE_MODEL"),
             **kwargs,
         )
 

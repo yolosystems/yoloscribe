@@ -9,12 +9,11 @@ import re
 from typing import TYPE_CHECKING
 
 from strands import Agent, ModelRetryStrategy, tool
-from strands.models.anthropic import AnthropicModel
+
+from .models import DEFAULT_MODEL_KEY, build_strands_model
 
 if TYPE_CHECKING:
     import mypy_boto3_s3
-
-DEFAULT_MODEL = "claude-opus-4-6"
 
 # ── S3 path helpers ───────────────────────────────────────────────────────────
 
@@ -304,6 +303,7 @@ class S3Tools:
         page_path: str = "",
         schedule: str = "",
         timezone: str = "",
+        model: str = "",
     ) -> str:
         """Create or overwrite an agent.md file in S3.
 
@@ -315,6 +315,8 @@ class S3Tools:
             page_path: Relative page path; empty for root.
             schedule: Optional cron expression for scheduled execution (e.g. "0 * * * *").
             timezone: Optional timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
+            model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
+                   Leave blank to use the server default.
         """
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
@@ -324,6 +326,8 @@ class S3Tools:
             optional_sections += f"## Schedule\n\n{schedule}\n\n"
         if timezone:
             optional_sections += f"## Timezone\n\n{timezone}\n\n"
+        if model:
+            optional_sections += f"## Model\n\n{model}\n\n"
         content = (
             f"# Agent: {agent_name}\n\n"
             f"## Description\n\n{description}\n\n"
@@ -378,6 +382,7 @@ class AgentDefinition:
     skills: list[str]
     schedule: str = ""
     timezone: str = ""
+    model: str = ""
 
 
 @dataclasses.dataclass
@@ -431,6 +436,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     description = _section_text("Description")
     schedule = _section_text("Schedule")
     timezone = _section_text("Timezone")
+    model = _section_text("Model")
     skills = [
         line[2:].strip()
         for line in sections.get("Skills", [])
@@ -443,6 +449,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         skills=skills,
         schedule=schedule,
         timezone=timezone,
+        model=model,
     )
 
 
@@ -462,16 +469,10 @@ class BaseAgent(Agent):
     def __init__(
         self,
         tools: list,
-        model_id: str = DEFAULT_MODEL,
+        model_key: str = DEFAULT_MODEL_KEY,
         **prompt_vars,
     ) -> None:
-        model = AnthropicModel(
-            model_id=model_id,
-            max_tokens=4096,
-            # Disable SDK-level retries so Strands' retry_strategy is the
-            # single retry layer with proper exponential backoff.
-            client_args={"max_retries": 0},
-        )
+        model = build_strands_model(model_key)
         formatted_prompt = self.SYSTEM_PROMPT.format(**prompt_vars) if prompt_vars else self.SYSTEM_PROMPT
         super().__init__(
             system_prompt=formatted_prompt,

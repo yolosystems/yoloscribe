@@ -30,7 +30,7 @@ from mcp_oauth.oauth_flow import exchange_code
 from pydantic import BaseModel
 
 from agents import ChatAgent
-from agents.base import DEFAULT_MODEL, agents_prefix, tools_prefix, skills_prefix
+from agents.base import agents_prefix, tools_prefix, skills_prefix
 
 import jwt as pyjwt
 from jwt import PyJWKClient
@@ -79,7 +79,6 @@ SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
-MODEL = os.environ.get("AGENTSCRIBE_MODEL", DEFAULT_MODEL)
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 # In production FRONTEND_URL is derived from CLOUDFRONT_DOMAIN.
@@ -178,7 +177,6 @@ def _cleanup_aws_sso_state() -> None:
 chat_agent = ChatAgent(
     s3=s3,
     bucket=S3_BUCKET,
-    model_id=MODEL,
     sqs_client=sqs,
     sqs_queue_url=SQS_QUEUE_URL,
     sm_client=sm,
