@@ -37,6 +37,9 @@ Every "site" is an S3 prefix. The bucket layout is:
   .skills/{name}/skill.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
   .user/notifications.md              # owner notification inbox (access requests)
+  .mcp/agents/{uuid}/meta.json        # remote MCP agent session metadata
+  .mcp/agents/{uuid}/context.json     # remote MCP agent session context
+  .archive/{page}/content.md          # soft-deleted page archive
 ```
 
 `settings.json` schema: `{"visibility": "public"|"private"|"shared", "shared_with": [{"email": "...", "access": "view"|"write"}]}`
@@ -106,6 +109,21 @@ Parsed at runtime by the async worker (not the web process).
 
 ### `mcp.json` format
 Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn MCP subprocesses. Environment variable placeholders `${VAR}` are substituted at load time.
+
+### Remote MCP Server (`backend/mcp_server.py`)
+Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, and agent session management for Claude Code and other MCP-compatible AI agents.
+
+**Auth:** Every request must carry a Supabase JWT as `Authorization: Bearer <token>`. The JWT is validated against the Supabase JWKS endpoint; the user's site is resolved from the `user_site` table (5-minute in-memory cache).
+
+**Tools:** `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`, `search_wiki`, `search_semantic`, `agent_create`, `agent_get_status`, `agent_update_context`, `agent_get_context`, `agent_list`.
+
+All operations are scoped to the authenticated user's site. Agent sessions (`.mcp/agents/{uuid}/`) are distinct from agent.md runner definitions.
+
+**Connect with Claude Code:**
+```bash
+claude mcp add --transport http agentscribe https://<your-domain>/mcp/v1 \
+  --header "Authorization: Bearer <supabase-jwt>"
+```
 
 ## Environment Variables
 

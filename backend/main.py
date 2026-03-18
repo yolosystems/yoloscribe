@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from agents import ChatAgent
 from agents.base import agents_prefix, tools_prefix, skills_prefix
+from mcp_server import create_mcp_app
 
 import jwt as pyjwt
 from jwt import PyJWKClient
@@ -49,6 +50,7 @@ _OPENAPI_TAGS = [
     {"name": "secrets", "description": "Manage per-user credentials stored in AWS Secrets Manager."},
     {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
     {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems."},
+    {"name": "mcp", "description": "Remote MCP server for AI coding agents (Claude Code, etc.)."},
 ]
 
 app = FastAPI(
@@ -181,6 +183,30 @@ chat_agent = ChatAgent(
     sqs_queue_url=SQS_QUEUE_URL,
     sm_client=sm,
 )
+
+# ── Remote MCP server ─────────────────────────────────────────────────────────
+
+BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+
+if _jwks_client is not None:
+    _mcp_app = create_mcp_app(
+        s3_client=s3,
+        bucket=S3_BUCKET,
+        s3vectors_client=s3vectors,
+        vectors_bucket=S3_VECTORS_BUCKET,
+        vectors_index=S3_VECTORS_INDEX_NAME,
+        bedrock_embedding_model=BEDROCK_EMBEDDING_MODEL,
+        bedrock_region=AWS_REGION,
+        jwks_client=_jwks_client,
+        supabase_url=SUPABASE_URL,
+        supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY,
+        sqs_indexing_client=sqs_indexing,
+        sqs_indexing_queue_url=SQS_INDEXING_QUEUE_URL,
+    )
+    app.mount("/mcp/v1", _mcp_app)
+    logging.info("MCP server mounted at /mcp/v1")
+else:
+    logging.warning("MCP server not mounted: SUPABASE_URL is not configured")
 
 # ── Path safety ───────────────────────────────────────────────────────────────
 # Allowed writable paths:

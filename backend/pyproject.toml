@@ -13,6 +13,7 @@ dependencies = [
     "kubernetes>=29.0.0",
     "pyjwt[crypto]>=2.8.0",
     "mcp-oauth",
+    "fastmcp>=2.14.0",
 ]
 
 [tool.uv]
