@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .base import BaseAgent, S3Tools
+from .models import resolve_model_key
 
 
 class ContentWriterAgent(BaseAgent):
@@ -25,10 +26,9 @@ Always preserve any content that the user did not ask to change.
 When editing, produce the COMPLETE updated document, not just the changed section.
 """
 
-    def __init__(self, s3_tools: S3Tools, model_id: str = "", **kwargs) -> None:
-        from .base import DEFAULT_MODEL
+    def __init__(self, s3_tools: S3Tools, model_key: str = "", **kwargs) -> None:
         super().__init__(
             tools=[s3_tools.get_content, s3_tools.put_content],
-            model_id=model_id or DEFAULT_MODEL,
+            model_key=model_key or resolve_model_key("AGENTSCRIBE_WRITER_MODEL", "AGENTSCRIBE_MODEL"),
             **kwargs,
         )

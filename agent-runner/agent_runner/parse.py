@@ -12,6 +12,7 @@ class AgentDefinition:
     skills: list[str]
     schedule: str = ""
     timezone: str = ""
+    model: str = ""
 
 
 def parse_agent_md(text: str) -> AgentDefinition:
@@ -57,6 +58,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     description = _section_text("Description")
     schedule = _section_text("Schedule")
     timezone = _section_text("Timezone")
+    model = _section_text("Model")
     skills = [
         line[2:].strip()
         for line in sections.get("Skills", [])
@@ -69,4 +71,5 @@ def parse_agent_md(text: str) -> AgentDefinition:
         skills=skills,
         schedule=schedule,
         timezone=timezone,
+        model=model,
     )

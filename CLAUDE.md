@@ -115,11 +115,30 @@ Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn
 | `S3_BUCKET` | backend | S3 bucket name |
 | `ALLOWED_ORIGINS` | backend | Comma-separated CORS origins |
 | `AWS_PROFILE` | backend | Optional named AWS profile |
-| `AGENTSCRIBE_MODEL` | backend | Override default Claude model ID |
+| `AGENTSCRIBE_MODEL` | backend + agent-runner | Global model key fallback (see model registry below) |
+| `AGENTSCRIBE_CHAT_MODEL` | backend | ChatAgent (orchestrator) model key |
+| `AGENTSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
+| `AGENTSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
+| `AGENTSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `S3_VECTORS_BUCKET` | backend | S3 Vectors bucket name (for search index and deletion on account delete) |
 | `S3_VECTORS_INDEX_NAME` | backend | S3 Vectors index name (default: `agentscribe`) |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
+
+### Model registry keys
+
+Valid model keys for all `AGENTSCRIBE_*_MODEL` env vars and the `## Model` section in `agent.md`:
+
+| Key | Provider | Model |
+|---|---|---|
+| `haiku` | Anthropic | claude-haiku-4-5-20251001 |
+| `sonnet` | Anthropic | claude-sonnet-4-6 |
+| `opus` | Anthropic | claude-opus-4-6 |
+| `bedrock-haiku` | Bedrock | claude-haiku-4-5 (cross-region) |
+| `bedrock-sonnet` | Bedrock | claude-sonnet-4-6 (cross-region) |
+| `bedrock-opus` | Bedrock | claude-opus-4-6 (cross-region) |
+
+Unrecognised keys fall back to `sonnet`.
 
 Copy `env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.

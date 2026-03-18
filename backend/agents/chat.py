@@ -14,10 +14,10 @@ from .base import (
     AGENT_NAME_RE,
     BaseAgent,
     S3Tools,
-    DEFAULT_MODEL,
     agents_prefix,
     parse_agent_md,
 )
+from .models import build_strands_model, resolve_model_key
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent
@@ -101,20 +101,19 @@ Current context:
         self,
         s3: "mypy_boto3_s3.S3Client",
         bucket: str,
-        model_id: str = DEFAULT_MODEL,
         sqs_client: "mypy_boto3_sqs.SQSClient | None" = None,
         sqs_queue_url: str = "",
         sm_client=None,
     ) -> None:
         self._s3_tools = S3Tools(s3=s3, bucket=bucket)
-        self._model_id = model_id
+        self._model_key = resolve_model_key("AGENTSCRIBE_CHAT_MODEL", "AGENTSCRIBE_MODEL")
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
         self._sm_client = sm_client
         # Sub-agent tools are created lazily per-request (each call gets fresh
         # context injected via the prompt), so we set tools=[] here and override
         # per run() call.
-        super().__init__(tools=[], model_id=model_id)
+        super().__init__(tools=[], model_key=self._model_key)
 
     # ── public interface (called by FastAPI route) ────────────────────────────
 
@@ -147,7 +146,6 @@ Current context:
 
         # Rebuild the strands Agent with fresh prompt + tools for this request.
         from strands import Agent
-        from strands.models.anthropic import AnthropicModel
 
         agent = Agent(
             system_prompt=self.SYSTEM_PROMPT.format(
@@ -155,7 +153,7 @@ Current context:
                 page_path=page_path or "(root)",
                 file_path=file_path,
             ),
-            model=AnthropicModel(model_id=self._model_id, max_tokens=4096),
+            model=build_strands_model(self._model_key),
             tools=tools,
             callback_handler=None,
             load_tools_from_directory=False,
@@ -187,7 +185,6 @@ Current context:
 
     def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth") -> list:
         s3_tools = self._s3_tools
-        model_id = self._model_id
         sqs_client = self._sqs_client
         sqs_queue_url = self._sqs_queue_url
         sm_client = self._sm_client
@@ -204,7 +201,6 @@ Current context:
             """
             agent = ContentWriterAgent(
                 s3_tools=s3_tools,
-                model_id=model_id,
                 site=site,
                 page_path=page_path,
             )
@@ -231,7 +227,6 @@ Current context:
             """
             agent = CreatorAgent(
                 s3_tools=s3_tools,
-                model_id=model_id,
                 site=site,
                 page_path=page_path,
             )
@@ -299,7 +294,6 @@ Current context:
                 )
             agent = PageCreatorAgent(
                 s3_tools=s3_tools,
-                model_id=model_id,
                 site=site,
                 page_path=page_path,
             )

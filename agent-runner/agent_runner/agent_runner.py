@@ -30,7 +30,6 @@ log = logging.getLogger(__name__)
 
 import boto3
 from strands import Agent, ModelRetryStrategy
-from strands.models.anthropic import AnthropicModel
 from strands_tools import http_request
 
 from .parse import parse_agent_md
@@ -42,9 +41,43 @@ AGENT_PROMPT = os.environ["AGENT_PROMPT"]
 USER_ID = os.environ.get("USER_ID", "default")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL_ID = os.environ.get("AGENTSCRIBE_MODEL", "claude-opus-4-6")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
+
+# ── Inline model registry ─────────────────────────────────────────────────────
+
+_MODEL_REGISTRY: dict[str, tuple[str, str]] = {
+    # key → (provider, model_id)
+    "haiku":          ("anthropic", "claude-haiku-4-5-20251001"),
+    "sonnet":         ("anthropic", "claude-sonnet-4-6"),
+    "opus":           ("anthropic", "claude-opus-4-6"),
+    "bedrock-haiku":  ("bedrock",   "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "bedrock-sonnet": ("bedrock",   "us.anthropic.claude-sonnet-4-6-20250514-v1:0"),
+    "bedrock-opus":   ("bedrock",   "us.anthropic.claude-opus-4-6-20250514-v1:0"),
+}
+_DEFAULT_MODEL_KEY = "sonnet"
+
+
+def _resolve_model_key(*env_vars: str) -> str:
+    for var in env_vars:
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val
+    return _DEFAULT_MODEL_KEY
+
+
+def _build_model(model_key: str):
+    provider, model_id = _MODEL_REGISTRY.get(model_key) or _MODEL_REGISTRY[_DEFAULT_MODEL_KEY]
+    if provider == "anthropic":
+        from strands.models.anthropic import AnthropicModel
+        return AnthropicModel(
+            model_id=model_id,
+            max_tokens=4096,
+            client_args={"max_retries": 0},
+        )
+    else:
+        from strands.models.bedrock import BedrockModel
+        return BedrockModel(model_id=model_id)
 
 _session = boto3.Session(profile_name=AWS_PROFILE or None)
 
@@ -430,11 +463,11 @@ def main() -> None:
                 except Exception as exc:
                     log.warning("Failed to load tools from MCP client: %s", exc)
 
-            model = AnthropicModel(
-                model_id=MODEL_ID,
-                max_tokens=4096,
-                client_args={"max_retries": 0},
+            model_key = agent_def.model or _resolve_model_key(
+                "AGENTSCRIBE_RUNNER_MODEL", "AGENTSCRIBE_MODEL"
             )
+            model = _build_model(model_key)
+            log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
             system_prompt = (
                 agent_def.description
                 + "\n\n"
