@@ -1,6 +1,7 @@
 """AgentScribe backend — FastAPI service running behind a public ALB on EKS."""
 
 import base64
+import contextlib
 import dataclasses
 import datetime
 import hashlib
@@ -40,6 +41,21 @@ from mcp_server import create_mcp_app
 import jwt as pyjwt
 from jwt import PyJWKClient
 
+# _mcp_app is set after the FastAPI app is created (it needs _jwks_client).
+# The lifespan below delegates to the MCP app's lifespan so FastMCP's internal
+# task group is initialised before any requests arrive.
+_mcp_app = None
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app):
+    if _mcp_app is not None:
+        async with _mcp_app.router.lifespan_context(app):
+            yield
+    else:
+        yield
+
+
 _OPENAPI_TAGS = [
     {"name": "health", "description": "Service liveness check."},
     {"name": "content", "description": "Read and write page content stored in S3."},
@@ -68,6 +84,7 @@ app = FastAPI(
     ),
     version="1.0.0",
     openapi_tags=_OPENAPI_TAGS,
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -255,7 +272,7 @@ chat_agent = ChatAgent(
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 
 if _jwks_client is not None:
-    _mcp_app = create_mcp_app(
+    _mcp_app = create_mcp_app(  # noqa: F811 — intentional reassignment of module-level var
         s3_client=s3,
         bucket=S3_BUCKET,
         s3vectors_client=s3vectors,
