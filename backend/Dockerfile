@@ -29,7 +29,18 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Copy application source
 COPY backend/main.py ./
+COPY backend/config.py ./
+COPY backend/models.py ./
+COPY backend/auth.py ./
+COPY backend/s3_helpers.py ./
+COPY backend/settings_cache.py ./
+COPY backend/state.py ./
+COPY backend/credentials.py ./
+COPY backend/supabase_helpers.py ./
+COPY backend/mcp_server.py ./
 COPY backend/agents/ ./agents/
+COPY backend/aws/ ./aws/
+COPY backend/routers/ ./routers/
 
 # Run as a non-root user
 RUN useradd --no-create-home --shell /bin/false appuser \
