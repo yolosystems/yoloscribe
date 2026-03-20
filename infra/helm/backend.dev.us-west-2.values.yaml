@@ -28,6 +28,7 @@ serviceAccount:
 
 config:
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
+  mcpBaseUrl: "https://agentscribe-dev.runyolo.dev"
   cloudfrontDomain: "scribe.runyolo.dev"
   s3Bucket: "agentscribe-dev"
   allowedOrigins: "*"

@@ -258,7 +258,10 @@ body {
 }
 
 .agents-panel-header {
-  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.75rem 0.75rem 1rem;
   font-size: 0.8rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -267,16 +270,56 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.agents-add-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.agents-add-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
 .agents-list {
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem 0;
 }
 
-.agents-item {
-  display: block;
-  width: 100%;
-  padding: 0.45rem 1rem;
+.agents-item-row {
+  display: flex;
+  align-items: center;
+  transition: background 0.12s;
+}
+
+.agents-item-row:hover {
+  background: var(--surface-raised);
+}
+
+.agents-item-row.active {
+  background: var(--user-msg-bg);
+}
+
+.agents-item-row.active .agents-item-name {
+  color: var(--link);
+}
+
+.agents-item-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.5rem 0.45rem 1rem;
   background: none;
   border: none;
   color: var(--text);
@@ -286,16 +329,26 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 0.12s;
 }
 
-.agents-item:hover {
-  background: var(--surface-raised);
+.agents-delete-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 0.45rem 0.5rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
 }
 
-.agents-item.active {
-  background: var(--user-msg-bg);
-  color: var(--link);
+.agents-item-row:hover .agents-delete-btn {
+  opacity: 1;
+}
+
+.agents-delete-btn:hover {
+  color: var(--danger-text);
 }
 
 .agents-empty {

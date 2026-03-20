@@ -83,6 +83,10 @@ spec:
             - name: OAUTH_REDIRECT_URI
               value: {{ printf "https://%s/oauth/callback" .Values.ingress.host | quote }}
             {{- end }}
+            {{- if .Values.config.mcpBaseUrl }}
+            - name: MCP_BASE_URL
+              value: {{ .Values.config.mcpBaseUrl | quote }}
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

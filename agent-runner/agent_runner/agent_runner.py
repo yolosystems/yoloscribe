@@ -72,12 +72,12 @@ def _build_model(model_key: str):
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(
             model_id=model_id,
-            max_tokens=4096,
+            max_tokens=16384,
             client_args={"max_retries": 0},
         )
     else:
         from strands.models.bedrock import BedrockModel
-        return BedrockModel(model_id=model_id)
+        return BedrockModel(model_id=model_id, max_tokens=16384)
 
 _session = boto3.Session(profile_name=AWS_PROFILE or None)
 

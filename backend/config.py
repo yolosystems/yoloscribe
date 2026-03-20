@@ -16,6 +16,7 @@ S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
+MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
 FRONTEND_URL = (
     f"https://{CLOUDFRONT_DOMAIN}"
     if CLOUDFRONT_DOMAIN
@@ -58,5 +59,7 @@ s3vectors = boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTO
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def mcp_api_base() -> str:
-    """Derive the public base URL of this server from OAUTH_REDIRECT_URI."""
+    """Return the public base URL of this server for MCP OAuth metadata."""
+    if MCP_BASE_URL:
+        return MCP_BASE_URL.rstrip("/")
     return OAUTH_REDIRECT_URI.removesuffix("/oauth/callback")

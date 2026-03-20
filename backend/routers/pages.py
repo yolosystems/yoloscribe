@@ -2,10 +2,10 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agents.base import agents_prefix, skills_prefix
+from agents.base import AGENT_NAME_RE, agents_prefix, skills_prefix
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, s3
-from models import CreatePageRequest
+from models import CreateAgentRequest, CreatePageRequest
 from s3_helpers import PAGE_PATH_RE, default_child_page_md, enqueue_index_job
 
 router = APIRouter()
@@ -17,6 +17,65 @@ async def list_agents(site: str = "default", page_path: str = "") -> dict:
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"agents": names}
+
+
+@router.post("/agents", tags=["agents"], summary="Create a new agent")
+async def create_agent(
+    req: CreateAgentRequest,
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+) -> dict:
+    user_id, user_site = ctx
+    require_site_owner(req.site, user_site)
+
+    if not AGENT_NAME_RE.match(req.agent_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid agent name: use lowercase letters, digits, hyphens, and underscores",
+        )
+
+    prefix = agents_prefix(req.site, req.page_path)
+    key = f"{prefix}/{req.agent_name}/agent.md"
+
+    check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=key, MaxKeys=1)
+    if check.get("KeyCount", 0) > 0:
+        raise HTTPException(status_code=409, detail="Agent already exists")
+
+    skeleton = (
+        f"# Agent: {req.agent_name}\n\n"
+        f"## Description\n\nDescribe what this agent does.\n\n"
+        f"## Skills\n\n- (none)\n"
+    )
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=skeleton.encode("utf-8"),
+        ContentType="text/markdown; charset=utf-8",
+    )
+    return {"agent_name": req.agent_name}
+
+
+@router.delete("/agents", tags=["agents"], summary="Delete an agent")
+async def delete_agent(
+    site: str,
+    agent_name: str,
+    page_path: str = "",
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+) -> dict:
+    user_id, user_site = ctx
+    require_site_owner(site, user_site)
+
+    if not AGENT_NAME_RE.match(agent_name):
+        raise HTTPException(status_code=400, detail="Invalid agent name")
+
+    prefix = agents_prefix(site, page_path)
+    key = f"{prefix}/{agent_name}/agent.md"
+
+    check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=key, MaxKeys=1)
+    if check.get("KeyCount", 0) == 0:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    s3.delete_object(Bucket=S3_BUCKET, Key=key)
+    return {"deleted": agent_name}
 
 
 @router.get("/pages", tags=["pages"], summary="List child pages")

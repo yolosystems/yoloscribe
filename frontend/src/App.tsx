@@ -533,7 +533,22 @@ export default function App() {
             )}
 
             {canRunAgents && mode === 'edit' && (
-              <AgentsList agents={agents} activeFilePath={filePath} pagePath={getPagePath(filePath)} />
+              <AgentsList
+                agents={agents}
+                activeFilePath={filePath}
+                pagePath={getPagePath(filePath)}
+                apiBase={API_BASE}
+                site={SITE}
+                token={session!.access_token}
+                onAgentsChanged={() => {
+                  const pagePath = getPagePath(filePath)
+                  const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
+                  fetch(url)
+                    .then((res) => (res.ok ? res.json() : { agents: [] }))
+                    .then((data) => setAgents(data.agents ?? []))
+                    .catch(() => setAgents([]))
+                }}
+              />
             )}
 
             <div className="content-area">

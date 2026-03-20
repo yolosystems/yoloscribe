@@ -44,6 +44,12 @@ class CreatePageRequest(BaseModel):
     page_path: str
 
 
+class CreateAgentRequest(BaseModel):
+    site: str
+    page_path: str = ""
+    agent_name: str
+
+
 class SharedUser(BaseModel):
     email: str
     access: str  # "view" | "write"
