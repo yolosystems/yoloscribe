@@ -15,6 +15,7 @@ import CreatePageModal from './components/CreatePageModal'
 import ChildPagesList from './components/ChildPagesList'
 import PageSettingsPanel from './components/PageSettingsPanel'
 import AccessDeniedView from './components/AccessDeniedView'
+import TokensPanel from './components/TokensPanel'
 
 type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
@@ -160,6 +161,7 @@ export default function App() {
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [tokensOpen, setTokensOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
 
   // Subscribe to Supabase auth state
@@ -393,7 +395,7 @@ export default function App() {
           {isOwner && (
             <button
               className={`btn${mode === 'tools' ? ' btn-primary' : ''}`}
-              onClick={() => { setMode(mode === 'tools' ? 'view' : 'tools'); setSkillsOpen(false) }}
+              onClick={() => { setMode(mode === 'tools' ? 'view' : 'tools'); setSkillsOpen(false); setTokensOpen(false) }}
             >
               Tools
             </button>
@@ -401,9 +403,17 @@ export default function App() {
           {isOwner && (
             <button
               className={`btn${skillsOpen ? ' btn-primary' : ''}`}
-              onClick={() => { setSkillsOpen((o) => !o); setMode('view') }}
+              onClick={() => { setSkillsOpen((o) => !o); setMode('view'); setTokensOpen(false) }}
             >
               {skillsOpen ? 'Back' : 'Skills'}
+            </button>
+          )}
+          {isOwner && (
+            <button
+              className={`btn${tokensOpen ? ' btn-primary' : ''}`}
+              onClick={() => { setTokensOpen((o) => !o); setMode('view'); setSkillsOpen(false) }}
+            >
+              {tokensOpen ? 'Back' : 'API Tokens'}
             </button>
           )}
           {isOwner && isContentPage && mode !== 'tools' && !skillsOpen && (
@@ -509,6 +519,8 @@ export default function App() {
           <ToolsPanel apiBase={API_BASE} token={session!.access_token} site={SITE} />
         ) : skillsOpen && isOwner ? (
           <SkillsPanel apiBase={API_BASE} site={SITE} token={session!.access_token} />
+        ) : tokensOpen && isOwner ? (
+          <TokensPanel apiBase={API_BASE} token={session!.access_token} />
         ) : settingsOpen && isOwner ? (
           <div className="content-area">
             <PageSettingsPanel
