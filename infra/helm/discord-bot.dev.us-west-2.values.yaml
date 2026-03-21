@@ -1,0 +1,10 @@
+image:
+  repository: ghcr.io/nate-yolodev/agentscribe-discord-bot
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: nate-yolodev
+
+config:
+  agentscribeApiUrl: "https://agentscribe-dev.runyolo.dev"
