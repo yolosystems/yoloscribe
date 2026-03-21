@@ -14,7 +14,7 @@ dependencies = [
     "pyjwt[crypto]>=2.8.0",
     "mcp-oauth",
     "fastmcp>=2.14.0",
-    "bleach>=6.3.0",
+    "slowapi>=0.1.9",
 ]
 
 [tool.uv]

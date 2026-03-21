@@ -2,8 +2,10 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.requests import Request
 
 from auth import get_user_context, require_site_owner
+from rate_limit import limiter
 from aws.infra import deprovision_user_infrastructure, provision_user_infrastructure
 from config import CLOUDFRONT_DOMAIN, S3_BUCKET, s3
 from models import ProvisionRequest, ProvisionResponse
@@ -23,7 +25,9 @@ router = APIRouter()
         "provision one site. Returns the public URL of the new site."
     ),
 )
+@limiter.limit("3/hour")
 async def provision(
+    request: Request,
     req: ProvisionRequest,
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> ProvisionResponse:
