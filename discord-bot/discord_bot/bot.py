@@ -11,6 +11,7 @@ Reaction lifecycle:
     ⏳  added immediately on receipt
     ✅  swapped in on success
     ❌  swapped in on failure
+    🕐  swapped in when rate-limited (instead of ❌)
 """
 
 import hashlib
@@ -22,8 +23,16 @@ import discord
 import httpx
 from discord import app_commands
 
-from discord_bot import crypto, supabase
+from discord_bot import crypto, rate_tracker, supabase
 from discord_bot.config import AGENTSCRIBE_API_URL
+
+
+class RateLimitError(Exception):
+    """Raised when the AgentScribe backend returns HTTP 429."""
+
+    def __init__(self, retry_after: str) -> None:
+        self.retry_after = retry_after
+        super().__init__(f"rate limit reached (retry after {retry_after}s)")
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +173,17 @@ class AgentScribeBot(discord.Client):
         if not text.strip():
             return  # Empty message after stripping prefix — nothing to send
 
+        # Track request volume; post high-volume warning if threshold just crossed.
+        if rate_tracker.record_request(str(message.channel.id)):
+            try:
+                thread = await _get_or_create_thread(message)
+                await thread.send(
+                    "⚠️ This channel is generating high request volume. "
+                    "Check your rate limit headroom in the AgentScribe UI."
+                )
+            except discord.HTTPException:
+                pass
+
         # Add hourglass reaction immediately so the user knows we received it.
         try:
             await message.add_reaction("⏳")
@@ -182,7 +202,7 @@ class AgentScribeBot(discord.Client):
             except discord.HTTPException:
                 pass
 
-        success = False
+        outcome_reaction = "✅"
         reply_text = ""
         try:
             reply_text = await self._call_chat(
@@ -191,9 +211,16 @@ class AgentScribeBot(discord.Client):
                 file_path=file_path,
                 message=text,
             )
-            success = True
+        except RateLimitError as exc:
+            log.warning("Rate limit for channel %s: retry after %s", message.channel.id, exc.retry_after)
+            outcome_reaction = "🕐"
+            reply_text = (
+                f"Rate limit reached. "
+                f"You can send another message in {exc.retry_after} seconds."
+            )
         except Exception as exc:
             log.error("Chat API error for channel %s: %s", message.channel.id, exc)
+            outcome_reaction = "❌"
             reply_text = f"❌ AgentScribe returned an error: {exc}"
 
         # Post response in a thread on the original message.
@@ -203,10 +230,10 @@ class AgentScribeBot(discord.Client):
         except discord.HTTPException as exc:
             log.error("Failed to post reply in thread: %s", exc)
 
-        # Swap the ⏳ for ✅ or ❌.
+        # Swap the ⏳ for the outcome reaction.
         try:
             await message.remove_reaction("⏳", self.user)  # type: ignore[arg-type]
-            await message.add_reaction("✅" if success else "❌")
+            await message.add_reaction(outcome_reaction)
         except discord.HTTPException:
             pass
 
@@ -232,7 +259,7 @@ class AgentScribeBot(discord.Client):
             )
         if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After", "unknown")
-            raise RuntimeError(f"rate limit reached (retry after {retry_after}s)")
+            raise RateLimitError(retry_after)
         resp.raise_for_status()
         return resp.json().get("reply", "")
 
