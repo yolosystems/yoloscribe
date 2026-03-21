@@ -22,6 +22,7 @@ from routers import (
     pages_router,
     settings_router,
     site_router,
+    tokens_router,
     tools_router,
     webhooks_router,
 )
@@ -55,6 +56,7 @@ _OPENAPI_TAGS = [
     {"name": "site", "description": "Provision, inspect, and delete user sites."},
     {"name": "secrets", "description": "Manage per-user credentials stored in AWS Secrets Manager."},
     {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
+    {"name": "tokens", "description": "Create, list, and revoke site-scoped API tokens."},
     {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems."},
     {"name": "mcp", "description": "Remote MCP server for AI coding agents (Claude Code, etc.)."},
 ]
@@ -138,4 +140,5 @@ app.include_router(tools_router)
 app.include_router(oauth_router)
 app.include_router(mcp_oauth_router)
 app.include_router(site_router)
+app.include_router(tokens_router)
 app.include_router(webhooks_router)

@@ -6,6 +6,7 @@ from .oauth import router as oauth_router
 from .pages import router as pages_router
 from .settings import router as settings_router
 from .site import router as site_router
+from .tokens import router as tokens_router
 from .tools import router as tools_router
 from .webhooks import router as webhooks_router
 
@@ -18,6 +19,7 @@ __all__ = [
     "pages_router",
     "settings_router",
     "site_router",
+    "tokens_router",
     "tools_router",
     "webhooks_router",
 ]
