@@ -14,6 +14,8 @@ from .base import (
     AGENT_NAME_RE,
     BaseAgent,
     S3Tools,
+    _MAX_RUNNER_PROMPT_CHARS,
+    _check_injection,
     agents_prefix,
     parse_agent_md,
 )
@@ -139,6 +141,14 @@ Current context:
         navigate_to is non-None when the SearchAgent ran; the caller should
         update window.location.hash accordingly.
         """
+        # Reject cross-site requests before any agent work begins.
+        # user_site is empty for internal/unauthenticated callers — skip the
+        # check in that case for backwards compatibility.
+        if user_site and site != user_site:
+            raise PermissionError(
+                f"Access denied: cannot act on site '{site}' as user of site '{user_site}'"
+            )
+
         # Derive page_path from file_path:
         # "content.md"                       → ""
         # ".agents/myagent/agent.md"         → ""  (root page agents file)
@@ -214,6 +224,8 @@ Current context:
             Args:
                 instruction: The user's content editing instruction.
             """
+            if err := _check_injection(instruction, "instruction"):
+                return err
             agent = ContentWriterAgent(
                 s3_tools=s3_tools,
                 site=site,
@@ -343,6 +355,14 @@ Current context:
             """
             if sqs_client is None or not sqs_queue_url:
                 return "Error: SQS is not configured on this server. Agent queuing is unavailable."
+            if len(prompt) > _MAX_RUNNER_PROMPT_CHARS:
+                return (
+                    f"Error: prompt is too long ({len(prompt)} chars). "
+                    f"Maximum is {_MAX_RUNNER_PROMPT_CHARS} characters."
+                )
+            if prompt:
+                if err := _check_injection(prompt, "prompt"):
+                    return err
             prefix = agents_prefix(site, page_path)
             agent_md_key = f"{prefix}/{agent_name}/agent.md"
             content_key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"

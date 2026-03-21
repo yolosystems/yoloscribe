@@ -19,6 +19,37 @@ if TYPE_CHECKING:
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+# ── Prompt-injection detector ─────────────────────────────────────────────────
+
+# Common trigger phrases used in prompt-injection attacks.  This is a best-effort
+# deterministic filter; it runs before the LLM layer so it cannot be defeated by
+# the LLM itself.  False positives are possible — the patterns are intentionally
+# conservative (they match only well-known injection preambles, not generic prose).
+_INJECTION_RE = re.compile(
+    r"ignore\s+(all\s+)?(previous|prior)\s+instructions?"
+    r"|disregard\s+(all\s+)?(previous|prior)\s+instructions?"
+    r"|forget\s+(everything|all\s+(previous|prior|above))"
+    r"|your\s+new\s+(role|instructions?|directive|task|goal)"
+    r"|</?system>"
+    r"|\[/?INST\]"
+    r"|<<SYS>>"
+    r"|you\s+are\s+now\s+(?:a|an|the)\s+\w",
+    re.IGNORECASE,
+)
+
+_MAX_DESCRIPTION_CHARS = 4_096
+_MAX_RUNNER_PROMPT_CHARS = 2_048
+
+
+def _check_injection(text: str, field_name: str) -> str | None:
+    """Return an error string if *text* matches a known injection pattern, else None."""
+    if _INJECTION_RE.search(text):
+        return (
+            f"Error: {field_name} contains a disallowed pattern. "
+            f"Remove prompt-injection language and try again."
+        )
+    return None
+
 
 def agents_prefix(site: str, page_path: str = "") -> str:
     """Return the S3 prefix for the .agents directory of a page.
@@ -395,6 +426,13 @@ class S3Tools:
         self._require_site_ownership(site)
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
+        if len(description) > _MAX_DESCRIPTION_CHARS:
+            return (
+                f"Error: description is too long ({len(description)} chars). "
+                f"Maximum is {_MAX_DESCRIPTION_CHARS} characters."
+            )
+        if err := _check_injection(description, "description"):
+            return err
         prefix = agents_prefix(site, page_path)
         key = f"{prefix}/{agent_name}/agent.md"
         if not overwrite:
