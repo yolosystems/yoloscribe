@@ -2,8 +2,10 @@ import datetime
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.requests import Request
 
 from auth import JWTClaims, get_jwt_claims, get_user_context, require_site_owner
+from rate_limit import limiter
 from config import S3_BUCKET, s3
 from models import AccessRequest, PageSettings
 from s3_helpers import get_content, put_content
@@ -52,7 +54,9 @@ async def put_settings(
 
 
 @router.post("/request-access", tags=["access"], summary="Request access to a page")
+@limiter.limit("5/hour")
 async def request_access(
+    request: Request,
     req: AccessRequest,
     claims: JWTClaims = Depends(get_jwt_claims),
 ) -> dict[str, str]:

@@ -7,11 +7,15 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from config import SUPABASE_URL, S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, AWS_REGION, BEDROCK_EMBEDDING_MODEL, mcp_api_base, jwks_client, s3, sqs_indexing, s3vectors
 from config import SUPABASE_SERVICE_ROLE_KEY, MAX_REQUEST_BYTES
+from rate_limit import limiter
 from mcp_server import create_mcp_app
 from routers import (
     chat_router,
@@ -96,13 +100,18 @@ class _RequestSizeMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(_RequestSizeMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Page-Access"],
+    expose_headers=["X-Page-Access", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
 )
+
+# ── Rate limiter wiring ────────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Mount MCP server ───────────────────────────────────────────────────────────
 

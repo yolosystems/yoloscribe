@@ -32,6 +32,12 @@ AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
 
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# When REDIS_URL is set, rate-limit state is shared across replicas.
+# Leave unset to use the in-process memory backend (single-pod deployments).
+
+REDIS_URL: str = os.environ.get("REDIS_URL", "")
+
 # ── Content size limits (YOL-49) ──────────────────────────────────────────────
 # All limits are tunable via env vars without a code change.
 

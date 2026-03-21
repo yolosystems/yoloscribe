@@ -1,11 +1,13 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.requests import Request
 
 from agents import ChatAgent
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, SQS_QUEUE_URL, s3, sm, sqs
 from models import ChatRequest, ChatResponse
+from rate_limit import limiter
 from s3_helpers import enqueue_index_job, is_safe_path
 
 router = APIRouter()
@@ -32,7 +34,9 @@ _chat_agent = ChatAgent(
     ),
     response_model=ChatResponse,
 )
+@limiter.limit("10/minute")
 async def chat(
+    request: Request,
     req: ChatRequest,
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> Any:
