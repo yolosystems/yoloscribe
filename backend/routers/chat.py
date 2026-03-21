@@ -55,7 +55,10 @@ async def chat(
             site=req.site,
             file_path=req.file_path,
             user_id=user_id,
+            user_site=user_site or "",
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
