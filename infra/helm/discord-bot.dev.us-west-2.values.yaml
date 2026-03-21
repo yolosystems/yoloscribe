@@ -8,3 +8,4 @@ ghcr:
 
 config:
   agentscribeApiUrl: "https://agentscribe-dev.runyolo.dev"
+  supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
