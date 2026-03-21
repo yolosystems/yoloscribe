@@ -14,15 +14,19 @@ ghcr:
 config:
   # Full URL of the AgentScribe backend API (e.g. https://api.runyolo.dev)
   agentscribeApiUrl: ""
+  # Supabase project URL — used to look up api_tokens and upsert discord_configs
+  supabaseUrl: ""
 
-# ── Discord secrets ───────────────────────────────────────────────────────────
-# Pass both values via --set on the command line; never commit real values here.
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Pass all secret values via --set on the command line; never commit real values here.
 #
-# discordBotToken  — the bot token from the Discord Developer Portal
-# discordAesKey    — base64-encoded 32-byte key used to AES-256-GCM encrypt
-#                    API tokens before storing them in discord_configs
+# discordBotToken          — the bot token from the Discord Developer Portal
+# discordAesKey            — base64-encoded 32-byte key used to AES-256-GCM encrypt
+#                            API tokens before storing them in discord_configs
+# supabaseServiceRoleKey   — Supabase service role key (bypasses RLS for discord_configs)
 discordBotToken: ""
 discordAesKey: ""
+supabaseServiceRoleKey: ""
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:

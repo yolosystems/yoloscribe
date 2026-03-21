@@ -44,6 +44,11 @@ if [[ -z "${GHCR_PAT:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
+  echo "Error: SUPABASE_SERVICE_ROLE_KEY is not set in environment or .env"
+  exit 1
+fi
+
 helm upgrade --install agentscribe-discord-bot \
   "$SCRIPT_DIR/agentscribe-discord-bot" \
   --namespace yolo \
@@ -51,5 +56,6 @@ helm upgrade --install agentscribe-discord-bot \
   --values "$VALUES_FILE" \
   --set discordBotToken="$DISCORD_BOT_TOKEN" \
   --set discordAesKey="$DISCORD_AES_KEY" \
+  --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
   --set ghcr.pat="$GHCR_PAT" \
   "$@"
