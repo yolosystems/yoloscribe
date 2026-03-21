@@ -44,8 +44,9 @@ REDIS_URL: str = os.environ.get("REDIS_URL", "")
 MAX_CHAT_MESSAGE_BYTES: int = int(os.environ.get("MAX_CHAT_MESSAGE_BYTES", 8_192))
 MAX_CHAT_CONTENT_BYTES: int = int(os.environ.get("MAX_CHAT_CONTENT_BYTES", 65_536))
 MAX_CHAT_HISTORY_TURNS: int = int(os.environ.get("MAX_CHAT_HISTORY_TURNS", 20))
-MAX_CONTENT_BYTES: int = int(os.environ.get("MAX_CONTENT_BYTES", 512 * 1024))   # 512 KB
-MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))  # 1 MB
+MAX_CONTENT_BYTES: int = int(os.environ.get("MAX_CONTENT_BYTES", 512 * 1024))              # 512 KB
+MAX_SHARED_WRITE_BYTES: int = int(os.environ.get("MAX_SHARED_WRITE_BYTES", 128 * 1024))  # 128 KB
+MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))            # 1 MB
 
 # ── Supabase JWKS client ───────────────────────────────────────────────────────
 
