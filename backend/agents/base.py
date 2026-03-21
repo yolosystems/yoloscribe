@@ -91,9 +91,66 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 class S3Tools:
     """Strands class-based tools for reading and writing AgentScribe S3 objects."""
 
-    def __init__(self, s3: "mypy_boto3_s3.S3Client", bucket: str) -> None:
+    def __init__(
+        self,
+        s3: "mypy_boto3_s3.S3Client",
+        bucket: str,
+        user_site: str | None = None,
+        user_email: str | None = None,
+    ) -> None:
         self.s3 = s3
         self.bucket = bucket
+        self._user_site = user_site
+        self._user_email = user_email
+
+    # ── Ownership / access checks ─────────────────────────────────────────────
+
+    def _require_site_ownership(self, site: str) -> None:
+        """Raise PermissionError if the authenticated user does not own `site`.
+
+        If no user_site is set (unauthenticated / internal call), the check is
+        skipped to preserve backwards compatibility during rollout.
+        """
+        if self._user_site is not None and site != self._user_site:
+            raise PermissionError(
+                f"Access denied: site '{site}' is not owned by the authenticated user"
+            )
+
+    def _require_read_access(self, site: str, page_path: str) -> None:
+        """Raise PermissionError if the authenticated user cannot read the page.
+
+        Ownership grants unconditional read access.  For non-owners, falls back
+        to checking the page's settings.json visibility (public = allowed;
+        shared = allowed if the user's email is in shared_with).
+        """
+        if self._user_site is None:
+            return  # No auth context — internal/unauthenticated call, skip check
+        if site == self._user_site:
+            return  # Owner always has read access
+
+        # Not the owner — inspect visibility settings
+        settings_key = (
+            f"{site}/{page_path}/settings.json" if page_path else f"{site}/settings.json"
+        )
+        try:
+            obj = self.s3.get_object(Bucket=self.bucket, Key=settings_key)
+            settings: dict = json.loads(obj["Body"].read())
+        except Exception:
+            raise PermissionError(
+                f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
+            )
+
+        visibility = settings.get("visibility", "private")
+        if visibility == "public":
+            return
+        if visibility == "shared" and self._user_email:
+            shared_with = settings.get("shared_with", [])
+            if any(e.get("email") == self._user_email for e in shared_with):
+                return
+
+        raise PermissionError(
+            f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
+        )
 
     # ── content helpers ───────────────────────────────────────────────────────
 
@@ -124,6 +181,7 @@ class S3Tools:
             page_path: Relative path of the page within the site.
                        Empty string for the root page.
         """
+        self._require_read_access(site, page_path)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
         try:
             return self.read_text(key)
@@ -139,6 +197,7 @@ class S3Tools:
             content: Full updated markdown content.
             page_path: Relative page path; empty for root.
         """
+        self._require_site_ownership(site)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
         self.write_text(key, content)
         return f"Saved content to {key}"
@@ -192,6 +251,7 @@ class S3Tools:
         Args:
             site: The site name.
         """
+        self._require_site_ownership(site)
         prefix = skills_prefix(site)
         names = self.list_prefixes(prefix)
         if not names:
@@ -276,6 +336,7 @@ class S3Tools:
             skill_name: Skill name (must match AGENT_NAME_RE).
             markdown: Full SKILL.md content including frontmatter.
         """
+        self._require_site_ownership(site)
         key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
         self.write_text(key, markdown)
 
@@ -287,6 +348,7 @@ class S3Tools:
             site: The site name.
             page_path: Relative page path; empty for root.
         """
+        self._require_site_ownership(site)
         prefix = agents_prefix(site, page_path)
         names = self.list_prefixes(prefix)
         if not names:
@@ -318,6 +380,7 @@ class S3Tools:
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
                    Leave blank to use the server default.
         """
+        self._require_site_ownership(site)
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
         skills_list = "\n".join(f"- {s}" for s in skills)
@@ -350,6 +413,7 @@ class S3Tools:
                      welcome page is written. Supply this when the user has specified
                      what they want the page to display.
         """
+        self._require_site_ownership(site)
         if not re.match(r"^[a-z0-9][a-z0-9_/-]*$", page_path):
             return f"Error: invalid page path {page_path!r}. Use lowercase alphanumerics, hyphens, underscores, slashes."
         title = page_path.split("/")[-1].replace("-", " ").title()

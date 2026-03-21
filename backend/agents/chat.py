@@ -125,6 +125,7 @@ Current context:
         site: str,
         file_path: str = "content.md",
         user_id: str = "knuth",
+        user_site: str = "",
     ) -> tuple[str, str | None, str | None]:
         """Process a user message and return (reply, updated_content | None, navigate_to | None).
 
@@ -142,7 +143,7 @@ Current context:
         shared: dict = {"updated_content": None, "navigate_to": None}
 
         # Build fresh sub-agent @tool functions with current context baked in.
-        tools = self._make_tools(site=site, page_path=page_path, shared=shared, user_id=user_id)
+        tools = self._make_tools(site=site, page_path=page_path, shared=shared, user_id=user_id, user_site=user_site)
 
         # Rebuild the strands Agent with fresh prompt + tools for this request.
         from strands import Agent
@@ -183,8 +184,14 @@ Current context:
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
-    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth") -> list:
-        s3_tools = self._s3_tools
+    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth", user_site: str = "") -> list:
+        # Create a per-request scoped S3Tools instance so the ownership check is
+        # bound to the authenticated user for this specific request.
+        s3_tools = S3Tools(
+            s3=self._s3_tools.s3,
+            bucket=self._s3_tools.bucket,
+            user_site=user_site or None,
+        )
         sqs_client = self._sqs_client
         sqs_queue_url = self._sqs_queue_url
         sm_client = self._sm_client

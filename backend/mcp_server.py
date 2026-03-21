@@ -144,6 +144,15 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
 
 
 # ── S3 key helpers ─────────────────────────────────────────────────────────────
+#
+# Defense-in-depth: every S3 key constructed in this file is prefixed with
+# `user.site` obtained from the authenticated JWT — never from a user-supplied
+# `site` parameter.  MCP tools accept `page_path` (a relative path within the
+# user's own site) but never a raw `site` argument, so cross-site access via
+# crafted inputs is structurally impossible at this layer.
+#
+# If S3Tools from agents/base.py is ever adopted here, instantiate it with
+# `user_site=user.site` so the ownership check at that layer is also enforced.
 
 
 def _content_key(site: str, page_path: str) -> str:
