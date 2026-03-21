@@ -3,9 +3,8 @@
 Uses slowapi (built on the `limits` library) with a per-identity key function.
 
 Key bucketing strategy:
+- API token–authenticated requests → keyed on `token:<sha256(raw_token)>`.
 - JWT-authenticated requests  → keyed on the `sub` claim (user UUID).
-- API token–authenticated requests → keyed on the token ID once that feature
-  is implemented. For now, falls through to IP-based limiting.
 - Unauthenticated / malformed requests → keyed on client IP.
 
 The JWT payload is decoded without cryptographic verification here, which is
@@ -17,6 +16,7 @@ full JWT verification before any business logic runs.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 
@@ -32,13 +32,16 @@ def _rate_limit_key(request: Request) -> str:
     """Return a rate-limit bucket key for this request.
 
     Priority:
-    1. JWT Bearer token present → decode payload (no verification) → use `sub`.
-    2. (Future) API token header → use token ID.
+    1. API token present (bearer starts with `as_`) → sha256 hash → `token:<hash>`.
+    2. JWT Bearer token present → decode payload (no verification) → `user:<sub>`.
     3. Fall back to client IP (X-Forwarded-For, then direct socket).
     """
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         token = auth[7:]
+        # API tokens are prefixed `as_` — bucket by their sha256 hash.
+        if token.startswith("as_"):
+            return f"token:{hashlib.sha256(token.encode()).hexdigest()}"
         try:
             # JWT is three base64url-encoded segments separated by dots.
             parts = token.split(".")

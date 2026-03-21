@@ -1,6 +1,8 @@
 """JWT authentication helpers for the AgentScribe API."""
 
 import dataclasses
+import datetime
+import hashlib
 import json
 import urllib.request
 
@@ -9,6 +11,7 @@ from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, jwks_client
+from supabase_helpers import supabase_get_api_token_by_hash, supabase_update_token_last_used
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -67,10 +70,37 @@ def get_user_id(
     return decode_jwt(credentials).user_id
 
 
+def resolve_api_token(raw_token: str) -> tuple[str, str | None]:
+    """Validate an `as_`-prefixed API token and return (user_id, site_name).
+
+    Raises HTTPException(401) if the token is unknown, revoked, or expired.
+    Updates last_used_at in the background (best-effort, never raises).
+    """
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    row = supabase_get_api_token_by_hash(token_hash)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or revoked API token")
+    expires_at = row.get("expires_at")
+    if expires_at:
+        try:
+            expiry = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry < datetime.datetime.now(datetime.timezone.utc):
+                raise HTTPException(status_code=401, detail="API token has expired")
+        except ValueError:
+            pass  # Unparseable expiry — treat as non-expiring
+    supabase_update_token_last_used(row["id"])
+    return row["user_id"], row.get("site_name")
+
+
 def get_user_context(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> tuple[str, str | None]:
-    """Extract user_id from JWT and look up site_name from user_site table."""
+    """Extract user_id + site_name from a Supabase JWT or an `as_`-prefixed API token."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing authentication token")
+    raw = credentials.credentials
+    if raw.startswith("as_"):
+        return resolve_api_token(raw)
     claims = decode_jwt(credentials)
     return claims.user_id, get_site_for_user(claims.user_id)
 

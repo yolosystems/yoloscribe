@@ -35,6 +35,7 @@ _chat_agent = ChatAgent(
     response_model=ChatResponse,
 )
 @limiter.limit("10/minute")
+@limiter.limit("100/hour")
 async def chat(
     request: Request,
     req: ChatRequest,
