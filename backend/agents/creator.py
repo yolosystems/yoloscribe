@@ -30,7 +30,9 @@ Your job is to help the user define a new agent for a wiki page by:
 5. Ask whether the agent should run on a schedule:
    - If yes: ask for a cron expression (e.g. "0 * * * *") and timezone (default UTC).
    - If no schedule needed, leave blank.
-6. Call put_agent once everything is confirmed.
+6. Call put_agent once everything is confirmed.  By default put_agent will refuse to
+   overwrite an existing agent — if the user explicitly wants to replace one they own,
+   pass overwrite=True.
 7. After the agent is created, call get_skill_required_vars for each chosen skill.
    Compile the full list of required credential names and tell the user:
    "Your agent has been created! Before running it, please authenticate the following

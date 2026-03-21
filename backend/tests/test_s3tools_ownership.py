@@ -209,6 +209,7 @@ class TestListAgents:
 class TestPutAgent:
     def test_own_site_calls_s3(self):
         tools = _make_tools("alice")
+        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
         tools.put_agent(site="alice", agent_name="my-agent", description="Test", skills=[])
         tools.s3.put_object.assert_called_once()
 
@@ -227,6 +228,7 @@ class TestPutAgent:
 class TestPutSkill:
     def test_own_site_calls_s3(self):
         tools = _make_tools("alice")
+        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
         tools.put_skill(site="alice", skill_name="my-skill", markdown="---\n---\n")
         tools.s3.put_object.assert_called_once()
 

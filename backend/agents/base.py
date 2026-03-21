@@ -328,16 +328,25 @@ class S3Tools:
             + ", ".join(all_vars)
         )
 
-    def put_skill(self, site: str, skill_name: str, markdown: str) -> None:
+    def put_skill(self, site: str, skill_name: str, markdown: str, overwrite: bool = False) -> None:
         """Write a SKILL.md to {site}/.skills/{skill_name}/SKILL.md.
 
         Args:
             site: The site name.
             skill_name: Skill name (must match AGENT_NAME_RE).
             markdown: Full SKILL.md content including frontmatter.
+            overwrite: If False (default) and a skill with this name already exists,
+                       raise ValueError.  Pass True to intentionally replace it.
         """
         self._require_site_ownership(site)
         key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
+        if not overwrite:
+            resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
+            if resp.get("KeyCount", 0) > 0:
+                raise ValueError(
+                    f"Skill '{skill_name}' already exists. "
+                    f"Pass overwrite=True to replace it, or choose a different name."
+                )
         self.write_text(key, markdown)
 
     @tool
@@ -366,8 +375,9 @@ class S3Tools:
         schedule: str = "",
         timezone: str = "",
         model: str = "",
+        overwrite: bool = False,
     ) -> str:
-        """Create or overwrite an agent.md file in S3.
+        """Create a new agent.md file in S3.  Set overwrite=True to replace an existing agent.
 
         Args:
             site: The site name.
@@ -379,10 +389,21 @@ class S3Tools:
             timezone: Optional timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
                    Leave blank to use the server default.
+            overwrite: If False (default) and an agent with this name already exists,
+                       the call is rejected.  Pass True to intentionally replace it.
         """
         self._require_site_ownership(site)
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
+        prefix = agents_prefix(site, page_path)
+        key = f"{prefix}/{agent_name}/agent.md"
+        if not overwrite:
+            resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
+            if resp.get("KeyCount", 0) > 0:
+                return (
+                    f"Error: agent '{agent_name}' already exists. "
+                    f"Pass overwrite=True to replace it, or choose a different name."
+                )
         skills_list = "\n".join(f"- {s}" for s in skills)
         optional_sections = ""
         if schedule:
@@ -397,8 +418,6 @@ class S3Tools:
             f"{optional_sections}"
             f"## Skills\n\n{skills_list}\n"
         )
-        prefix = agents_prefix(site, page_path)
-        key = f"{prefix}/{agent_name}/agent.md"
         self.write_text(key, content)
         return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
 

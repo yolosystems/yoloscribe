@@ -339,9 +339,23 @@ Current context:
                 "prompt": prompt,
                 "user_id": user_id,
             }
+            # SQS hard limit is 256 KB.  If the payload is too large (e.g. a very
+            # long prompt), truncate the prompt field and retry once.  Structural
+            # fields (keys, bucket, user_id) are always preserved.
+            _SQS_MAX_BYTES = 256 * 1024
+            body_str = json.dumps(payload)
+            if len(body_str.encode()) > _SQS_MAX_BYTES:
+                overhead = len(json.dumps({**payload, "prompt": ""}).encode())
+                max_prompt_bytes = _SQS_MAX_BYTES - overhead - 32  # 32-byte safety margin
+                if max_prompt_bytes > 0:
+                    truncated = prompt.encode()[:max_prompt_bytes].decode(errors="ignore")
+                    payload["prompt"] = truncated + "\n...[truncated]"
+                    body_str = json.dumps(payload)
+                else:
+                    return "Error: SQS payload is too large even without a prompt. Check that the agent and content keys are not unusually long."
             sqs_client.send_message(
                 QueueUrl=sqs_queue_url,
-                MessageBody=json.dumps(payload),
+                MessageBody=body_str,
             )
             return f"Agent '{agent_name}' has been queued for execution."
 
@@ -362,7 +376,7 @@ Current context:
             return reply
 
         @tool
-        def create_skill(name: str, description: str, tools_list: list[str], body: str) -> str:
+        def create_skill(name: str, description: str, tools_list: list[str], body: str, overwrite: bool = False) -> str:
             """Write a new SKILL.md to the site's .skills directory.
 
             Only call this after gathering all required information from the user
@@ -374,13 +388,17 @@ Current context:
                 tools_list: List of tool names (from the shared .tools directory) the skill uses.
                 body: The skill's instruction body — the system prompt text that will
                       be injected when the skill is active.
+                overwrite: If False (default) and a skill with this name already exists,
+                           the call is rejected.  Pass True to intentionally replace it.
             """
             if not AGENT_NAME_RE.match(name):
                 return f"Error: invalid skill name {name!r}. Use lowercase letters, digits, hyphens, underscores."
             tools_yaml = "\n".join(f"  - {t}" for t in tools_list)
             markdown = f"---\ndescription: {description}\ntools:\n{tools_yaml}\n---\n\n{body}\n"
             try:
-                s3_tools.put_skill(site, name, markdown)
+                s3_tools.put_skill(site, name, markdown, overwrite=overwrite)
+            except ValueError as exc:
+                return str(exc)
             except Exception as exc:
                 return f"Error writing skill: {exc}"
             return f"Skill '{name}' created. View/edit at #/.skills/{name}"
