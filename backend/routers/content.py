@@ -3,6 +3,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
+from config import MAX_CONTENT_BYTES
 from s3_helpers import get_content, put_content, is_safe_path, enqueue_index_job
 from settings_cache import get_page_settings, page_path_from_file_path
 
@@ -129,6 +130,11 @@ async def put_content_route(
         raise HTTPException(status_code=403, detail="Access denied: not your site")
 
     body = await request.body()
+    if len(body) > MAX_CONTENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Content exceeds maximum allowed size of {MAX_CONTENT_BYTES // 1024} KB",
+        )
     put_content(site, path, body.decode("utf-8"))
     if is_content_path:
         enqueue_index_job(f"{site}/{path}", claims.user_id)

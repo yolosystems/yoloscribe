@@ -32,6 +32,15 @@ AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
 
+# ── Content size limits (YOL-49) ──────────────────────────────────────────────
+# All limits are tunable via env vars without a code change.
+
+MAX_CHAT_MESSAGE_BYTES: int = int(os.environ.get("MAX_CHAT_MESSAGE_BYTES", 8_192))
+MAX_CHAT_CONTENT_BYTES: int = int(os.environ.get("MAX_CHAT_CONTENT_BYTES", 65_536))
+MAX_CHAT_HISTORY_TURNS: int = int(os.environ.get("MAX_CHAT_HISTORY_TURNS", 20))
+MAX_CONTENT_BYTES: int = int(os.environ.get("MAX_CONTENT_BYTES", 512 * 1024))   # 512 KB
+MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))  # 1 MB
+
 # ── Supabase JWKS client ───────────────────────────────────────────────────────
 
 jwks_client = (
