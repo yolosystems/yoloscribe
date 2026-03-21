@@ -6,9 +6,12 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from config import SUPABASE_URL, S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, AWS_REGION, BEDROCK_EMBEDDING_MODEL, mcp_api_base, jwks_client, s3, sqs_indexing, s3vectors
-from config import SUPABASE_SERVICE_ROLE_KEY
+from config import SUPABASE_SERVICE_ROLE_KEY, MAX_REQUEST_BYTES
 from mcp_server import create_mcp_app
 from routers import (
     chat_router,
@@ -72,6 +75,27 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# ── Global request size guard (YOL-54) ────────────────────────────────────────
+# Rejects requests whose Content-Length header exceeds MAX_REQUEST_BYTES before
+# the body is read, providing a second line of defence behind per-field limits.
+
+
+class _RequestSizeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_REQUEST_BYTES:
+                    return JSONResponse(
+                        {"detail": f"Request body exceeds maximum allowed size of {MAX_REQUEST_BYTES // 1024} KB"},
+                        status_code=413,
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
+
+
+app.add_middleware(_RequestSizeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
