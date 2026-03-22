@@ -24,6 +24,18 @@ FRONTEND_URL = (
 )
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 
+# ── Local dev mode ─────────────────────────────────────────────────────────────
+# Set LOCAL_MODE=true to bypass Supabase auth, IAM/K8s provisioning, and SM.
+# Use with S3_ENDPOINT_URL (MinIO) and SQS_ENDPOINT_URL (ElasticMQ) for a
+# fully offline dev environment via docker-compose.
+
+LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
+LOCAL_SITE_NAME: str = os.environ.get("LOCAL_SITE_NAME", "local")
+LOCAL_USER_ID: str = os.environ.get("LOCAL_USER_ID", "local-user-00000000")
+
+S3_ENDPOINT_URL: str = os.environ.get("S3_ENDPOINT_URL", "")
+SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -65,9 +77,12 @@ jwks_client = (
 _aws_profile = os.environ.get("AWS_PROFILE")
 boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else boto3.Session()
 
-s3 = boto_session.client("s3")
-sqs = boto_session.client("sqs", region_name=AWS_REGION) if SQS_QUEUE_URL else None
-sqs_indexing = boto_session.client("sqs", region_name=AWS_REGION) if SQS_INDEXING_QUEUE_URL else None
+_s3_kwargs = {"endpoint_url": S3_ENDPOINT_URL} if S3_ENDPOINT_URL else {}
+_sqs_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": SQS_ENDPOINT_URL} if SQS_ENDPOINT_URL else {})}
+
+s3 = boto_session.client("s3", **_s3_kwargs)
+sqs = boto_session.client("sqs", **_sqs_kwargs) if SQS_QUEUE_URL else None
+sqs_indexing = boto_session.client("sqs", **_sqs_kwargs) if SQS_INDEXING_QUEUE_URL else None
 sm = boto_session.client("secretsmanager", region_name=AWS_REGION)
 s3vectors = boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTORS_BUCKET else None
 

@@ -1,0 +1,110 @@
+services:
+  # ── MinIO — local S3 ──────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console (http://localhost:9001)
+    environment:
+      MINIO_ROOT_USER: yoloscribe
+      MINIO_ROOT_PASSWORD: yoloscribe
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Create the S3 bucket on first start
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      mc alias set local http://minio:9000 yoloscribe yoloscribe &&
+      mc mb local/yoloscribe --ignore-existing &&
+      echo "Bucket ready."
+    restart: on-failure
+
+  # ── ElasticMQ — local SQS ─────────────────────────────────────────────────────
+  elasticmq:
+    image: softwaremill/elasticmq-native:latest
+    ports:
+      - "9324:9324"   # SQS API
+    volumes:
+      - ./infra/local/elasticmq.conf:/opt/elasticmq.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9324"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend ───────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      elasticmq:
+        condition: service_healthy
+    environment:
+      # Local dev flags
+      LOCAL_MODE: "true"
+      LOCAL_SITE_NAME: "${LOCAL_SITE_NAME:-local}"
+      LOCAL_USER_ID: "${LOCAL_USER_ID:-local-user-00000000}"
+
+      # MinIO (S3)
+      S3_BUCKET: "${S3_BUCKET:-yoloscribe}"
+      S3_ENDPOINT_URL: "http://minio:9000"
+      AWS_ACCESS_KEY_ID: "yoloscribe"
+      AWS_SECRET_ACCESS_KEY: "yoloscribe"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+
+      # ElasticMQ (SQS)
+      SQS_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-runner"
+      SQS_INDEXING_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-indexing"
+      SQS_ENDPOINT_URL: "http://elasticmq:9324"
+
+      # Claude
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+
+      # Optional
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:5173}"
+
+  # ── Agent runner ──────────────────────────────────────────────────────────────
+  agent-runner:
+    build:
+      context: .
+      dockerfile: agent-runner/Dockerfile
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      elasticmq:
+        condition: service_healthy
+    environment:
+      # MinIO (S3)
+      BUCKET: "${S3_BUCKET:-yoloscribe}"
+      S3_ENDPOINT_URL: "http://minio:9000"
+      AWS_ACCESS_KEY_ID: "yoloscribe"
+      AWS_SECRET_ACCESS_KEY: "yoloscribe"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+
+      # ElasticMQ (SQS)
+      SQS_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-runner"
+      SQS_INDEXING_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-indexing"
+      SQS_ENDPOINT_URL: "http://elasticmq:9324"
+      LOCAL_RUNNER: "true"
+
+      # Claude
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+
+volumes:
+  minio-data:

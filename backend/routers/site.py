@@ -7,7 +7,7 @@ from starlette.requests import Request
 from auth import get_user_context, require_site_owner
 from rate_limit import limiter
 from aws.infra import deprovision_user_infrastructure, provision_user_infrastructure
-from config import CLOUDFRONT_DOMAIN, S3_BUCKET, s3
+from config import CLOUDFRONT_DOMAIN, LOCAL_MODE, S3_BUCKET, s3
 from models import ProvisionRequest, ProvisionResponse
 from s3_helpers import DEFAULT_WELCOME_MD, SITE_NAME_RE, VALID_THEMES, delete_s3_prefix, delete_site_vectors
 from supabase_helpers import supabase_delete_auth_user, supabase_delete_user_site, supabase_insert_user_site
@@ -83,7 +83,8 @@ async def provision(
                 Key=dst_key,
             )
 
-    supabase_insert_user_site(user_id, req.site_name, req.theme)
+    if not LOCAL_MODE:
+        supabase_insert_user_site(user_id, req.site_name, req.theme)
 
     try:
         await provision_user_infrastructure(user_id, req.site_name)

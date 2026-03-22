@@ -43,6 +43,8 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
+S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
+SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -83,7 +85,10 @@ _session = boto3.Session(profile_name=AWS_PROFILE or None)
 
 
 def _s3_client():
-    return _session.client("s3", region_name=AWS_REGION)
+    kwargs = {"region_name": AWS_REGION}
+    if S3_ENDPOINT_URL:
+        kwargs["endpoint_url"] = S3_ENDPOINT_URL
+    return _session.client("s3", **kwargs)
 
 
 def _sm_client():
@@ -95,7 +100,10 @@ def _enqueue_index_job(content_key: str) -> None:
     if not SQS_INDEXING_QUEUE_URL:
         return
     try:
-        sqs = _session.client("sqs", region_name=AWS_REGION)
+        sqs_kwargs = {"region_name": AWS_REGION}
+        if SQS_ENDPOINT_URL:
+            sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
+        sqs = _session.client("sqs", **sqs_kwargs)
         sqs.send_message(
             QueueUrl=SQS_INDEXING_QUEUE_URL,
             MessageBody=json.dumps({"bucket": BUCKET, "content_key": content_key, "user_id": USER_ID}),

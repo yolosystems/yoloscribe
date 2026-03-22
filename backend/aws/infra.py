@@ -14,6 +14,7 @@ from config import (
     AWS_REGION,
     EKS_OIDC_PROVIDER,
     K8S_NAMESPACE,
+    LOCAL_MODE,
     S3_BUCKET,
     SQS_INDEXING_QUEUE_URL,
     boto_session,
@@ -22,6 +23,8 @@ from config import (
 
 async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
     """Provision IAM role, K8s ServiceAccount, and SM placeholder for a new user."""
+    if LOCAL_MODE:
+        return
     role_name = f"yoloscribe-user-{user_id}"
     sa_name = f"user-{user_id}"
     sm_secret_name = f"yoloscribe/{user_id}/.initialized"
@@ -151,6 +154,8 @@ async def deprovision_user_infrastructure(user_id: str, site_name: str | None) -
 
     Returns a list of warning strings. Never raises.
     """
+    if LOCAL_MODE:
+        return []
     warnings: list[str] = []
     role_name = f"yoloscribe-user-{user_id}"
     sa_name = f"user-{user_id}"
