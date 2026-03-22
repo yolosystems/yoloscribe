@@ -32,8 +32,9 @@ services:
       AWS_ACCESS_KEY_ID: yoloscribe
       AWS_SECRET_ACCESS_KEY: yoloscribe
       AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: "${S3_BUCKET:-yoloscribe}"
     entrypoint: ["/bin/sh", "-c"]
-    command: ["aws s3 mb s3://yoloscribe --endpoint-url http://minio:9000 2>&1 || true"]
+    command: ["aws s3 mb s3://$$S3_BUCKET --endpoint-url http://minio:9000 2>&1 || true"]
     restart: on-failure
 
   # ── ElasticMQ — local SQS ─────────────────────────────────────────────────────
