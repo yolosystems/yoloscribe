@@ -14,11 +14,11 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD >/dev/null 2>&1 && mc ready local"]
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # Create the S3 bucket on first start.
   # Uses amazon/aws-cli (has a real shell) — minio/mc is built FROM scratch
@@ -43,11 +43,8 @@ services:
       - "9324:9324"   # SQS API
     volumes:
       - ./infra/local/elasticmq.conf:/opt/elasticmq.conf:ro
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9324"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+    # No healthcheck — ElasticMQ starts in <100ms; wget/curl are not available
+    # in the GraalVM native image.
 
   # ── Backend ───────────────────────────────────────────────────────────────────
   backend:
@@ -60,7 +57,7 @@ services:
       minio-init:
         condition: service_completed_successfully
       elasticmq:
-        condition: service_healthy
+        condition: service_started
     environment:
       # Local dev flags
       LOCAL_MODE: "true"
@@ -94,7 +91,7 @@ services:
       minio-init:
         condition: service_completed_successfully
       elasticmq:
-        condition: service_healthy
+        condition: service_started
     environment:
       # MinIO (S3)
       BUCKET: "${S3_BUCKET:-yoloscribe}"
