@@ -40,7 +40,7 @@ export default function ThemePicker({ value, onChange }: Props) {
               style={{ background: theme.colors.surface, borderBottom: `1px solid ${theme.colors.border}` }}
             >
               <span style={{ color: theme.colors.text, fontSize: '6px', fontWeight: 600 }}>
-                AgentScribe
+                YoloScribe
               </span>
             </div>
             <div className="theme-preview-content">

@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
-S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
+S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")

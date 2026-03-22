@@ -6,7 +6,7 @@ Environment variables:
     INDEXER_IMAGE               Docker image for the indexer Job container
     K8S_NAMESPACE               Kubernetes namespace for Jobs
     S3_VECTORS_BUCKET           S3 Vectors bucket name
-    S3_VECTORS_INDEX_NAME       S3 Vectors index name (default: agentscribe)
+    S3_VECTORS_INDEX_NAME       S3 Vectors index name (default: yoloscribe)
     BEDROCK_EMBEDDING_MODEL     Bedrock embedding model ID
     AWS_PROFILE                 (optional) named AWS profile for local development
     LOCAL_RUNNER                Set to "true" to run index-runner in subprocess
@@ -29,11 +29,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 SQS_INDEXING_QUEUE_URL = os.environ["SQS_INDEXING_QUEUE_URL"]
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-INDEXER_IMAGE = os.environ.get("INDEXER_IMAGE", "ghcr.io/nate-yolodev/agentscribe-indexer:latest")
-K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
-INDEXER_SERVICE_ACCOUNT = os.environ.get("INDEXER_SERVICE_ACCOUNT", "agentscribe-indexer")
+INDEXER_IMAGE = os.environ.get("INDEXER_IMAGE", "ghcr.io/nate-yolodev/yoloscribe-indexer:latest")
+K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
+INDEXER_SERVICE_ACCOUNT = os.environ.get("INDEXER_SERVICE_ACCOUNT", "yoloscribe-indexer")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
-S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
+S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
@@ -133,7 +133,7 @@ def _process_message_k8s(batch_v1, payload: dict, image_pull_secrets=None) -> No
     pod_spec = _pod_spec(container, image_pull_secrets=image_pull_secrets)
 
     ts = str(int(time.time()))
-    prefix = _safe_k8s_name("agentscribe-indexer", site)
+    prefix = _safe_k8s_name("yoloscribe-indexer", site)
     max_prefix = 63 - 1 - len(ts)
     job_name = f"{prefix[:max_prefix].rstrip('-')}-{ts}"
     _create_job(batch_v1, name=job_name, pod_spec=pod_spec)

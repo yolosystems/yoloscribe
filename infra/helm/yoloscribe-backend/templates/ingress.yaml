@@ -1,0 +1,30 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "yoloscribe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- if .Values.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    {{- end }}
+    {{- if .Values.ingress.group.name }}
+    alb.ingress.kubernetes.io/group.name: {{ .Values.ingress.group.name | quote }}
+    alb.ingress.kubernetes.io/group.order: {{ .Values.ingress.group.order | default 20 | quote }}
+    {{- end }}
+spec:
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "yoloscribe-backend.fullname" . }}
+                port:
+                  name: http
+{{- end }}

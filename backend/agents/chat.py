@@ -1,4 +1,7 @@
-"""ChatAgent — main orchestrator; routes user requests to specialist sub-agents."""
+"""ChatAgent — main orchestrator; routes user requests to specialist sub-agents.
+
+YoloScribe wiki assistant.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChatAgent(BaseAgent):
-    """Orchestrates all user interactions for the AgentScribe wiki.
+    """Orchestrates all user interactions for the YoloScribe wiki.
 
     Routes requests to:
     - ContentWriterAgent  — update page content
@@ -42,7 +45,7 @@ class ChatAgent(BaseAgent):
     """
 
     SYSTEM_PROMPT = """\
-You are the AgentScribe wiki assistant. You help users manage their wiki.
+You are the YoloScribe wiki assistant. You help users manage their wiki.
 
 IMPORTANT: Never describe or list your own internal tools (content_writer, \
 creator, page_creator, runner, search, create_skill, list_skills, list_agents, \
@@ -113,7 +116,7 @@ Current context:
         sm_client=None,
     ) -> None:
         self._s3_tools = S3Tools(s3=s3, bucket=bucket)
-        self._model_key = resolve_model_key("AGENTSCRIBE_CHAT_MODEL", "AGENTSCRIBE_MODEL")
+        self._model_key = resolve_model_key("YOLOSCRIBE_CHAT_MODEL", "YOLOSCRIBE_MODEL")
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
         self._sm_client = sm_client
@@ -481,7 +484,7 @@ Current context:
 def _oauth_token_exists(sm_client, user_id: str, tool_name: str) -> bool:
     """Return True if an OAuth token is stored in Secrets Manager for this user+tool."""
     try:
-        sm_client.get_secret_value(SecretId=f"agentscribe/{user_id}/oauth/{tool_name}")
+        sm_client.get_secret_value(SecretId=f"yoloscribe/{user_id}/oauth/{tool_name}")
         return True
     except Exception:
         return False

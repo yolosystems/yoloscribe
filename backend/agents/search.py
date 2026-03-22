@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
-S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
+S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 _TOP_K = 10

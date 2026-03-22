@@ -1,8 +1,8 @@
 ## Wiki Architecture
 
-AgentScribe is a fully agentic wiki that lives entirely in S3. All the content for the wiki, including the definitions of agents, the skills they can use, and the page content itself is stored as markdown files in S3. The frontend is a single page S3 website that renders the markdown files in the S3 bucket. The S3 structure is as follows:
+YoloScribe is a fully agentic wiki that lives entirely in S3. All the content for the wiki, including the definitions of agents, the skills they can use, and the page content itself is stored as markdown files in S3. The frontend is a single page S3 website that renders the markdown files in the S3 bucket. The S3 structure is as follows:
 
-server_name [This is the DNS name that maps to the root of the S3 bucket. It often takse this form: agentscribe-dev.s3-website-us-west-2.amazonaws.com but it can be aliased to different DNS names.]
+server_name [This is the DNS name that maps to the root of the S3 bucket. It often takse this form: yoloscribe-dev.s3-website-us-west-2.amazonaws.com but it can be aliased to different DNS names.]
     /site_name [The page is a prefix at the top level S3 bucket and represents a site.]
         index.html [This is the single page website that serves up the content.md file for the site]
         /assets [This is where the assets for the single page website live]
@@ -33,11 +33,11 @@ This document describes how all agents in this project should be implemented. Us
 
 ### Specific Agent Implementations
 
-These are the agents that are implemented in the agentscribe project.
+These are the agents that are implemented in the yoloscribe project.
 
 #### ChatAgent
 
-This agent is the main interface into the agentscribe application. It handles all inbound user queries and determines where to route the request. These requests will be handled by other agents. The ChatAgent must support the following user requests:
+This agent is the main interface into the yoloscribe application. It handles all inbound user queries and determines where to route the request. These requests will be handled by other agents. The ChatAgent must support the following user requests:
 
 1. Update the wiki content - route to the ContentWriterAgent
 2. Define a new agent.md file - route to the CreatorAgent

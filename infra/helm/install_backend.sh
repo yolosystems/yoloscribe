@@ -48,8 +48,8 @@ if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
   exit 1
 fi
 
-helm upgrade --install agentscribe-backend \
-  "$SCRIPT_DIR/agentscribe-backend" \
+helm upgrade --install yoloscribe-backend \
+  "$SCRIPT_DIR/yoloscribe-backend" \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \

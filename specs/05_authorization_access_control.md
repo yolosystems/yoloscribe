@@ -6,9 +6,9 @@ This section describes the authorization flows for both existing and new users. 
 
 These flows will refer to the following terms:
 
-1. Main Site - This is the URL that points to the top-level S3 bucket hosting the AgentScribe wiki. This URL points to a Cloudfront distribution.
+1. Main Site - This is the URL that points to the top-level S3 bucket hosting the YoloScribe wiki. This URL points to a Cloudfront distribution.
 2. UserId - This is the ID of a user as returned by Supabase. It will be an email address.
-3. User Site - This is the URL that points to the individual users's sites on the AgentScribe wiki. A user can only have one site, and it is always refered to by a url path [MainSite]/[UserSite]. For example:
+3. User Site - This is the URL that points to the individual users's sites on the YoloScribe wiki. A user can only have one site, and it is always refered to by a url path [MainSite]/[UserSite]. For example:
 
 Main Site: d2uffddt57s4t6.cloudfront.net
 UserId: knuth@runyolo.dev
@@ -16,7 +16,7 @@ User Site: knuth-home
 Full URL to user site: https://d2uffddt57s4t6.cloudfront.net/knuth-home
 
 4. The User Site is where the single page web application lives.
-5. The Main Site has a single page web app in it, which is open to the public, with detailed information about how AgentScribe works. 
+5. The Main Site has a single page web app in it, which is open to the public, with detailed information about how YoloScribe works. 
 
 ### Existing User Authorization Flow
 

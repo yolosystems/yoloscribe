@@ -122,7 +122,7 @@ class TestAuditLogging:
     def test_audit_log_emits_on_shared_write(self, caplog):
         """Verify the audit logger fires with the correct fields."""
         from routers.content import _audit_log
-        with caplog.at_level(logging.INFO, logger="agentscribe.audit"):
+        with caplog.at_level(logging.INFO, logger="yoloscribe.audit"):
             _audit_log.info(
                 json.dumps({
                     "event": "shared_write",
@@ -144,7 +144,7 @@ class TestAuditLogging:
 
     def test_audit_log_is_valid_json(self, caplog):
         from routers.content import _audit_log
-        with caplog.at_level(logging.INFO, logger="agentscribe.audit"):
+        with caplog.at_level(logging.INFO, logger="yoloscribe.audit"):
             _audit_log.info(
                 json.dumps({
                     "event": "shared_write",
@@ -161,4 +161,4 @@ class TestAuditLogging:
 
     def test_audit_logger_name(self):
         from routers.content import _audit_log
-        assert _audit_log.name == "agentscribe.audit"
+        assert _audit_log.name == "yoloscribe.audit"

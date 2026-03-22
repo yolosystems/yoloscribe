@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yoloscribe-indexer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yoloscribe-indexer.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "yoloscribe-indexer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yoloscribe-indexer.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "yoloscribe-indexer.serviceAccountName" . }}
+      {{- if .Values.ghcr.pat }}
+      imagePullSecrets:
+        - name: {{ include "yoloscribe-indexer.fullname" . }}-ghcr
+      {{- end }}
+      containers:
+        - name: polling-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uv", "run", "polling-worker"]
+          env:
+            - name: SQS_INDEXING_QUEUE_URL
+              value: {{ .Values.config.sqsIndexingQueueUrl | quote }}
+            - name: S3_VECTORS_BUCKET
+              value: {{ .Values.config.s3VectorsBucket | quote }}
+            - name: S3_VECTORS_INDEX_NAME
+              value: {{ .Values.config.s3VectorsIndexName | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.config.awsRegion | quote }}
+            - name: BEDROCK_EMBEDDING_MODEL
+              value: {{ .Values.config.bedrockEmbeddingModel | quote }}
+            - name: K8S_NAMESPACE
+              value: {{ .Values.config.k8sNamespace | quote }}
+            - name: INDEXER_IMAGE
+              value: {{ include "yoloscribe-indexer.indexerImage" . | quote }}
+            - name: INDEXER_SERVICE_ACCOUNT
+              value: {{ .Values.config.indexerServiceAccount | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

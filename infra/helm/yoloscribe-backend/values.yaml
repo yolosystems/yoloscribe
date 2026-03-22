@@ -1,0 +1,117 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+# Never set ghcr.pat here — pass it via --set on the command line.
+ghcr:
+  username: ""          # set in environment-specific values file
+  pat: ""               # pass via --set; never commit a real value
+
+# ── Replicas & autoscaling ────────────────────────────────────────────────────
+replicaCount: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# ── Service ───────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 8000
+
+# ── Ingress (AWS ALB via Load Balancer Controller) ────────────────────────────
+ingress:
+  enabled: true
+  host: ""
+  certificateArn: ""
+  # ALB Ingress Group — set group.name to share an ALB with mcp-helm.
+  # Both charts must use the same group.name. YoloScribe owns the catch-all
+  # path (/) so it should have the highest group.order number (lowest priority).
+  group:
+    name: ""    # e.g. yolo-prod; leave empty for a dedicated ALB
+    order: 20   # lowest priority — catch-all route
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+# ── Service account (IRSA) ───────────────────────────────────────────────────
+# The attached IAM role must have the policy defined in
+# infra/iam/yoloscribe-backend-policy.json, which covers:
+#   - s3:GetObject / PutObject / ListBucket  on yoloscribe-* buckets
+#   - secretsmanager:CreateSecret / PutSecretValue / GetSecretValue / DescribeSecret
+#     on yoloscribe* secrets (write access needed to store per-user API keys)
+#   - iam:CreateRole / PutRolePolicy / GetRole on yoloscribe-user-* roles
+#   - sqs:SendMessage on yoloscribe-* queues
+serviceAccount:
+  create: true
+  iamRoleArn: ""
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  s3Bucket: ""
+  allowedOrigins: ""
+  model: ""
+  sqsQueueUrl: ""
+  sqsIndexingQueueUrl: ""
+  eksOidcProvider: ""
+  awsAccountId: ""
+  awsRegion: ""
+  k8sNamespace: ""
+  supabaseUrl: ""
+  cloudfrontDomain: ""
+  s3VectorsBucket: ""
+  s3VectorsIndexName: "yoloscribe"
+  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
+  mcpBaseUrl: ""
+
+# ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
+# Pass via --set on the command line; never commit a real value here.
+webhookSecret: ""
+
+# ── Supabase service role key (for /provision and site ownership lookups) ─────
+# Pass via --set on the command line; never commit a real value here.
+supabaseServiceRoleKey: ""
+
+# ── Anthropic API key secret ──────────────────────────────────────────────────
+# Option A: reference an existing Kubernetes secret (recommended for production)
+#   existingSecret: yoloscribe-secrets
+#   existingSecretKey: anthropic-api-key
+#
+# Option B: pass the key directly (for development only — do not commit)
+#   anthropicApiKey: "sk-ant-..."
+existingSecret: ""
+existingSecretKey: anthropic-api-key
+anthropicApiKey: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ── Probes ────────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10

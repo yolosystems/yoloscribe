@@ -1,4 +1,4 @@
-"""JWT authentication helpers for the AgentScribe API."""
+"""JWT authentication helpers for the YoloScribe API."""
 
 import dataclasses
 import datetime

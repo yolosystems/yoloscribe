@@ -1,4 +1,4 @@
-"""AgentScribe Remote MCP Server.
+"""YoloScribe Remote MCP Server.
 
 Provides wiki CRUD, search, and agent management tools over HTTP for use by
 Claude Code and other MCP-compatible AI agents.
@@ -98,8 +98,8 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
     def _www_authenticate(self) -> str:
         if self._base_url:
             metadata_url = f"{self._base_url}/.well-known/oauth-authorization-server"
-            return f'Bearer realm="AgentScribe", resource_metadata="{metadata_url}"'
-        return 'Bearer realm="AgentScribe"'
+            return f'Bearer realm="YoloScribe", resource_metadata="{metadata_url}"'
+        return 'Bearer realm="YoloScribe"'
 
     async def dispatch(self, request: Request, call_next):
         # CORS preflights pass through; CORS headers are added by the parent app.
@@ -222,9 +222,9 @@ def create_mcp_app(
 ):
     """Create and return the FastMCP ASGI app, ready to mount at /mcp/v1."""
     mcp = FastMCP(
-        "AgentScribe",
+        "YoloScribe",
         instructions=(
-            "AgentScribe is an AI-powered wiki. You can read, create, update, and delete "
+            "YoloScribe is an AI-powered wiki. You can read, create, update, and delete "
             "wiki pages, run semantic or keyword searches, and manage agent sessions. "
             "All operations are scoped to the authenticated user's site."
         ),
@@ -572,7 +572,7 @@ def create_mcp_app(
     # ── Agent management ──────────────────────────────────────────────────────
     # Agent sessions are stored at {site}/.mcp/agents/{agent_id}/meta.json
     # and {site}/.mcp/agents/{agent_id}/context.json.
-    # These are distinct from agent.md definitions used by the AgentScribe runner.
+    # These are distinct from agent.md definitions used by the YoloScribe runner.
 
     @mcp.tool()
     async def agent_create(

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/nate-yolodev/agentscribe-backend
+  repository: ghcr.io/nate-yolodev/yoloscribe-backend
   tag: latest
   pullPolicy: Always
 

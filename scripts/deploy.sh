@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUCKET="agentscribe-dev"
+BUCKET="agentscribe-dev"  # Phase 3: rename to yoloscribe-dev
 SITE="knuth-home"
 
 # Set VITE_API_BASE to your ALB URL before running, e.g.:

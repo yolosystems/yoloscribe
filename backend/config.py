@@ -1,4 +1,4 @@
-"""Centralised configuration and AWS client singletons for AgentScribe."""
+"""Centralised configuration and AWS client singletons for YoloScribe."""
 
 import logging
 import os
@@ -13,7 +13,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
-S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "agentscribe")
+S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
@@ -30,7 +30,7 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
-K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
+K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 # When REDIS_URL is set, rate-limit state is shared across replicas.

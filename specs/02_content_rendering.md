@@ -1,5 +1,5 @@
 ### Content Rendering
-+ AgentScribe is a wiki that runs in S3 as a single page website.
++ YoloScribe is a wiki that runs in S3 as a single page website.
 + Each site in the S3 bucket has its own prefix. For example, if I want to create a new site called "engineering wiki" then this would be in the S3 bucket under a "engineering_wiki" prefix.
 + The content for each site is written in markdown in a file called "content.md"
 + The single page website should render the markdown.

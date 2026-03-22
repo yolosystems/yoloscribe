@@ -129,7 +129,7 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
     from mcp_oauth import refresh_access_token as _refresh
     from mcp_oauth.discovery import AuthorizationServerMetadata
 
-    secret_id = f"agentscribe/{user_id}/oauth/{tool_name}"
+    secret_id = f"yoloscribe/{user_id}/oauth/{tool_name}"
     try:
         resp = sm.get_secret_value(SecretId=secret_id)
         token_data: dict = json.loads(resp["SecretString"])
@@ -197,7 +197,7 @@ def _get_aws_sso_credential_headers(user_id: str, sm) -> dict[str, str]:
 
     Raises OAuthTokenError if the token is missing, expired, or the exchange fails.
     """
-    secret_id = f"agentscribe/{user_id}/oauth/aws-sso"
+    secret_id = f"yoloscribe/{user_id}/oauth/aws-sso"
     try:
         resp = sm.get_secret_value(SecretId=secret_id)
         token_data: dict = json.loads(resp["SecretString"])
@@ -464,7 +464,7 @@ def main() -> None:
                     log.warning("Failed to load tools from MCP client: %s", exc)
 
             model_key = agent_def.model or _resolve_model_key(
-                "AGENTSCRIBE_RUNNER_MODEL", "AGENTSCRIBE_MODEL"
+                "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
             )
             model = _build_model(model_key)
             log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)

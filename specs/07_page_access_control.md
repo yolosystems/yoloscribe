@@ -1,6 +1,6 @@
 ## Access Control
 
-This document describes how the AgentScribe wiki should implement access to control to individual wiki pages.
+This document describes how the YoloScribe wiki should implement access to control to individual wiki pages.
 The glossary of terms used in this document is as follows:
 
 1. "Main Site" - This is the page that exists at the top level of the S3 bucket. In the URL, it is the DNS name of the cloudfront distribution.
@@ -48,13 +48,13 @@ We will want users of shared pages to eventually be able to have "Full Control" 
 
 Updating the IAM policy every time a page is shared with the user isn't going to be a scalable solution - IAM is not designed for high volume API calls to put policy docs in place. So I think the solution here is eventually to create the concept of a "group". For shared pages that require the shared users to have "Full Control" access, those users must first be placed into a group. When a group is created, an IAM role & policy for that group is provisioned, and the S3 resources in the policy will include all the user sites that group has access to. Page owners can still share pages to individual users, but they'll just have "Write" access. Shared users with "Full Control" have be put into a group first.
 
-AgentWiki should also be able to support SSO with identity federation to providers that support the concept of groups. For example, AgentWiki should be able to use Microsoft Entre AD (or other SAML compatible system). This will allow users to be managed in groups in their LDAP directory entries, and those groups can be created automatically in AgentScribe when a user registers for the first time and the SAML claim is sent to the callback URL in the backend.
+AgentWiki should also be able to support SSO with identity federation to providers that support the concept of groups. For example, AgentWiki should be able to use Microsoft Entre AD (or other SAML compatible system). This will allow users to be managed in groups in their LDAP directory entries, and those groups can be created automatically in YoloScribe when a user registers for the first time and the SAML claim is sent to the callback URL in the backend.
 
-Question: Aside from SAML, what other SSO protocols support the concept of a group? AgentScribe should support this as well.
+Question: Aside from SAML, what other SSO protocols support the concept of a group? YoloScribe should support this as well.
 
 When coming up with the detailed implementation plan for this, make suggestions about what kind of database we will need to map users to groups. Favor "serverless" solutions (like DynamoDB and S3 tables) over ones that require running more infrastructure.
 
-Also, the current implementation is tightly coupled with Supabase for SSO. For this future implementation plan to support groups, make the SSO modular, so that when somebody deploys an instance of AgentScribe they can choose to do SSO with any OAuth/JWT compatible provider, SAML provider, and any other commonly used SSO protocol.
+Also, the current implementation is tightly coupled with Supabase for SSO. For this future implementation plan to support groups, make the SSO modular, so that when somebody deploys an instance of YoloScribe they can choose to do SSO with any OAuth/JWT compatible provider, SAML provider, and any other commonly used SSO protocol.
 
 
 

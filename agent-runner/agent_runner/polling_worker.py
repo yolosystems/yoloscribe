@@ -31,9 +31,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/agentscribe-agent-runner:latest")
+AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/yoloscribe-agent-runner:latest")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "agentscribe")
+K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
 

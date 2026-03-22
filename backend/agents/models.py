@@ -1,9 +1,9 @@
-"""Model registry for AgentScribe agents.
+"""Model registry for YoloScribe agents.
 
 Usage:
     from .models import build_strands_model, resolve_model_key
 
-    model_key = resolve_model_key("AGENTSCRIBE_WRITER_MODEL", "AGENTSCRIBE_MODEL")
+    model_key = resolve_model_key("YOLOSCRIBE_WRITER_MODEL", "YOLOSCRIBE_MODEL")
     model = build_strands_model(model_key)
 """
 
@@ -57,7 +57,7 @@ def resolve_model_key(*env_vars: str) -> str:
     """Return the first non-empty env var value, falling back to DEFAULT_MODEL_KEY.
 
     Usage:
-        resolve_model_key("AGENTSCRIBE_WRITER_MODEL", "AGENTSCRIBE_MODEL")
+        resolve_model_key("YOLOSCRIBE_WRITER_MODEL", "YOLOSCRIBE_MODEL")
     """
     for var in env_vars:
         val = os.getenv(var, "").strip()

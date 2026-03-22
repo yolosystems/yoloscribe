@@ -2,7 +2,7 @@
 
 This document describes the strategy for deploying remote-capable versions of open-source MCP servers that ship as servers designed to be run locally in agentic coding tools like Claude Code.
 
-AgentScribe is a distfibuted web-based application running in the AWS cloud, and as such, creating new skills for agents to use that rely on local MCP servers is not convenient (or secure). As a result, we've had to convert several MCP servers to remote-capable servers.
+YoloScribe is a distfibuted web-based application running in the AWS cloud, and as such, creating new skills for agents to use that rely on local MCP servers is not convenient (or secure). As a result, we've had to convert several MCP servers to remote-capable servers.
 
 ### Google Workspace
 

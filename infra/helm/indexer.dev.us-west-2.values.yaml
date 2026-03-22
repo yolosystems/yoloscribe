@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/nate-yolodev/agentscribe-indexer
+  repository: ghcr.io/nate-yolodev/yoloscribe-indexer
   tag: latest
   pullPolicy: Always
 

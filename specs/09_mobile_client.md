@@ -1,6 +1,6 @@
 ## Mobile Client
 
-This document describes the design for a native mobile client (iOS and Android) for AgentScribe using the existing FastAPI backend without modification.
+This document describes the design for a native mobile client (iOS and Android) for YoloScribe using the existing FastAPI backend without modification.
 
 ---
 
@@ -21,7 +21,7 @@ The web client uses Supabase's browser-based Google OAuth flow. On mobile the sa
 Flow:
 1. App calls Supabase to obtain an authorization URL for the Google OAuth provider.
 2. Platform secure browser opens. User authenticates with Google.
-3. Supabase redirects to the app via a registered deep link scheme (e.g. `agentscribe://auth/callback`).
+3. Supabase redirects to the app via a registered deep link scheme (e.g. `yoloscribe://auth/callback`).
 4. App extracts the tokens from the URL fragment and stores them in the platform keychain (iOS Keychain / Android Keystore).
 5. Supabase client SDK on mobile handles automatic token refresh. The raw `access_token` (a JWT) is attached to every API request as `Authorization: Bearer <token>`.
 
@@ -204,7 +204,7 @@ A "Credentials" screen (accessible from a settings or profile area, owner-only) 
 
 **OAuth skills** (`type: "oauth"`):
 - Authenticated badge with expiry date, or unauthenticated state.
-- "Connect" / "Reconnect" button → calls `POST /oauth/initiate/{skillName}` → receives `{ auth_url }` → opens the URL in the platform secure browser → handles deep-link callback (`agentscribe://oauth/callback?oauth_success=…` or `?oauth_error=…`) → updates the UI.
+- "Connect" / "Reconnect" button → calls `POST /oauth/initiate/{skillName}` → receives `{ auth_url }` → opens the URL in the platform secure browser → handles deep-link callback (`yoloscribe://oauth/callback?oauth_success=…` or `?oauth_error=…`) → updates the UI.
 
 **Key-based skills** (`type: "key"`):
 - List of required variables with stored/missing status.
@@ -293,7 +293,7 @@ The mobile client uses the existing FastAPI backend with zero backend changes. E
 ### Implementation Notes
 
 - **Recommended stack**: React Native with Expo (shares some logic with the web frontend — in particular the API layer and Supabase client configuration) is the lowest-effort path. Alternatively, Swift/SwiftUI + Kotlin/Compose if native performance is a priority.
-- **Deep link scheme**: Register `agentscribe://` for OAuth and auth callbacks on both platforms.
+- **Deep link scheme**: Register `yoloscribe://` for OAuth and auth callbacks on both platforms.
 - **Secure storage**: Always use the platform keychain/keystore for tokens and secrets — never `AsyncStorage` or `SharedPreferences` for sensitive values.
 - **Network timeout**: Set a 120 s timeout on `POST /chat` to accommodate long reasoning chains; use a shorter timeout (10 s) for all other endpoints.
 - **Offline**: Implement read-only offline mode via the content cache. Write operations fail gracefully with a toast when offline.
