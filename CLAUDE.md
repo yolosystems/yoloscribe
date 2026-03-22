@@ -7,9 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Local dev (Docker Compose — no AWS required)
 ```bash
 cp .env.local .env        # fill in ANTHROPIC_API_KEY
-docker compose up -d      # MinIO + ElasticMQ + backend + agent-runner
-cd frontend && npm install && npm run dev  # Vite on http://localhost:5173
-# Site: http://localhost:5173/local/
+docker compose up -d      # MinIO + ElasticMQ + backend + agent-runner + frontend
+# Open http://localhost:5173 → redirects to /local/
 ```
 See `INSTALL.md` for full details.
 

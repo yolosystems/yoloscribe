@@ -20,7 +20,7 @@ Open `.env` and set your API key:
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## 2. Start infrastructure + backend
+## 2. Start everything
 
 ```bash
 docker compose up -d
@@ -29,23 +29,18 @@ docker compose up -d
 This starts:
 | Service | URL | Description |
 |---|---|---|
+| **frontend** | http://localhost:5173 | React SPA (nginx, built) → redirects to `/local/` |
 | **backend** | http://localhost:8000 | FastAPI backend |
 | **agent-runner** | — | Async agent worker (polls SQS) |
 | **MinIO** | http://localhost:9000 | Local S3 (API) |
 | MinIO console | http://localhost:9001 | Web UI — user: `yoloscribe` / pass: `yoloscribe` |
 | **ElasticMQ** | http://localhost:9324 | Local SQS |
 
-## 3. Start the frontend
+## 3. Open the browser
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+Navigate to http://localhost:5173 — it redirects automatically to your local wiki at `/local/`.
 
-Open http://localhost:5173 in your browser.
-
-Your local wiki site is named **`local`** — navigate to http://localhost:5173/local/ to see it.
+No sign-in required. The topbar shows **Local** instead of an auth avatar.
 
 ## How local mode works
 
@@ -56,6 +51,28 @@ Setting `LOCAL_MODE=true` makes the following changes:
 - **S3** — all bucket operations go to MinIO via `S3_ENDPOINT_URL`.
 - **SQS** — all queue operations go to ElasticMQ via `SQS_ENDPOINT_URL`.
 - **Agent indexing** — `LOCAL_RUNNER=true` runs the index job inline (no K8s).
+
+## Active frontend development (optional)
+
+The frontend container serves a pre-built bundle — there's no hot reload. If you're working on the frontend, run the Vite dev server on the host instead:
+
+```bash
+# Start everything except the frontend container
+docker compose up -d minio minio-init elasticmq backend agent-runner
+
+# Run the Vite dev server with local mode flags
+cd frontend
+npm install
+VITE_LOCAL_MODE=true npm run dev
+```
+
+The Vite proxy (`/api → localhost:8000`) routes API calls to the backend container. Open http://localhost:5173/local/.
+
+After frontend changes, rebuild the container with:
+
+```bash
+docker compose build frontend && docker compose up -d frontend
+```
 
 ## Running backend outside Docker (optional)
 

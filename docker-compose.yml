@@ -107,5 +107,23 @@ services:
       # Claude
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
 
+  # ── Frontend ──────────────────────────────────────────────────────────────────
+  # Serves the built React SPA via nginx at http://localhost:5173/local/
+  # VITE_* vars are baked in at build time — rebuild with `docker compose build frontend`
+  # after frontend source changes. For active frontend dev, run `npm run dev` on
+  # the host instead (it proxies /api to the backend container on port 8000).
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE: "http://localhost:8000"
+        VITE_LOCAL_MODE: "true"
+        VITE_SITE: "local"
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
 volumes:
   minio-data:
