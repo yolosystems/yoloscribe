@@ -46,6 +46,12 @@ def get_content(site: str, path: str = "content.md") -> str:
         return ""
 
 
+def get_content_with_etag(site: str, path: str = "content.md") -> tuple[str, str]:
+    """Return (content, etag). Raises if the object does not exist."""
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=f"{site}/{path}")
+    return obj["Body"].read().decode("utf-8"), obj["ETag"]
+
+
 def put_content(site: str, path: str, content: str) -> None:
     s3.put_object(
         Bucket=S3_BUCKET,
@@ -53,6 +59,23 @@ def put_content(site: str, path: str, content: str) -> None:
         Body=content.encode("utf-8"),
         ContentType="text/markdown; charset=utf-8",
     )
+
+
+def put_content_conditional(site: str, path: str, content: str, etag: str) -> bool:
+    """PUT with If-Match. Returns True on success, False on 412 conflict."""
+    try:
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=f"{site}/{path}",
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+            IfMatch=etag,
+        )
+        return True
+    except s3.exceptions.ClientError as exc:
+        if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+            return False
+        raise
 
 
 def delete_s3_prefix(site_name: str) -> None:
