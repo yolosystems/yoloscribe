@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-SQL migration files for the AgentScribe Supabase project.
+SQL migration files for the YoloScribe Supabase project.
 
 ## Applying Migrations
 

@@ -1,6 +1,6 @@
-"""AgentScribe Discord bot — core bot logic.
+"""YoloScribe Discord bot — core bot logic.
 
-Setup slash command: /agentscribe setup <api_token>
+Setup slash command: /yoloscribe setup <api_token>
 Message handling: any message in a configured channel is routed to POST /chat.
 
 Page targeting syntax:
@@ -24,11 +24,11 @@ import httpx
 from discord import app_commands
 
 from discord_bot import crypto, rate_tracker, supabase
-from discord_bot.config import AGENTSCRIBE_API_URL
+from discord_bot.config import YOLOSCRIBE_API_URL
 
 
 class RateLimitError(Exception):
-    """Raised when the AgentScribe backend returns HTTP 429."""
+    """Raised when the YoloScribe backend returns HTTP 429."""
 
     def __init__(self, retry_after: str) -> None:
         self.retry_after = retry_after
@@ -61,11 +61,11 @@ def truncate_response(text: str) -> str:
     """Truncate a response to fit Discord's 2000-char limit."""
     if len(text) <= _DISCORD_MAX_CHARS:
         return text
-    suffix = "\n…(truncated — see the full response in AgentScribe)"
+    suffix = "\n…(truncated — see the full response in YoloScribe)"
     return text[: _DISCORD_MAX_CHARS - len(suffix)] + suffix
 
 
-class AgentScribeBot(discord.Client):
+class YoloScribeBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True  # Privileged intent — must be enabled in the Dev Portal
@@ -75,12 +75,12 @@ class AgentScribeBot(discord.Client):
 
     def _register_commands(self) -> None:
         @self.tree.command(
-            name="agentscribe",
-            description="AgentScribe commands",
+            name="yoloscribe",
+            description="YoloScribe commands",
         )
         @app_commands.describe(action="Action to perform (setup)")
-        @app_commands.describe(api_token="Your AgentScribe API token (as_...)")
-        async def agentscribe(
+        @app_commands.describe(api_token="Your YoloScribe API token (as_...)")
+        async def yoloscribe(
             interaction: discord.Interaction,
             action: str,
             api_token: str,
@@ -98,7 +98,7 @@ class AgentScribeBot(discord.Client):
         log.info("Slash commands synced globally")
 
     async def on_ready(self) -> None:
-        log.info("AgentScribe bot ready as %s (id=%s)", self.user, self.user.id)  # type: ignore[union-attr]
+        log.info("YoloScribe bot ready as %s (id=%s)", self.user, self.user.id)  # type: ignore[union-attr]
 
     # ── Setup command ──────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ class AgentScribeBot(discord.Client):
         if not (api_token.startswith("as_") and len(api_token) == 3 + 64):
             await interaction.followup.send(
                 "❌ Invalid token format. Expected `as_<64 hex chars>`. "
-                "Create a token at your AgentScribe site settings.",
+                "Create a token at your YoloScribe site settings.",
                 ephemeral=True,
             )
             return
@@ -143,7 +143,7 @@ class AgentScribeBot(discord.Client):
             return
 
         await interaction.followup.send(
-            f"✅ This channel is now connected to AgentScribe site **{row['site_name']}**. "
+            f"✅ This channel is now connected to YoloScribe site **{row['site_name']}**. "
             "Send any message here to chat with your wiki.",
             ephemeral=True,
         )
@@ -164,7 +164,7 @@ class AgentScribeBot(discord.Client):
             log.error("Failed to decrypt token for channel %s: %s", message.channel.id, exc)
             await message.reply(
                 "⚠️ Failed to decrypt stored token. "
-                "Please re-run `/agentscribe setup` with a valid token."
+                "Please re-run `/yoloscribe setup` with a valid token."
             )
             return
 
@@ -179,7 +179,7 @@ class AgentScribeBot(discord.Client):
                 thread = await _get_or_create_thread(message)
                 await thread.send(
                     "⚠️ This channel is generating high request volume. "
-                    "Check your rate limit headroom in the AgentScribe UI."
+                    "Check your rate limit headroom in the YoloScribe UI."
                 )
             except discord.HTTPException:
                 pass
@@ -197,7 +197,7 @@ class AgentScribeBot(discord.Client):
                 thread = await _get_or_create_thread(message)
                 await thread.send(
                     "⚠️ Your message is very long and may have been truncated "
-                    "before reaching the AgentScribe agent."
+                    "before reaching the YoloScribe agent."
                 )
             except discord.HTTPException:
                 pass
@@ -221,7 +221,7 @@ class AgentScribeBot(discord.Client):
         except Exception as exc:
             log.error("Chat API error for channel %s: %s", message.channel.id, exc)
             outcome_reaction = "❌"
-            reply_text = f"❌ AgentScribe returned an error: {exc}"
+            reply_text = f"❌ YoloScribe returned an error: {exc}"
 
         # Post response in a thread on the original message.
         try:
@@ -244,10 +244,10 @@ class AgentScribeBot(discord.Client):
         file_path: str,
         message: str,
     ) -> str:
-        """POST to the AgentScribe /chat endpoint and return the reply text."""
+        """POST to the YoloScribe /chat endpoint and return the reply text."""
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                f"{AGENTSCRIBE_API_URL}/chat",
+                f"{YOLOSCRIBE_API_URL}/chat",
                 headers={"Authorization": f"Bearer {raw_token}"},
                 json={
                     "message": message,
@@ -270,4 +270,4 @@ async def _get_or_create_thread(message: discord.Message) -> Any:
         return message.channel
     # Create a thread named after the first 50 chars of the message content.
     thread_name = (message.content[:47] + "...") if len(message.content) > 50 else message.content
-    return await message.create_thread(name=thread_name or "AgentScribe", auto_archive_duration=60)
+    return await message.create_thread(name=thread_name or "YoloScribe", auto_archive_duration=60)

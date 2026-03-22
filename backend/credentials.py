@@ -11,7 +11,7 @@ from config import S3_BUCKET, s3, sm
 
 SM_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 VAR_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-_SM_SECRET_PREFIX = "agentscribe"
+_SM_SECRET_PREFIX = "yoloscribe"
 
 
 # ── Secret ID helpers ──────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ def load_tool_oauth_client(tool_name: str) -> dict | None:
 
 def load_platform_client_secret(tool_name: str) -> str | None:
     """Load the platform-level OAuth client_secret from Secrets Manager."""
-    sid = f"agentscribe/platform/oauth/{tool_name}"
+    sid = f"yoloscribe/platform/oauth/{tool_name}"
     try:
         resp = sm.get_secret_value(SecretId=sid)
         data = json.loads(resp["SecretString"])

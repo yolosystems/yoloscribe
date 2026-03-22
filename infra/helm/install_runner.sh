@@ -38,8 +38,8 @@ if [[ -z "${GHCR_PAT:-}" ]]; then
   exit 1
 fi
 
-helm upgrade --install agentscribe-agent-runner \
-  "$SCRIPT_DIR/agentscribe-agent-runner" \
+helm upgrade --install yoloscribe-agent-runner \
+  "$SCRIPT_DIR/yoloscribe-agent-runner" \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \

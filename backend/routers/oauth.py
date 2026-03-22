@@ -126,7 +126,7 @@ async def oauth_initiate(
                     client,
                     auth_meta.registration_endpoint,
                     OAUTH_REDIRECT_URI,
-                    "AgentScribe",
+                    "YoloScribe",
                 )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Dynamic client registration failed: {exc}") from exc
@@ -264,7 +264,7 @@ async def _initiate_aws_sso(user_id: str, site: str) -> dict:
     oidc = boto3.client("sso-oidc", region_name=sso_region)
 
     try:
-        reg = oidc.register_client(clientName="AgentScribe", clientType="public")
+        reg = oidc.register_client(clientName="YoloScribe", clientType="public")
     except Exception as exc:
         logging.error("RegisterClient failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"AWS SSO client registration failed: {exc}") from exc

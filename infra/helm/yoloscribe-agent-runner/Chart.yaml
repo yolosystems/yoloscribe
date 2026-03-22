@@ -1,0 +1,6 @@
+apiVersion: v2
+name: yoloscribe-agent-runner
+description: YoloScribe polling worker — dispatches K8s Jobs/CronJobs from SQS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,6 +1,6 @@
 ## Users, Groups, and Modular SSO
 
-This document describes the future implementation plan for groups, Full Control sharing, and modular SSO in AgentScribe.
+This document describes the future implementation plan for groups, Full Control sharing, and modular SSO in YoloScribe.
 
 > **DO NOT IMPLEMENT NOW.** This is a planning document only.
 
@@ -27,7 +27,7 @@ The solution is a **group**: a named entity with its own IAM role and policy. A 
 ```
 Group:
   group_id: UUID
-  name: string           # human-readable, scoped to the AgentScribe instance
+  name: string           # human-readable, scoped to the YoloScribe instance
   created_by: user_id
   s3_prefixes: [string]  # list of "{site_name}/*" prefixes the group can access
   members: [user_id]
@@ -36,7 +36,7 @@ Group:
 #### IAM Role Provisioning for Groups
 
 When a group is created:
-1. An IAM role `agentscribe-group-{group_id}` is created with an IRSA trust policy targeting a Kubernetes service account `group-{group_id}` in the `agentscribe` namespace.
+1. An IAM role `yoloscribe-group-{group_id}` is created with an IRSA trust policy targeting a Kubernetes service account `group-{group_id}` in the `yoloscribe` namespace.
 2. An inline policy is attached granting `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on all prefixes in `group.s3_prefixes`.
 3. The K8s service account is annotated with the group's IAM role ARN.
 
@@ -65,7 +65,7 @@ Individual users (not in a group) can have View or Write access, but never Full 
 
 ### Storage for Groups (Serverless-First)
 
-#### DynamoDB Table: `agentscribe-groups`
+#### DynamoDB Table: `yoloscribe-groups`
 
 Primary key: `group_id` (UUID, partition key)
 
@@ -84,7 +84,7 @@ Secondary indexes:
 
 AWS S3 Tables (based on Apache Iceberg) provide a serverless tabular store. This could replace DynamoDB for groups if the query patterns are compatible (point lookups + simple scans). S3 Tables add complexity in SDK maturity; DynamoDB is the pragmatic choice for initial implementation.
 
-#### DynamoDB Table: `agentscribe-group-memberships`
+#### DynamoDB Table: `yoloscribe-group-memberships`
 
 Separate table for efficient reverse lookups (user → groups):
 
@@ -92,7 +92,7 @@ Separate table for efficient reverse lookups (user → groups):
 - Sort key: `group_id`
 - Attributes: `joined_at`
 
-This table is kept in sync with `agentscribe-groups.members` by the group management API.
+This table is kept in sync with `yoloscribe-groups.members` by the group management API.
 
 ---
 
@@ -100,7 +100,7 @@ This table is kept in sync with `agentscribe-groups.members` by the group manage
 
 #### Current State
 
-AgentScribe is tightly coupled to Supabase for authentication. Supabase handles:
+YoloScribe is tightly coupled to Supabase for authentication. Supabase handles:
 1. OAuth2/OIDC flows (Google, GitHub, etc.)
 2. JWT issuance and JWKS endpoint
 3. User metadata (email, `app_metadata.site_name`)
@@ -139,9 +139,9 @@ The active provider is selected by a new `AUTH_PROVIDER` environment variable (`
 
 #### SAML 2.0 Integration
 
-SAML flow for AgentScribe:
-1. User visits an AgentScribe site and clicks "Sign in with SSO".
-2. AgentScribe acts as the Service Provider (SP), redirects to the Identity Provider (IdP).
+SAML flow for YoloScribe:
+1. User visits an YoloScribe site and clicks "Sign in with SSO".
+2. YoloScribe acts as the Service Provider (SP), redirects to the Identity Provider (IdP).
 3. IdP authenticates the user and posts a SAML assertion to `/auth/saml/callback`.
 4. Backend validates the assertion (signature, audience, expiry) using the IdP's certificate.
 5. Backend extracts `NameID` (email), `groups` attribute, and any other claims.
@@ -149,8 +149,8 @@ SAML flow for AgentScribe:
 
 Group mapping from SAML:
 - `AttributeStatement` typically contains a `groups` attribute with one or more `AttributeValue` entries listing the user's group memberships.
-- AgentScribe reads these groups at login time and auto-creates/syncs corresponding AgentScribe groups.
-- Users are added to AgentScribe groups matching their SAML group names; group IAM roles are provisioned lazily on first Full Control share.
+- YoloScribe reads these groups at login time and auto-creates/syncs corresponding YoloScribe groups.
+- Users are added to YoloScribe groups matching their SAML group names; group IAM roles are provisioned lazily on first Full Control share.
 
 Libraries: `python3-saml` or `pysaml2` for SP-side SAML validation.
 
@@ -158,9 +158,9 @@ Libraries: `python3-saml` or `pysaml2` for SP-side SAML validation.
 
 On SAML login:
 1. Parse the `groups` claim from the SAML assertion.
-2. For each group name, upsert a row in `agentscribe-groups` (keyed by `name`, scoped to the OIDC/SAML tenant).
-3. Add the user to those groups in `agentscribe-group-memberships`.
-4. Remove the user from any AgentScribe groups whose SAML group name is no longer in the assertion (group membership is authoritative from the IdP).
+2. For each group name, upsert a row in `yoloscribe-groups` (keyed by `name`, scoped to the OIDC/SAML tenant).
+3. Add the user to those groups in `yoloscribe-group-memberships`.
+4. Remove the user from any YoloScribe groups whose SAML group name is no longer in the assertion (group membership is authoritative from the IdP).
 
 #### OIDC Groups Claim
 
@@ -170,7 +170,7 @@ Several OIDC providers support a `groups` claim in the ID token or userinfo endp
 - Azure AD: `groups` claim (object IDs) or `groupMembershipClaims`
 - Cognito: via `cognito:groups` custom claim
 
-AgentScribe reads the `groups` claim (array of strings) at login time and applies the same auto-provisioning logic as SAML.
+YoloScribe reads the `groups` claim (array of strings) at login time and applies the same auto-provisioning logic as SAML.
 
 ---
 
@@ -185,11 +185,11 @@ AgentScribe reads the `groups` claim (array of strings) at login time and applie
 #### Phase 2: SAML 2.0 Support
 - Add `SAMLProvider` with SP metadata generation (`/auth/saml/metadata`)
 - SAML assertion validation at `/auth/saml/callback`
-- Session management (short-lived signed JWT issued by AgentScribe)
+- Session management (short-lived signed JWT issued by YoloScribe)
 - Group claim extraction and mapping
 
 #### Phase 3: Groups Data Model
-- DynamoDB tables `agentscribe-groups` and `agentscribe-group-memberships`
+- DynamoDB tables `yoloscribe-groups` and `yoloscribe-group-memberships`
 - Group CRUD API (create, list, add/remove members)
 - Auto-provisioning from SAML/OIDC `groups` claim at login
 

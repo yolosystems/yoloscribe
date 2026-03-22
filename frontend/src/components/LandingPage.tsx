@@ -15,7 +15,7 @@ export default function LandingPage({ onSignIn }: Props) {
         <div className="landing-content">
           <h1>Your AI-powered wiki</h1>
           <p className="landing-tagline">
-            AgentScribe gives you a personal wiki where AI agents help you write,
+            YoloScribe gives you a personal wiki where AI agents help you write,
             organise, and navigate your knowledge. Free to get started.
           </p>
           <button className="btn btn-primary landing-cta" onClick={onSignIn}>

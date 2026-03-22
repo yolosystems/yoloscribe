@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# One-time setup: create the IAM role for the agentscribe-indexer
+# One-time setup: create the IAM role for the yoloscribe-indexer
 # (shared by both the polling-worker Deployment and the indexer Jobs).
 #
 # The role is annotated with an IRSA trust policy scoped to the
-# agentscribe-indexer Kubernetes ServiceAccount.
+# yoloscribe-indexer Kubernetes ServiceAccount.
 #
 # Prerequisites:
 #   - AWS CLI configured with credentials that can create IAM roles
@@ -13,11 +13,11 @@
 #   EKS_OIDC_PROVIDER=oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633 \
 #   AWS_ACCOUNT_ID=123456789012 \
 #   AWS_REGION=us-east-1 \
-#   K8S_NAMESPACE=agentscribe \
-#   SQS_INDEXING_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/agentscribe-indexing \
-#   S3_BUCKET=my-agentscribe-bucket \
-#   S3_VECTORS_BUCKET=my-agentscribe-vectors \
-#   S3_VECTORS_INDEX_NAME=agentscribe \
+#   K8S_NAMESPACE=yoloscribe \
+#   SQS_INDEXING_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/yoloscribe-indexing \
+#   S3_BUCKET=my-yoloscribe-bucket \
+#   S3_VECTORS_BUCKET=my-yoloscribe-vectors \
+#   S3_VECTORS_INDEX_NAME=yoloscribe \
 #   BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0 \
 #   bash create_indexer_role.sh
 
@@ -41,11 +41,11 @@ fi
 : "${SQS_INDEXING_QUEUE_URL:?SQS_INDEXING_QUEUE_URL must be set}"
 : "${S3_BUCKET:?S3_BUCKET must be set}"
 : "${S3_VECTORS_BUCKET:?S3_VECTORS_BUCKET must be set}"
-: "${S3_VECTORS_INDEX_NAME:=${S3_VECTORS_INDEX_NAME:-agentscribe}}"
+: "${S3_VECTORS_INDEX_NAME:=${S3_VECTORS_INDEX_NAME:-yoloscribe}}"
 : "${BEDROCK_EMBEDDING_MODEL:=${BEDROCK_EMBEDDING_MODEL:-amazon.titan-embed-text-v2:0}}"
 
-ROLE_NAME="agentscribe-indexer"
-SA_NAME="agentscribe-indexer"
+ROLE_NAME="yoloscribe-indexer"
+SA_NAME="yoloscribe-indexer"
 
 AWS_ARGS=()
 if [[ -n "${AWS_PROFILE:-}" ]]; then
@@ -71,7 +71,7 @@ POLICY_DOCUMENT=$(sed \
   -e "s|__S3_VECTORS_BUCKET__|${S3_VECTORS_BUCKET}|g" \
   -e "s|__S3_VECTORS_INDEX_NAME__|${S3_VECTORS_INDEX_NAME}|g" \
   -e "s|__AWS_ACCOUNT_ID__|${AWS_ACCOUNT_ID}|g" \
-  "$SCRIPT_DIR/agentscribe-indexer-policy.json")
+  "$SCRIPT_DIR/yoloscribe-indexer-policy.json")
 
 TRUST_POLICY=$(cat <<EOF
 {
@@ -100,13 +100,13 @@ echo "Creating IAM role: $ROLE_NAME"
 aws "${AWS_ARGS[@]}" iam create-role \
   --role-name "$ROLE_NAME" \
   --assume-role-policy-document "$TRUST_POLICY" \
-  --description "IRSA role for agentscribe indexer (polling worker + indexer jobs)" \
+  --description "IRSA role for yoloscribe indexer (polling worker + indexer jobs)" \
   --output json | jq -r '.Role.Arn'
 
 echo "Attaching inline policy..."
 aws "${AWS_ARGS[@]}" iam put-role-policy \
   --role-name "$ROLE_NAME" \
-  --policy-name "agentscribe-indexer-access" \
+  --policy-name "yoloscribe-indexer-access" \
   --policy-document "$POLICY_DOCUMENT"
 
 ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"

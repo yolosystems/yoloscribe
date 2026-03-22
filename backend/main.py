@@ -1,4 +1,4 @@
-"""AgentScribe backend — FastAPI service running behind a public ALB on EKS."""
+"""YoloScribe backend — FastAPI service running behind a public ALB on EKS."""
 
 import contextlib
 import logging
@@ -68,9 +68,9 @@ _OPENAPI_TAGS = [
 # ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="AgentScribe API",
+    title="YoloScribe API",
     description=(
-        "Backend API for AgentScribe — an AI-powered wiki where every page "
+        "Backend API for YoloScribe — an AI-powered wiki where every page "
         "can be edited by an LLM agent.\n\n"
         "**Authentication:** most write endpoints require a Supabase JWT passed as "
         "`Authorization: Bearer <token>`.\n\n"

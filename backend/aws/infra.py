@@ -1,4 +1,4 @@
-"""AWS infrastructure provisioning and deprovisioning for AgentScribe users.
+"""AWS infrastructure provisioning and deprovisioning for YoloScribe users.
 
 Handles IAM role + inline policy, K8s ServiceAccount, and Secrets Manager placeholder.
 """
@@ -22,9 +22,9 @@ from config import (
 
 async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
     """Provision IAM role, K8s ServiceAccount, and SM placeholder for a new user."""
-    role_name = f"agentscribe-user-{user_id}"
+    role_name = f"yoloscribe-user-{user_id}"
     sa_name = f"user-{user_id}"
-    sm_secret_name = f"agentscribe/{user_id}/.initialized"
+    sm_secret_name = f"yoloscribe/{user_id}/.initialized"
 
     iam = boto_session.client("iam")
     secrets_manager = boto_session.client("secretsmanager", region_name=AWS_REGION)
@@ -50,14 +50,14 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
     }
     iam.create_role(
         RoleName=role_name,
-        Path="/agentscribe/",
+        Path="/yoloscribe/",
         AssumeRolePolicyDocument=json.dumps(trust_policy),
-        Description=f"IRSA role for AgentScribe user {user_id}",
+        Description=f"IRSA role for YoloScribe user {user_id}",
     )
 
     # 2. Attach inline policy
     secret_arn_prefix = (
-        f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:agentscribe/{user_id}/"
+        f"arn:aws:secretsmanager:{AWS_REGION}:{AWS_ACCOUNT_ID}:secret:yoloscribe/{user_id}/"
     )
     s3_bucket_arn = f"arn:aws:s3:::{S3_BUCKET}"
     statements: list[dict] = [
@@ -105,10 +105,10 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
         )
     iam.put_role_policy(
         RoleName=role_name,
-        PolicyName="agentscribe-user-access",
+        PolicyName="yoloscribe-user-access",
         PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": statements}),
     )
-    role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/agentscribe/{role_name}"
+    role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/yoloscribe/{role_name}"
 
     # 3. Create K8s ServiceAccount annotated with role ARN
     try:
@@ -142,7 +142,7 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
     secrets_manager.create_secret(
         Name=sm_secret_name,
         SecretString=json.dumps({"initialized": "true"}),
-        Description=f"Placeholder secret for AgentScribe user {user_id}",
+        Description=f"Placeholder secret for YoloScribe user {user_id}",
     )
 
 
@@ -152,7 +152,7 @@ async def deprovision_user_infrastructure(user_id: str, site_name: str | None) -
     Returns a list of warning strings. Never raises.
     """
     warnings: list[str] = []
-    role_name = f"agentscribe-user-{user_id}"
+    role_name = f"yoloscribe-user-{user_id}"
     sa_name = f"user-{user_id}"
 
     iam = boto_session.client("iam")
@@ -160,7 +160,7 @@ async def deprovision_user_infrastructure(user_id: str, site_name: str | None) -
 
     # 1. Delete IAM inline policy
     try:
-        iam.delete_role_policy(RoleName=role_name, PolicyName="agentscribe-user-access")
+        iam.delete_role_policy(RoleName=role_name, PolicyName="yoloscribe-user-access")
     except iam.exceptions.NoSuchEntityException:
         pass
     except Exception as exc:
@@ -174,8 +174,8 @@ async def deprovision_user_infrastructure(user_id: str, site_name: str | None) -
     except Exception as exc:
         warnings.append(f"IAM role delete warning: {exc}")
 
-    # 3. Delete SM secrets under agentscribe/{user_id}/
-    prefix = f"agentscribe/{user_id}/"
+    # 3. Delete SM secrets under yoloscribe/{user_id}/
+    prefix = f"yoloscribe/{user_id}/"
     try:
         paginator = secrets_manager.get_paginator("list_secrets")
         for page in paginator.paginate():

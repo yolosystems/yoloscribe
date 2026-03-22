@@ -39,7 +39,7 @@ export default function DeleteAccountModal({ apiBase, token, onClose, onDeleted 
           <p>Deleting your account will permanently remove:</p>
           <ul className="modal-list">
             <li>Your primary site and all child pages</li>
-            <li>Your Google identity will be unlinked from AgentScribe</li>
+            <li>Your Google identity will be unlinked from YoloScribe</li>
           </ul>
           <p className="modal-body--warning">This action cannot be undone.</p>
           {error && <p className="form-error">{error}</p>}

@@ -1,6 +1,6 @@
 """MCP OAuth 2.0 Authorization Server endpoints.
 
-Turns AgentScribe into an OAuth AS for Claude Code so users can authenticate
+Turns YoloScribe into an OAuth AS for Claude Code so users can authenticate
 with their Google/Supabase identity.
 
 Flow:

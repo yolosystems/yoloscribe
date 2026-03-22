@@ -1,4 +1,4 @@
-"""S3 helper functions, path safety, and default content for AgentScribe."""
+"""S3 helper functions, path safety, and default content for YoloScribe."""
 
 import logging
 import re
@@ -107,7 +107,7 @@ def enqueue_index_job(content_key: str, user_id: str) -> None:
 # ── Default content ────────────────────────────────────────────────────────────
 
 DEFAULT_WELCOME_MD = """\
-# Welcome to your AgentScribe site!
+# Welcome to your YoloScribe site!
 
 This is the home page of your personal wiki. Edit this content using the editor,
 or ask the AI assistant in the Chat panel to help you write and organise your notes.

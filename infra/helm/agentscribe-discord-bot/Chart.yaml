@@ -1,6 +1,0 @@
-apiVersion: v2
-name: agentscribe-discord-bot
-description: AgentScribe Discord bot
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

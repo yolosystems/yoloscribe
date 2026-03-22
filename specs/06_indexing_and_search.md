@@ -1,7 +1,7 @@
 ## Indexing and Search
 
-This document describes how indexing and search will work with AgentScribe.
-All content in AgentScribe is stored in a content.md file and organized under a "site" which is owned by a specific user.
+This document describes how indexing and search will work with YoloScribe.
+All content in YoloScribe is stored in a content.md file and organized under a "site" which is owned by a specific user.
 These content.md files need to be indexed so that they can be available via a search capability.
 
 ### Indexing
@@ -26,7 +26,7 @@ Indexing should be implemented the following way:
 
 Search will be implemented in this way:
 
-1. The Chatbot in the front end is where the user will initiate a search query. The user will be able to type in prompts like "find all the sites about the AgentScribe project"
+1. The Chatbot in the front end is where the user will initiate a search query. The user will be able to type in prompts like "find all the sites about the YoloScribe project"
 2. The backend chat API will invoke a new kind of agent, called SearchAgent, for these types of requests
 3. The SearchAgent will create the embeddings of the search query and then query that vector against the S3 vector store.
 4. The results that are returned from the semantic query will have a "path" meta data field on them - this will point to the relevant content.md files.

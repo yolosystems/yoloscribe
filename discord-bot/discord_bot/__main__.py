@@ -2,7 +2,7 @@
 
 import logging
 
-from discord_bot.bot import AgentScribeBot
+from discord_bot.bot import YoloScribeBot
 from discord_bot.config import DISCORD_BOT_TOKEN
 
 logging.basicConfig(
@@ -10,4 +10,4 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
-AgentScribeBot().run(DISCORD_BOT_TOKEN)
+YoloScribeBot().run(DISCORD_BOT_TOKEN)

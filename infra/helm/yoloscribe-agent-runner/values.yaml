@@ -1,0 +1,44 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+# Never set ghcr.pat here — pass it via --set on the command line.
+ghcr:
+  username: ""          # set in environment-specific values file
+  pat: ""               # pass via --set; never commit a real value
+
+# ── Service account (IRSA for SQS receive/delete + S3 read) ──────────────────
+serviceAccount:
+  create: true
+  iamRoleArn: ""
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  sqsQueueUrl: ""
+  sqsIndexingQueueUrl: ""
+  awsRegion: ""
+  k8sNamespace: ""
+  agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
+
+# ── Anthropic API key secret ──────────────────────────────────────────────────
+# Option A: reference an existing Kubernetes secret (recommended for production)
+#   existingSecret: yoloscribe-secrets
+#   existingSecretKey: anthropic-api-key
+#
+# Option B: pass the key directly (for development only — do not commit)
+#   anthropicApiKey: "sk-ant-..."
+existingSecret: ""
+existingSecretKey: anthropic-api-key
+anthropicApiKey: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

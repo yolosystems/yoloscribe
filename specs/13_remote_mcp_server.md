@@ -1,8 +1,8 @@
-# AgentScribe Remote MCP Server Specification
+# YoloScribe Remote MCP Server Specification
 
 ## 1. Overview & Goals
 
-The AgentScribe Remote MCP (Model Context Protocol) Server provides a standardized interface for agentic coding tools (e.g., Claude Code, other AI coding assistants) to programmatically interact with AgentScribe's core capabilities over HTTP. Rather than relying on local stdio-based connections, this server exposes AgentScribe's functionality as a cloud-hosted remote service.
+The YoloScribe Remote MCP (Model Context Protocol) Server provides a standardized interface for agentic coding tools (e.g., Claude Code, other AI coding assistants) to programmatically interact with YoloScribe's core capabilities over HTTP. Rather than relying on local stdio-based connections, this server exposes YoloScribe's functionality as a cloud-hosted remote service.
 
 **Primary Goals:**
 - Enable AI coding agents to autonomously create, read, update, and delete wiki content
@@ -14,7 +14,7 @@ The AgentScribe Remote MCP (Model Context Protocol) Server provides a standardiz
 
 **Target Consumers:**
 - Claude Code and similar agentic coding environments
-- Autonomous agent frameworks integrating with AgentScribe
+- Autonomous agent frameworks integrating with YoloScribe
 - Custom orchestration systems requiring programmatic wiki access
 
 ---
@@ -49,7 +49,7 @@ Response timeout: 30 seconds per tool call.
 
 **Supabase JWT:**
 ```bash
-claude mcp add --transport http agentscribe https://<your-domain>/mcp/v1 \
+claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
   --header "Authorization: Bearer <supabase-jwt>"
 ```
 

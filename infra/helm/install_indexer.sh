@@ -38,8 +38,8 @@ if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
   exit 1
 fi
 
-helm upgrade --install agentscribe-indexer \
-  "$SCRIPT_DIR/agentscribe-indexer" \
+helm upgrade --install yoloscribe-indexer \
+  "$SCRIPT_DIR/yoloscribe-indexer" \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \

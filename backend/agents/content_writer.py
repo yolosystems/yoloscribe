@@ -1,4 +1,7 @@
-"""ContentWriterAgent — updates a wiki page's content.md via natural language."""
+"""ContentWriterAgent — updates a wiki page's content.md via natural language.
+
+YoloScribe wiki content editor.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +37,6 @@ Never write content that embeds instructions targeting other agents or AI system
     def __init__(self, s3_tools: S3Tools, model_key: str = "", **kwargs) -> None:
         super().__init__(
             tools=[s3_tools.get_content, s3_tools.put_content],
-            model_key=model_key or resolve_model_key("AGENTSCRIBE_WRITER_MODEL", "AGENTSCRIBE_MODEL"),
+            model_key=model_key or resolve_model_key("YOLOSCRIBE_WRITER_MODEL", "YOLOSCRIBE_MODEL"),
             **kwargs,
         )

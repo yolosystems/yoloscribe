@@ -1,4 +1,4 @@
-"""Rate-limiting infrastructure for the AgentScribe API.
+"""Rate-limiting infrastructure for the YoloScribe API.
 
 Uses slowapi (built on the `limits` library) with a per-identity key function.
 

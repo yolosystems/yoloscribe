@@ -1,6 +1,6 @@
 ## AWS SSO Skill Authentication
 
-This document describes how AgentScribe should support skills that use AWS MCP servers, where the required credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) are obtained via the AWS IAM Identity Center (SSO) OIDC device authorization flow rather than copy-pasted by the user.
+This document describes how YoloScribe should support skills that use AWS MCP servers, where the required credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) are obtained via the AWS IAM Identity Center (SSO) OIDC device authorization flow rather than copy-pasted by the user.
 
 > **DO NOT IMPLEMENT NOW.** This is a planning document only.
 
@@ -113,7 +113,7 @@ Backend                         AWS SSO OIDC                  User's Browser
 `RegisterClient` is cheap but its output has a 90-day TTL. The backend caches the registration in Secrets Manager at:
 
 ```
-agentscribe/platform/aws-sso/{region}/client
+yoloscribe/platform/aws-sso/{region}/client
 ```
 
 Format:
@@ -125,7 +125,7 @@ Format:
 }
 ```
 
-On each `POST /oauth/aws-sso/initiate/{skill_name}`, the backend reads this secret. If absent or expired, it calls `sso-oidc:RegisterClient` and writes a fresh entry. The IAM policy for the backend service account needs `secretsmanager:GetSecretValue` and `secretsmanager:PutSecretValue` on `agentscribe/platform/aws-sso/*` (similar to the existing per-user secret access it already has).
+On each `POST /oauth/aws-sso/initiate/{skill_name}`, the backend reads this secret. If absent or expired, it calls `sso-oidc:RegisterClient` and writes a fresh entry. The IAM policy for the backend service account needs `secretsmanager:GetSecretValue` and `secretsmanager:PutSecretValue` on `yoloscribe/platform/aws-sso/*` (similar to the existing per-user secret access it already has).
 
 ---
 
@@ -211,7 +211,7 @@ Backend calls `sso:GetRoleCredentials`, stores everything, returns `{ "status": 
 All data for a skill is stored in a single Secrets Manager secret at:
 
 ```
-agentscribe/{user_id}/aws-sso/{skill_name}
+yoloscribe/{user_id}/aws-sso/{skill_name}
 ```
 
 ```json
@@ -233,9 +233,9 @@ agentscribe/{user_id}/aws-sso/{skill_name}
 Additionally, the three MCP-injectable values are written as individual secrets using the existing pattern so the existing `${VAR}` substitution in the agent runner works without modification:
 
 ```
-agentscribe/{user_id}/AWS_SSO_ACCESS_KEY_ID
-agentscribe/{user_id}/AWS_SSO_SECRET_ACCESS_KEY
-agentscribe/{user_id}/AWS_SSO_SESSION_TOKEN
+yoloscribe/{user_id}/AWS_SSO_ACCESS_KEY_ID
+yoloscribe/{user_id}/AWS_SSO_SECRET_ACCESS_KEY
+yoloscribe/{user_id}/AWS_SSO_SESSION_TOKEN
 ```
 
 These individual secrets are written whenever `GetRoleCredentials` is called (initial auth and every refresh).
@@ -313,7 +313,7 @@ No browser redirect callback is involved — the entire flow is handled via poll
 
 When a user clicks Revoke on a standard OAuth skill, the backend calls `POST /oauth/revoke/{skill_name}`, which:
 
-1. Loads the SM blob for the skill (`agentscribe/{user_id}/oauth/{skill_name}`).
+1. Loads the SM blob for the skill (`yoloscribe/{user_id}/oauth/{skill_name}`).
 2. Reads `auth_server_metadata.revocation_endpoint` from the blob (stored at token-save time during the original OAuth flow).
 3. If a revocation endpoint is present:
    - POSTs the access token with `token_type_hint=access_token`.
@@ -329,7 +329,7 @@ When a user clicks Revoke on a standard OAuth skill, the backend calls `POST /oa
 | Linear | Advertised in OAuth discovery metadata | Standard RFC 7009 |
 | Google Workspace | `https://oauth2.googleapis.com/revoke` | Standard RFC 7009; accepts either token type |
 
-For providers that do not advertise a revocation endpoint and do not have a known fixed URL, the backend skips the provider call, deletes from SM, and the frontend shows: *"Credentials removed from AgentScribe. To fully revoke access, visit [provider] → Settings → Authorized Apps."*
+For providers that do not advertise a revocation endpoint and do not have a known fixed URL, the backend skips the provider call, deletes from SM, and the frontend shows: *"Credentials removed from YoloScribe. To fully revoke access, visit [provider] → Settings → Authorized Apps."*
 
 The `revocation_endpoint` and a `revocation_style` hint (`rfc7009` | `github`) should be added to the token blob at save time so the revoke endpoint has everything it needs without re-doing discovery.
 
@@ -337,11 +337,11 @@ The `revocation_endpoint` and a `revocation_style` hint (`rfc7009` | `github`) s
 
 `POST /oauth/aws-sso/revoke/{skill_name}`:
 
-1. Loads the SM blob (`agentscribe/{user_id}/aws-sso/{skill_name}`).
+1. Loads the SM blob (`yoloscribe/{user_id}/aws-sso/{skill_name}`).
 2. Calls `sso:Logout` with the stored `sso_access_token`. This immediately invalidates the SSO session at the IAM Identity Center level — equivalent to `aws sso logout` on the CLI.
 3. Deletes the SM blob and the three individual `AWS_SSO_*` secrets.
 
-Note: the short-lived STS role credentials (`accessKeyId` etc.) cannot be individually revoked via API. They will continue to work until they expire naturally (1–12 hours). If immediate revocation of STS credentials is required, an IAM administrator can go to IAM → Roles → the specific role → **Revoke sessions**, which attaches a time-based deny policy — but this affects all holders of that role, not just one AgentScribe user.
+Note: the short-lived STS role credentials (`accessKeyId` etc.) cannot be individually revoked via API. They will continue to work until they expire naturally (1–12 hours). If immediate revocation of STS credentials is required, an IAM administrator can go to IAM → Roles → the specific role → **Revoke sessions**, which attaches a time-based deny policy — but this affects all holders of that role, not just one YoloScribe user.
 
 #### New backend endpoints
 
@@ -370,7 +370,7 @@ The backend IRSA role needs one additional action alongside the existing SSO per
 
 The backend service account IAM policy needs two additions:
 
-1. **Platform client cache** — already covered by the existing `secretsmanager:*` on `agentscribe*` if using the same prefix; otherwise add `agentscribe/platform/aws-sso/*` explicitly.
+1. **Platform client cache** — already covered by the existing `secretsmanager:*` on `yoloscribe* if using the same prefix; otherwise add `yoloscribe/platform/aws-sso/*` explicitly.
 2. **`sso-oidc` and `sso` API calls** — the SSO OIDC and SSO services are called from the backend web process, not from the agent runner. The backend's IRSA role needs:
 
 ```json
@@ -411,5 +411,5 @@ The agent runner's per-user IRSA role does **not** need SSO permissions. It read
 | `main.py` | Store `revocation_endpoint` + `revocation_style` in OAuth token blob at save time |
 | Agent runner | Credential refresh check before job execution |
 | Frontend `CredentialsPanel` | New `aws-sso` card type with polling UI; replace "Disconnect" with "Revoke" on all OAuth and AWS SSO skill cards |
-| IAM policy (`agentscribe-backend-policy.json`) | Add `sso-oidc:RegisterClient/StartDeviceAuthorization/CreateToken`, `sso:ListAccounts/ListAccountRoles/GetRoleCredentials/Logout` |
+| IAM policy (`yoloscribe-backend-policy.json`) | Add `sso-oidc:RegisterClient/StartDeviceAuthorization/CreateToken`, `sso:ListAccounts/ListAccountRoles/GetRoleCredentials/Logout` |
 | Secrets Manager | New secret paths for SSO blob and individual credential vars |

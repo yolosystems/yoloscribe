@@ -1,4 +1,4 @@
-"""RunnerAgent — queues an agent.md-defined agent for async execution via SQS.
+"""RunnerAgent — queues an agent.md-defined agent for async execution via SQS (YoloScribe).
 
 NOTE: RunnerAgent is not currently used. The ChatAgent runner tool sends SQS
 messages directly. This class is retained for potential future use.
@@ -23,7 +23,7 @@ class RunnerAgent(BaseAgent):
     """Queues a page-level agent for asynchronous execution via SQS."""
 
     SYSTEM_PROMPT = """\
-You are an agent-runner assistant for AgentScribe.
+You are an agent-runner assistant for YoloScribe.
 
 Your job is to queue a named agent (defined in an agent.md file) for asynchronous
 execution. You do this by:
@@ -54,7 +54,7 @@ Current context:
         )
         super().__init__(
             tools=[s3_tools.list_agents, queue_tool],
-            model_key=model_key or resolve_model_key("AGENTSCRIBE_RUNNER_MODEL", "AGENTSCRIBE_MODEL"),
+            model_key=model_key or resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"),
             **kwargs,
         )
 

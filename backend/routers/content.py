@@ -12,7 +12,7 @@ from rate_limit import limiter
 from s3_helpers import get_content, put_content, is_safe_path, enqueue_index_job
 from settings_cache import get_page_settings, page_path_from_file_path
 
-_audit_log = logging.getLogger("agentscribe.audit")
+_audit_log = logging.getLogger("yoloscribe.audit")
 
 # HTML tags and attributes permitted in shared-write content.
 # Anything not in these lists is stripped by bleach.

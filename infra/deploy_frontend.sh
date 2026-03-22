@@ -9,11 +9,11 @@
 #
 # Required in environment or root .env:
 #   VITE_API_BASE               — HTTPS URL of the backend ALB
-#                                 (e.g. https://agentscribe-dev.runyolo.dev)
+#                                 (e.g. https://yoloscribe-dev.runyolo.dev)
 #   VITE_SITE                   — site name; also used as the S3 deploy prefix
 #   VITE_SUPABASE_URL           — Supabase project URL
 #   VITE_SUPABASE_ANON_KEY      — Supabase anon key
-#   FRONTEND_BUCKET             — root S3 bucket (e.g. agentscribe-dev)
+#   FRONTEND_BUCKET             — root S3 bucket (e.g. yoloscribe-dev)
 #
 # Optional:
 #   CLOUDFRONT_DISTRIBUTION_ID  — if set, invalidates /* after sync
@@ -33,7 +33,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 if [[ -z "${VITE_API_BASE:-}" ]]; then
-  echo "Error: VITE_API_BASE is not set (e.g. https://agentscribe-dev.runyolo.dev)"
+  echo "Error: VITE_API_BASE is not set (e.g. https://yoloscribe-dev.runyolo.dev)"
   exit 1
 fi
 

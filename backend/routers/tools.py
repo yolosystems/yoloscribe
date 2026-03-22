@@ -241,7 +241,7 @@ async def put_secret(
         sm.create_secret(
             Name=sid,
             SecretString=body.value,
-            Description=f"AgentScribe credential: {var_name} for user {user_id}",
+            Description=f"YoloScribe credential: {var_name} for user {user_id}",
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

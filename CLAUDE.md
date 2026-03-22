@@ -70,7 +70,7 @@ This is validated on both `PUT /content` and `POST /chat`.
 ### Agent framework (Strands Agents)
 All agents inherit from `BaseAgent` (`backend/agents/base.py`), which itself inherits from `strands.Agent`. Each class has a `SYSTEM_PROMPT` class variable (a Python format-string; placeholders are filled via `**prompt_vars` in the constructor).
 
-The model is `AnthropicModel` from `strands.models.anthropic`, defaulting to `DEFAULT_MODEL = "claude-opus-4-6"` (see `base.py`). The model can be overridden at runtime via the `AGENTSCRIBE_MODEL` env var.
+The model is `AnthropicModel` from `strands.models.anthropic`, defaulting to `DEFAULT_MODEL = "claude-opus-4-6"` (see `base.py`). The model can be overridden at runtime via the `YOLOSCRIBE_MODEL` env var.
 
 **Agent hierarchy:**
 
@@ -121,7 +121,7 @@ All operations are scoped to the authenticated user's site. Agent sessions (`.mc
 
 **Connect with Claude Code:**
 ```bash
-claude mcp add --transport http agentscribe https://<your-domain>/mcp/v1 \
+claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
   --header "Authorization: Bearer <supabase-jwt>"
 ```
 
@@ -133,20 +133,20 @@ claude mcp add --transport http agentscribe https://<your-domain>/mcp/v1 \
 | `S3_BUCKET` | backend | S3 bucket name |
 | `ALLOWED_ORIGINS` | backend | Comma-separated CORS origins |
 | `AWS_PROFILE` | backend | Optional named AWS profile |
-| `AGENTSCRIBE_MODEL` | backend + agent-runner | Global model key fallback (see model registry below) |
-| `AGENTSCRIBE_CHAT_MODEL` | backend | ChatAgent (orchestrator) model key |
-| `AGENTSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
-| `AGENTSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
-| `AGENTSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
+| `YOLOSCRIBE_MODEL` | backend + agent-runner | Global model key fallback (see model registry below) |
+| `YOLOSCRIBE_CHAT_MODEL` | backend | ChatAgent (orchestrator) model key |
+| `YOLOSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
+| `YOLOSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
+| `YOLOSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `S3_VECTORS_BUCKET` | backend | S3 Vectors bucket name (for search index and deletion on account delete) |
-| `S3_VECTORS_INDEX_NAME` | backend | S3 Vectors index name (default: `agentscribe`) |
+| `S3_VECTORS_INDEX_NAME` | backend | S3 Vectors index name (default: `yoloscribe`) |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 
 ### Model registry keys
 
-Valid model keys for all `AGENTSCRIBE_*_MODEL` env vars and the `## Model` section in `agent.md`:
+Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `## Model` section in `agent.md`:
 
 | Key | Provider | Model |
 |---|---|---|

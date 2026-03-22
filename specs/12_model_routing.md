@@ -1,6 +1,6 @@
 ## Model Routing
 
-This document describes how AgentScribe should route each agent to an appropriate Claude model, supporting both Anthropic direct and Amazon Bedrock providers.
+This document describes how YoloScribe should route each agent to an appropriate Claude model, supporting both Anthropic direct and Amazon Bedrock providers.
 
 ---
 
@@ -96,7 +96,7 @@ bedrock-sonnet
 
 Rules:
 - The value is a key from `MODEL_REGISTRY` (e.g. `sonnet`, `bedrock-opus`).
-- If the section is absent or the key is unrecognised, `RunnerAgent` falls back to the `AGENTSCRIBE_RUNNER_MODEL` env var, then to `DEFAULT_MODEL_KEY`.
+- If the section is absent or the key is unrecognised, `RunnerAgent` falls back to the `YOLOSCRIBE_RUNNER_MODEL` env var, then to `DEFAULT_MODEL_KEY`.
 
 #### `AgentDefinition` dataclass (`backend/agents/base.py` or a shared types module)
 
@@ -144,11 +144,11 @@ Replace the hardcoded `AnthropicModel` instantiation with `build_strands_model`:
 ```python
 # before
 from strands.models.anthropic import AnthropicModel
-model = AnthropicModel(model_id=os.getenv("AGENTSCRIBE_MODEL", DEFAULT_MODEL))
+model = AnthropicModel(model_id=os.getenv("YOLOSCRIBE_MODEL", DEFAULT_MODEL))
 
 # after
 from backend.agents.models import build_strands_model
-model_key = os.getenv("AGENTSCRIBE_MODEL", DEFAULT_MODEL_KEY)
+model_key = os.getenv("YOLOSCRIBE_MODEL", DEFAULT_MODEL_KEY)
 model = build_strands_model(model_key)
 ```
 
@@ -158,19 +158,19 @@ Each sub-agent class can pass its own `model_key` through an optional `__init__`
 
 ### Phase 4 — System Sub-Agent Env Vars
 
-Individual env vars override the global `AGENTSCRIBE_MODEL` default for each system sub-agent:
+Individual env vars override the global `YOLOSCRIBE_MODEL` default for each system sub-agent:
 
 | Env var | Used by | Default |
 |---|---|---|
-| `AGENTSCRIBE_MODEL` | Global fallback for all agents | `sonnet` |
-| `AGENTSCRIBE_CHAT_MODEL` | `ChatAgent` (orchestrator) | `sonnet` |
-| `AGENTSCRIBE_WRITER_MODEL` | `ContentWriterAgent` | `haiku` |
-| `AGENTSCRIBE_CREATOR_MODEL` | `CreatorAgent` | `sonnet` |
-| `AGENTSCRIBE_RUNNER_MODEL` | `RunnerAgent` default (when agent.md has no `## Model`) | `sonnet` |
+| `YOLOSCRIBE_MODEL` | Global fallback for all agents | `sonnet` |
+| `YOLOSCRIBE_CHAT_MODEL` | `ChatAgent` (orchestrator) | `sonnet` |
+| `YOLOSCRIBE_WRITER_MODEL` | `ContentWriterAgent` | `haiku` |
+| `YOLOSCRIBE_CREATOR_MODEL` | `CreatorAgent` | `sonnet` |
+| `YOLOSCRIBE_RUNNER_MODEL` | `RunnerAgent` default (when agent.md has no `## Model`) | `sonnet` |
 
 Resolution order for any given agent:
-1. Agent-specific env var (e.g. `AGENTSCRIBE_WRITER_MODEL`)
-2. `AGENTSCRIBE_MODEL` global override
+1. Agent-specific env var (e.g. `YOLOSCRIBE_WRITER_MODEL`)
+2. `YOLOSCRIBE_MODEL` global override
 3. `DEFAULT_MODEL_KEY` (`sonnet`)
 
 ---
@@ -181,10 +181,10 @@ The async SQS worker already parses `agent.md`. After this change it must also:
 
 1. Import a minimal copy of `MODEL_REGISTRY` and `build_strands_model` (or share via a common package).
 2. Read `agent_def.model` from the parsed definition.
-3. Pass that key to `build_strands_model`; fall back to `AGENTSCRIBE_RUNNER_MODEL` → `DEFAULT_MODEL_KEY`.
+3. Pass that key to `build_strands_model`; fall back to `YOLOSCRIBE_RUNNER_MODEL` → `DEFAULT_MODEL_KEY`.
 
 ```python
-model_key = agent_def.model or os.getenv("AGENTSCRIBE_RUNNER_MODEL", DEFAULT_MODEL_KEY)
+model_key = agent_def.model or os.getenv("YOLOSCRIBE_RUNNER_MODEL", DEFAULT_MODEL_KEY)
 model = build_strands_model(model_key)
 agent = strands.Agent(model=model, tools=tools, system_prompt=system_prompt)
 ```
@@ -196,11 +196,11 @@ agent = strands.Agent(model=model, tools=tools, system_prompt=system_prompt)
 | Scenario | Model used |
 |---|---|
 | `agent.md` has `## Model: bedrock-opus` | `bedrock-opus` |
-| `agent.md` has `## Model: unknown-key` | `AGENTSCRIBE_RUNNER_MODEL` → `sonnet` |
-| `agent.md` has no `## Model` section | `AGENTSCRIBE_RUNNER_MODEL` → `sonnet` |
+| `agent.md` has `## Model: unknown-key` | `YOLOSCRIBE_RUNNER_MODEL` → `sonnet` |
+| `agent.md` has no `## Model` section | `YOLOSCRIBE_RUNNER_MODEL` → `sonnet` |
 | `ContentWriterAgent`, no env var set | `haiku` |
 | `ChatAgent`, no env var set | `sonnet` |
-| `AGENTSCRIBE_MODEL=opus` set globally | All agents fall back to `opus` unless overridden individually |
+| `YOLOSCRIBE_MODEL=opus` set globally | All agents fall back to `opus` unless overridden individually |
 | No env vars set | All agents use `sonnet` |
 
 ---
@@ -211,9 +211,9 @@ agent = strands.Agent(model=model, tools=tools, system_prompt=system_prompt)
 |---|---|
 | `backend/agents/models.py` | **New** — `ModelSpec`, `MODEL_REGISTRY`, `build_strands_model` |
 | `backend/agents/base.py` | Replace `AnthropicModel` hardcode; add `model_key` param to `BaseAgent.__init__` |
-| `backend/agents/chat.py` | Pass `model_key=os.getenv("AGENTSCRIBE_CHAT_MODEL", ...)` |
-| `backend/agents/writer.py` | Pass `model_key=os.getenv("AGENTSCRIBE_WRITER_MODEL", "haiku")` |
-| `backend/agents/creator.py` | Pass `model_key=os.getenv("AGENTSCRIBE_CREATOR_MODEL", ...)` |
+| `backend/agents/chat.py` | Pass `model_key=os.getenv("YOLOSCRIBE_CHAT_MODEL", ...)` |
+| `backend/agents/writer.py` | Pass `model_key=os.getenv("YOLOSCRIBE_WRITER_MODEL", "haiku")` |
+| `backend/agents/creator.py` | Pass `model_key=os.getenv("YOLOSCRIBE_CREATOR_MODEL", ...)` |
 | `backend/agents/base.py` | Update `AgentDefinition`, `parse_agent_md`, `put_agent` / `_render_agent_md` |
 | `agent-runner/agent_runner/agent_runner.py` | Import registry; route by `agent_def.model` |
 | `env.example` | Document new env vars |

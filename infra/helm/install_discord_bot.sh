@@ -49,8 +49,8 @@ if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
   exit 1
 fi
 
-helm upgrade --install agentscribe-discord-bot \
-  "$SCRIPT_DIR/agentscribe-discord-bot" \
+helm upgrade --install yoloscribe-discord-bot \
+  "$SCRIPT_DIR/yoloscribe-discord-bot" \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \

@@ -85,10 +85,10 @@ class TestTruncateResponse:
         result = truncate_response(text)
         assert "truncated" in result
 
-    def test_truncated_response_mentions_agentscribe(self):
+    def test_truncated_response_mentions_yoloscribe(self):
         text = "y" * 3000
         result = truncate_response(text)
-        assert "AgentScribe" in result
+        assert "YoloScribe" in result
 
     def test_truncated_response_starts_with_original(self):
         text = "hello " + "x" * 3000

@@ -1,4 +1,4 @@
-"""Base agent infrastructure for AgentScribe."""
+"""Base agent infrastructure for YoloScribe."""
 
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 class S3Tools:
-    """Strands class-based tools for reading and writing AgentScribe S3 objects."""
+    """Strands class-based tools for reading and writing YoloScribe S3 objects."""
 
     def __init__(
         self,
@@ -578,7 +578,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
 
 
 class BaseAgent(Agent):
-    """All AgentScribe agents inherit from this.
+    """All YoloScribe agents inherit from this.
 
     Subclasses must define SYSTEM_PROMPT as a class variable.
     String-template placeholders (``{var}``) in SYSTEM_PROMPT are filled

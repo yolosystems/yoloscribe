@@ -156,7 +156,7 @@ Copy `env.example` to `.env`. Key variables:
 | `SQS_QUEUE_URL` | For agents | SQS queue for async agent execution |
 | `SQS_INDEXING_QUEUE_URL` | For search | SQS queue for indexing jobs |
 | `S3_VECTORS_BUCKET` | For semantic search | S3 Vectors bucket |
-| `AGENTSCRIBE_MODEL` | No | Global model key (`haiku`\|`sonnet`\|`opus`\|`bedrock-*`), default `sonnet` |
+| `YOLOSCRIBE_MODEL` | No | Global model key (`haiku`\|`sonnet`\|`opus`\|`bedrock-*`), default `sonnet` |
 
 See `env.example` for the full list.
 

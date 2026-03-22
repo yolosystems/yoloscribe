@@ -1,4 +1,7 @@
-"""CreatorAgent — creates new agent.md definitions for a wiki page."""
+"""CreatorAgent — creates new agent.md definitions for a wiki page.
+
+YoloScribe agent creation assistant.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ class CreatorAgent(BaseAgent):
     """Gathers information from the user and creates a new agent.md file in S3."""
 
     SYSTEM_PROMPT = """\
-You are an agent-creation assistant for AgentScribe.
+You are an agent-creation assistant for YoloScribe.
 
 Your job is to help the user define a new agent for a wiki page by:
 1. Asking for the agent's name (must be lowercase letters, digits, hyphens, underscores;
@@ -58,6 +61,6 @@ the user has explicitly asked you to do so.
                 s3_tools.get_skill_required_vars,
                 s3_tools.put_agent,
             ],
-            model_key=model_key or resolve_model_key("AGENTSCRIBE_CREATOR_MODEL", "AGENTSCRIBE_MODEL"),
+            model_key=model_key or resolve_model_key("YOLOSCRIBE_CREATOR_MODEL", "YOLOSCRIBE_MODEL"),
             **kwargs,
         )

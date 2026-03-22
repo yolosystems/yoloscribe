@@ -1,4 +1,4 @@
-"""Pydantic request/response models for the AgentScribe API."""
+"""Pydantic request/response models for the YoloScribe API."""
 
 from pydantic import BaseModel, Field, field_validator
 
