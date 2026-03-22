@@ -1,3 +1,5 @@
+name: yoloscribe
+
 services:
   # ── MinIO — local S3 ──────────────────────────────────────────────────────────
   minio:
