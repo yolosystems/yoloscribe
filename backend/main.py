@@ -115,6 +115,15 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# Catch-all: ensures unhandled exceptions return a JSON 500 that passes through
+# CORSMiddleware. Without this, Starlette's ServerErrorMiddleware generates a
+# plain-text response that bypasses the CORS middleware stack.
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logging.exception("Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 # ── Mount MCP server ───────────────────────────────────────────────────────────
 
 if jwks_client is not None:

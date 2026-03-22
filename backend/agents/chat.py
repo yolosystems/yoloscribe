@@ -113,13 +113,13 @@ Current context:
         bucket: str,
         sqs_client: "mypy_boto3_sqs.SQSClient | None" = None,
         sqs_queue_url: str = "",
-        sm_client=None,
+        secrets_store=None,
     ) -> None:
         self._s3_tools = S3Tools(s3=s3, bucket=bucket)
         self._model_key = resolve_model_key("YOLOSCRIBE_CHAT_MODEL", "YOLOSCRIBE_MODEL")
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
-        self._sm_client = sm_client
+        self._secrets_store = secrets_store
         # Sub-agent tools are created lazily per-request (each call gets fresh
         # context injected via the prompt), so we set tools=[] here and override
         # per run() call.
@@ -215,7 +215,7 @@ Current context:
         )
         sqs_client = self._sqs_client
         sqs_queue_url = self._sqs_queue_url
-        sm_client = self._sm_client
+        secrets_store = self._secrets_store
 
         @tool
         def content_writer(instruction: str) -> str:
@@ -265,7 +265,7 @@ Current context:
             # After the agent.md is written, validate that OAuth has been completed
             # for every tool referenced by any skill the agent uses.
             # Chain: agent.md → skills → tools → OAuth tokens.
-            if sm_client is not None:
+            if secrets_store is not None:
                 import re as _re
                 match = _re.search(r"Agent '([^']+)' created", result)
                 if match:
@@ -284,7 +284,7 @@ Current context:
                             for tool_name in tool_names:
                                 if (
                                     s3_tools.is_remote_tool(tool_name)
-                                    and not _oauth_token_exists(sm_client, user_id, tool_name)
+                                    and not _oauth_token_exists(secrets_store, user_id, tool_name)
                                 ):
                                     missing_tools.append(tool_name)
                         if missing_tools:
@@ -481,11 +481,10 @@ Current context:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _oauth_token_exists(sm_client, user_id: str, tool_name: str) -> bool:
-    """Return True if an OAuth token is stored in Secrets Manager for this user+tool."""
+def _oauth_token_exists(secrets_store, user_id: str, tool_name: str) -> bool:
+    """Return True if an OAuth token is stored for this user+tool."""
     try:
-        sm_client.get_secret_value(SecretId=f"yoloscribe/{user_id}/oauth/{tool_name}")
-        return True
+        return secrets_store.exists(f"yoloscribe/{user_id}/oauth/{tool_name}")
     except Exception:
         return False
 

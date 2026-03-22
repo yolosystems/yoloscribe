@@ -19,6 +19,20 @@ import TokensPanel from './components/TokensPanel'
 
 type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
+// In LOCAL_MODE Supabase auth is bypassed — the backend accepts all requests
+// as the local user. A synthetic session is used so existing session-gated
+// code paths continue to work without changes.
+const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
+
+const LOCAL_SESSION = {
+  access_token: 'local',
+  user: {
+    id: 'local-user-00000000',
+    email: 'local@localhost',
+    user_metadata: { full_name: 'Local User' },
+  },
+} as unknown as import('@supabase/supabase-js').Session
+
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
 // In production the build sets VITE_API_BASE to the ALB URL at build time.
@@ -164,8 +178,12 @@ export default function App() {
   const [tokensOpen, setTokensOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
 
-  // Subscribe to Supabase auth state
+  // Subscribe to Supabase auth state (skipped in LOCAL_MODE)
   useEffect(() => {
+    if (LOCAL_MODE) {
+      setSession(LOCAL_SESSION)
+      return
+    }
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s)
     })
@@ -220,6 +238,7 @@ export default function App() {
   })()
 
   function signIn() {
+    if (LOCAL_MODE) return
     supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin },
@@ -227,6 +246,7 @@ export default function App() {
   }
 
   function signOut() {
+    if (LOCAL_MODE) return
     supabase.auth.signOut()
   }
 
@@ -441,7 +461,11 @@ export default function App() {
               )}
             </button>
           )}
-          {session ? (
+          {LOCAL_MODE ? (
+            <span className="btn" style={{ opacity: 0.6, cursor: 'default', pointerEvents: 'none' }}>
+              Local
+            </span>
+          ) : session ? (
             <div className="auth-avatar-wrap">
               <button className="auth-avatar" onClick={() => setAvatarOpen((o) => !o)}>
                 {(session.user.user_metadata?.full_name ?? session.user.email ?? '?')[0].toUpperCase()}

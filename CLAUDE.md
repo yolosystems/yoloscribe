@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
+### Local dev (Docker Compose — no AWS required)
+```bash
+cp .env.local .env        # fill in ANTHROPIC_API_KEY
+docker compose up -d      # MinIO + ElasticMQ + backend + agent-runner + frontend
+# Open http://localhost:5173 → redirects to /local/
+```
+See `INSTALL.md` for full details.
+
 ### Frontend (`frontend/`)
 ```bash
 npm install          # install deps
@@ -141,6 +149,12 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `S3_VECTORS_BUCKET` | backend | S3 Vectors bucket name (for search index and deletion on account delete) |
 | `S3_VECTORS_INDEX_NAME` | backend | S3 Vectors index name (default: `yoloscribe`) |
+| `S3_ENDPOINT_URL` | backend + agent-runner | Custom S3 endpoint (MinIO for local dev) |
+| `SQS_ENDPOINT_URL` | backend + agent-runner | Custom SQS endpoint (ElasticMQ for local dev) |
+| `LOCAL_MODE` | backend | Set `true` to bypass Supabase auth, IAM/K8s, and Secrets Manager |
+| `LOCAL_SITE_NAME` | backend | Site name used when `LOCAL_MODE=true` (default: `local`) |
+| `LOCAL_USER_ID` | backend | User ID used when `LOCAL_MODE=true` |
+| `LOCAL_RUNNER` | agent-runner + indexer | Set `true` to run agent/index jobs inline (no K8s) |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 

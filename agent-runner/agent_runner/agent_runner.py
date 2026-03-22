@@ -43,6 +43,9 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
+S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
+SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
+LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -83,11 +86,16 @@ _session = boto3.Session(profile_name=AWS_PROFILE or None)
 
 
 def _s3_client():
-    return _session.client("s3", region_name=AWS_REGION)
+    kwargs = {"region_name": AWS_REGION}
+    if S3_ENDPOINT_URL:
+        kwargs["endpoint_url"] = S3_ENDPOINT_URL
+    return _session.client("s3", **kwargs)
 
 
-def _sm_client():
-    return _session.client("secretsmanager", region_name=AWS_REGION)
+def _make_secrets_store(s3):
+    from yolo_secrets import make_secrets_store
+    sm = None if LOCAL_MODE else _session.client("secretsmanager", region_name=AWS_REGION)
+    return make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=BUCKET, sm_client=sm)
 
 
 def _enqueue_index_job(content_key: str) -> None:
@@ -95,7 +103,10 @@ def _enqueue_index_job(content_key: str) -> None:
     if not SQS_INDEXING_QUEUE_URL:
         return
     try:
-        sqs = _session.client("sqs", region_name=AWS_REGION)
+        sqs_kwargs = {"region_name": AWS_REGION}
+        if SQS_ENDPOINT_URL:
+            sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
+        sqs = _session.client("sqs", **sqs_kwargs)
         sqs.send_message(
             QueueUrl=SQS_INDEXING_QUEUE_URL,
             MessageBody=json.dumps({"bucket": BUCKET, "content_key": content_key, "user_id": USER_ID}),
@@ -117,11 +128,11 @@ class OAuthTokenError(Exception):
         self.reason = reason
 
 
-def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
-    """Load the OAuth token for a tool from Secrets Manager.
+def _load_and_refresh_oauth_token(tool_name: str, user_id: str, store) -> dict:
+    """Load the OAuth token for a tool from the secrets store.
 
     If the token is within 5 minutes of expiry and a refresh token is available,
-    refreshes proactively and writes the updated token back to Secrets Manager.
+    refreshes proactively and writes the updated token back.
 
     Raises OAuthTokenError if the token is missing or cannot be refreshed.
     """
@@ -129,17 +140,17 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
     from mcp_oauth import refresh_access_token as _refresh
     from mcp_oauth.discovery import AuthorizationServerMetadata
 
-    secret_id = f"yoloscribe/{user_id}/oauth/{tool_name}"
-    try:
-        resp = sm.get_secret_value(SecretId=secret_id)
-        token_data: dict = json.loads(resp["SecretString"])
-    except sm.exceptions.ResourceNotFoundException:
+    secret_key = f"yoloscribe/{user_id}/oauth/{tool_name}"
+    raw = store.get(secret_key)
+    if raw is None:
         raise OAuthTokenError(
             tool_name,
             "No OAuth token found. Please open the Tools panel and authenticate this tool.",
         )
+    try:
+        token_data: dict = json.loads(raw)
     except Exception as exc:
-        raise OAuthTokenError(tool_name, f"Failed to read token from Secrets Manager: {exc}")
+        raise OAuthTokenError(tool_name, f"Failed to read token: {exc}")
 
     # Proactive refresh: refresh if the token expires within 5 minutes
     expires_at = token_data.get("expires_at", 0)
@@ -181,7 +192,7 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
             token_data["scope"] = new_tokens["scope"]
 
         try:
-            sm.put_secret_value(SecretId=secret_id, SecretString=json.dumps(token_data))
+            store.put(secret_key, json.dumps(token_data))
             log.info("Refreshed and persisted OAuth token for tool '%s'", tool_name)
         except Exception as exc:
             log.warning("Failed to persist refreshed token for tool '%s': %s", tool_name, exc)
@@ -189,23 +200,23 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, sm) -> dict:
     return token_data
 
 
-def _get_aws_sso_credential_headers(user_id: str, sm) -> dict[str, str]:
+def _get_aws_sso_credential_headers(user_id: str, store) -> dict[str, str]:
     """Exchange the stored AWS SSO access token for temporary IAM credentials.
 
-    Reads the aws-sso secret from Secrets Manager, calls sso:GetRoleCredentials,
+    Reads the aws-sso secret from the secrets store, calls sso:GetRoleCredentials,
     and returns credential headers to inject into internal MCP server requests.
 
     Raises OAuthTokenError if the token is missing, expired, or the exchange fails.
     """
-    secret_id = f"yoloscribe/{user_id}/oauth/aws-sso"
-    try:
-        resp = sm.get_secret_value(SecretId=secret_id)
-        token_data: dict = json.loads(resp["SecretString"])
-    except sm.exceptions.ResourceNotFoundException:
+    secret_key = f"yoloscribe/{user_id}/oauth/aws-sso"
+    raw = store.get(secret_key)
+    if raw is None:
         raise OAuthTokenError(
             "aws-sso",
             "No AWS SSO token found. Please open the Tools panel and sign in with AWS SSO.",
         )
+    try:
+        token_data: dict = json.loads(raw)
     except Exception as exc:
         raise OAuthTokenError("aws-sso", f"Failed to read AWS SSO token: {exc}")
 
@@ -284,7 +295,7 @@ def _parse_skill_tools(text: str) -> list[str]:
 # ── MCP client construction ───────────────────────────────────────────────────
 
 
-def _build_mcp_clients(skill_names: list[str], site: str, s3, sm) -> tuple[list, list[OAuthTokenError]]:
+def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
     """Build Strands MCPClient instances for all skills used by an agent.
 
     Resolution chain: agent.md → skill names → SKILL.md (tools list) → .tools/{name}/mcp.json
@@ -339,14 +350,14 @@ def _build_mcp_clients(skill_names: list[str], site: str, s3, sm) -> tuple[list,
                 headers: dict[str, str] = {}
                 if auth == "oauth":
                     try:
-                        token_data = _load_and_refresh_oauth_token(tool_name, USER_ID, sm)
+                        token_data = _load_and_refresh_oauth_token(tool_name, USER_ID, store)
                     except OAuthTokenError as exc:
                         errors.append(exc)
                         continue
                     headers["Authorization"] = f"Bearer {token_data['access_token']}"
                 elif auth == "aws-sso":
                     try:
-                        headers = _get_aws_sso_credential_headers(USER_ID, sm)
+                        headers = _get_aws_sso_credential_headers(USER_ID, store)
                     except OAuthTokenError as exc:
                         errors.append(exc)
                         continue
@@ -412,7 +423,7 @@ def main() -> None:
     )
 
     s3 = _s3_client()
-    sm = _sm_client()
+    store = _make_secrets_store(s3)
 
     # content holds the current page content; populated in step 2.
     # We declare it here so the top-level except block can use it for
@@ -433,7 +444,7 @@ def main() -> None:
 
         # 3. Build MCP clients; collect OAuth errors rather than raising immediately
         site = AGENT_MD_KEY.split("/")[0]
-        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, sm)
+        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, store)
         if oauth_errors:
             error_block = (
                 "\n".join(

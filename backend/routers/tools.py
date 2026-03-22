@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agents.base import tools_prefix
 from auth import get_user_id, get_user_context
-from config import S3_BUCKET, s3, sm
+from config import S3_BUCKET, s3, secrets_store
 from credentials import (
     VAR_NAME_RE,
     get_aws_sso_client_config,
@@ -197,21 +197,10 @@ async def disable_tool(
         save_user_settings(user_site, settings)
 
     if get_tool_auth_type(tool_name) not in ("aws-sso",):
-        try:
-            sid = oauth_secret_id(user_id, tool_name)
-            sm.delete_secret(SecretId=sid, ForceDeleteWithoutRecovery=True)
-        except sm.exceptions.ResourceNotFoundException:
-            pass
-        except Exception as exc:
-            logging.warning("Failed to delete OAuth token for tool %s user %s: %s", tool_name, user_id, exc)
+        secrets_store.delete(oauth_secret_id(user_id, tool_name))
 
     for var_name in tool_required_vars(tool_name):
-        try:
-            sm.delete_secret(SecretId=secret_id(user_id, var_name), ForceDeleteWithoutRecovery=True)
-        except sm.exceptions.ResourceNotFoundException:
-            pass
-        except Exception as exc:
-            logging.warning("Failed to delete secret %s for user %s: %s", var_name, user_id, exc)
+        secrets_store.delete(secret_id(user_id, var_name))
 
     return {"status": "disabled"}
 
@@ -234,14 +223,11 @@ async def put_secret(
     """Store or update a credential value in Secrets Manager for the current user."""
     if not VAR_NAME_RE.match(var_name):
         raise HTTPException(status_code=400, detail="Invalid variable name")
-    sid = secret_id(user_id, var_name)
     try:
-        sm.put_secret_value(SecretId=sid, SecretString=body.value)
-    except sm.exceptions.ResourceNotFoundException:
-        sm.create_secret(
-            Name=sid,
-            SecretString=body.value,
-            Description=f"YoloScribe credential: {var_name} for user {user_id}",
+        secrets_store.put(
+            secret_id(user_id, var_name),
+            body.value,
+            description=f"YoloScribe credential: {var_name} for user {user_id}",
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
