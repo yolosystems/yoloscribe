@@ -15,7 +15,7 @@ from mcp_oauth.oauth_flow import exchange_code
 
 from agents.base import tools_prefix
 from auth import get_user_context
-from config import FRONTEND_URL, OAUTH_REDIRECT_URI, S3_BUCKET, boto_session, s3, sm
+from config import FRONTEND_URL, OAUTH_REDIRECT_URI, S3_BUCKET, boto_session, s3, secrets_store
 from credentials import (
     get_aws_sso_client_config,
     get_tool_auth_type,
@@ -469,10 +469,7 @@ async def aws_sso_select_role(
     save_oauth_token(user_id, "aws-sso", token)
 
     try:
-        sm.delete_secret(
-            SecretId=oauth_secret_id(user_id, "aws-sso-pending"),
-            ForceDeleteWithoutRecovery=True,
-        )
+        secrets_store.delete(oauth_secret_id(user_id, "aws-sso-pending"))
     except Exception:
         pass
 
