@@ -229,15 +229,25 @@ Current context:
             """
             if err := _check_injection(instruction, "instruction"):
                 return err
-            agent = ContentWriterAgent(
-                s3_tools=s3_tools,
-                site=site,
-                page_path=page_path,
-            )
-            response = agent(
-                f"Site: {site}\nPage path: {page_path or '(root)'}\n\n{instruction}"
-            )
-            result = str(response)
+            _MAX_WRITE_RETRIES = 3
+            result = ""
+            for attempt in range(_MAX_WRITE_RETRIES):
+                s3_tools.write_conflict = False
+                agent = ContentWriterAgent(
+                    s3_tools=s3_tools,
+                    site=site,
+                    page_path=page_path,
+                )
+                result = str(agent(
+                    f"Site: {site}\nPage path: {page_path or '(root)'}\n\n{instruction}"
+                ))
+                if not s3_tools.write_conflict:
+                    break
+                if attempt == _MAX_WRITE_RETRIES - 1:
+                    return (
+                        "Failed to save: the page is being frequently modified by "
+                        "another writer. Please try again in a moment."
+                    )
             # Try to retrieve updated content for the API response.
             try:
                 updated = s3_tools.get_content(site=site, page_path=page_path)

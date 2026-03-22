@@ -133,6 +133,12 @@ class S3Tools:
         self.bucket = bucket
         self._user_site = user_site
         self._user_email = user_email
+        # ETag captured on get_content; used as IfMatch on put_content.
+        self._etag_cache: dict[str, str] = {}
+        # Set True by put_content when a 412 PreconditionFailed is returned by
+        # S3. The caller (content_writer tool in chat.py) checks this flag to
+        # decide whether to retry the agent invocation.
+        self.write_conflict: bool = False
 
     # ── Ownership / access checks ─────────────────────────────────────────────
 
@@ -215,7 +221,9 @@ class S3Tools:
         self._require_read_access(site, page_path)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
         try:
-            return self.read_text(key)
+            obj = self.s3.get_object(Bucket=self.bucket, Key=key)
+            self._etag_cache[key] = obj["ETag"]
+            return obj["Body"].read().decode("utf-8")
         except Exception:
             return ""
 
@@ -230,7 +238,24 @@ class S3Tools:
         """
         self._require_site_ownership(site)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
-        self.write_text(key, content)
+        etag = self._etag_cache.get(key)
+        kwargs: dict = {"IfMatch": etag} if etag else {}
+        try:
+            self.s3.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=content.encode("utf-8"),
+                ContentType="text/markdown; charset=utf-8",
+                **kwargs,
+            )
+        except self.s3.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                self.write_conflict = True
+                return (
+                    "Write conflict: the page was modified by another writer between "
+                    "your read and write. Do not retry — this will be handled automatically."
+                )
+            raise
         return f"Saved content to {key}"
 
     # ── Tools (bucket-root, admin-managed) ────────────────────────────────────
