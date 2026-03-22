@@ -16,6 +16,7 @@ dependencies = [
     "yolo-secrets",
     "fastmcp>=2.14.0",
     "slowapi>=0.1.9",
+    "bleach>=6.3.0",
 ]
 
 [tool.uv]
