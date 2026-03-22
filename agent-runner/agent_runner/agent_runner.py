@@ -412,6 +412,33 @@ def _write_error_to_content(s3, content: str, error_block: str) -> None:
     )
 
 
+def _get_content_with_etag(s3, key: str) -> tuple[str, str | None]:
+    """Read content.md and return (content, etag). Returns ("", None) on missing key."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET, Key=key)
+        return obj["Body"].read().decode("utf-8"), obj["ETag"]
+    except Exception:
+        return "", None
+
+
+def _put_content_conditional(s3, key: str, content: str, etag: str | None) -> bool:
+    """PUT with If-Match if an etag is available. Returns True on success, False on 412."""
+    kwargs: dict = {"IfMatch": etag} if etag else {}
+    try:
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+            **kwargs,
+        )
+        return True
+    except s3.exceptions.ClientError as exc:
+        if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+            return False
+        raise
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
     log.info("Agent runner starting: bucket=%s agent_md=%s user=%s", BUCKET, AGENT_MD_KEY, USER_ID)
@@ -435,17 +462,11 @@ def main() -> None:
         obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
         agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
 
-        # 2. Read current content.md early — we need it for error reporting too
-        try:
-            content_obj = s3.get_object(Bucket=BUCKET, Key=CONTENT_KEY)
-            content = content_obj["Body"].read().decode("utf-8")
-        except Exception:
-            content = ""
-
-        # 3. Build MCP clients; collect OAuth errors rather than raising immediately
+        # 2. Build MCP clients once — not repeated on write-conflict retries
         site = AGENT_MD_KEY.split("/")[0]
         mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, store)
         if oauth_errors:
+            content, _ = _get_content_with_etag(s3, CONTENT_KEY)
             error_block = (
                 "\n".join(
                     f"> **Agent Error** (tool `{e.tool_name}`): {e.reason}"
@@ -457,7 +478,7 @@ def main() -> None:
             log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
             return
 
-        # 4. Run the agent, catching any MCP or execution errors
+        # 3. Build agent once — MCP tools, model, and system prompt are stable across retries
         tools = [http_request]
         with contextlib.ExitStack() as stack:
             for client in mcp_clients:
@@ -498,13 +519,49 @@ def main() -> None:
                     max_delay=120,
                 ),
             )
-            task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
-            full_prompt = (
-                f"{task}\n\n"
-                f"Current content:\n```markdown\n{content}\n```\n\n"
-                "When done, reply with ONLY the updated markdown. No explanations."
-            )
-            response = agent(full_prompt)
+
+            # 4. Read → run → conditional write, retrying on write conflict
+            _MAX_WRITE_RETRIES = 3
+            for attempt in range(_MAX_WRITE_RETRIES):
+                # Read fresh content + ETag on every attempt
+                content, etag = _get_content_with_etag(s3, CONTENT_KEY)
+
+                task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
+                full_prompt = (
+                    f"{task}\n\n"
+                    f"Current content:\n```markdown\n{content}\n```\n\n"
+                    "When done, reply with ONLY the updated markdown. No explanations."
+                )
+                response = agent(full_prompt)
+
+                # 5. Strip any preamble the model emitted before the markdown heading
+                raw = str(response)
+                lines = raw.splitlines()
+                for idx, line in enumerate(lines):
+                    if line.startswith("#"):
+                        raw = "\n".join(lines[idx:])
+                        break
+                updated = raw
+
+                if _put_content_conditional(s3, CONTENT_KEY, updated, etag):
+                    break
+
+                if attempt == _MAX_WRITE_RETRIES - 1:
+                    log.error(
+                        "Write conflict after %d attempts for %s — giving up",
+                        _MAX_WRITE_RETRIES, CONTENT_KEY,
+                    )
+                    error_block = (
+                        "> **Agent Error**: Could not save — the page was modified by "
+                        "another writer on every attempt. Please try again.\n\n"
+                    )
+                    _write_error_to_content(s3, content, error_block)
+                    return
+
+                log.warning(
+                    "Write conflict on attempt %d for %s — retrying with fresh content",
+                    attempt + 1, CONTENT_KEY,
+                )
 
     except Exception as exc:
         log.error("Agent execution failed: %s", exc, exc_info=True)
@@ -515,20 +572,6 @@ def main() -> None:
             log.error("Additionally failed to write error to content: %s", write_exc)
         return
 
-    # 5. Strip any preamble the model emitted before the markdown heading
-    raw = str(response)
-    lines = raw.splitlines()
-    for idx, line in enumerate(lines):
-        if line.startswith("#"):
-            raw = "\n".join(lines[idx:])
-            break
-    updated = raw
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=CONTENT_KEY,
-        Body=updated.encode("utf-8"),
-        ContentType="text/markdown; charset=utf-8",
-    )
     print(f"Done. Wrote {len(updated)} chars to s3://{BUCKET}/{CONTENT_KEY}")
     _enqueue_index_job(CONTENT_KEY)
 
