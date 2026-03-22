@@ -13,6 +13,7 @@ dependencies = [
     "kubernetes>=29.0.0",
     "pyjwt[crypto]>=2.8.0",
     "mcp-oauth",
+    "yolo-secrets",
     "fastmcp>=2.14.0",
     "slowapi>=0.1.9",
 ]
@@ -27,3 +28,4 @@ dev-dependencies = [
 
 [tool.uv.sources]
 mcp-oauth = {path = "../libs/mcp_oauth"}
+yolo-secrets = {path = "../libs/yolo_secrets"}

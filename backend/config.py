@@ -83,8 +83,12 @@ _sqs_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": SQS_ENDPOINT_URL} 
 s3 = boto_session.client("s3", **_s3_kwargs)
 sqs = boto_session.client("sqs", **_sqs_kwargs) if SQS_QUEUE_URL else None
 sqs_indexing = boto_session.client("sqs", **_sqs_kwargs) if SQS_INDEXING_QUEUE_URL else None
-sm = boto_session.client("secretsmanager", region_name=AWS_REGION)
 s3vectors = boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTORS_BUCKET else None
+
+_sm = None if LOCAL_MODE else boto_session.client("secretsmanager", region_name=AWS_REGION)
+
+from yolo_secrets import make_secrets_store  # noqa: E402
+secrets_store = make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=S3_BUCKET, sm_client=_sm)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

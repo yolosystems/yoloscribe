@@ -101,6 +101,7 @@ services:
       SQS_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-runner"
       SQS_INDEXING_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-indexing"
       SQS_ENDPOINT_URL: "http://elasticmq:9324"
+      LOCAL_MODE: "true"
       LOCAL_RUNNER: "true"
 
       # Claude

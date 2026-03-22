@@ -9,6 +9,7 @@ dependencies = [
     "strands-agents-tools>=0.1.0",
     "mcp>=1.0.0",
     "mcp-oauth",
+    "yolo-secrets",
 ]
 
 [project.scripts]
@@ -20,3 +21,4 @@ package = true
 
 [tool.uv.sources]
 mcp-oauth = {path = "../libs/mcp_oauth"}
+yolo-secrets = {path = "../libs/yolo_secrets"}

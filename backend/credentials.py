@@ -5,7 +5,7 @@ import logging
 import re
 
 from agents.base import tools_prefix
-from config import S3_BUCKET, s3, sm
+from config import S3_BUCKET, s3, secrets_store
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -76,12 +76,17 @@ def load_tool_oauth_client(tool_name: str) -> dict | None:
 
 
 def load_platform_client_secret(tool_name: str) -> str | None:
-    """Load the platform-level OAuth client_secret from Secrets Manager."""
+    """Load the platform-level OAuth client_secret from Secrets Manager.
+
+    Returns None in LOCAL_MODE — platform secrets are AWS-specific and not
+    needed for local development.
+    """
     sid = f"yoloscribe/platform/oauth/{tool_name}"
+    raw = secrets_store.get(sid)
+    if raw is None:
+        return None
     try:
-        resp = sm.get_secret_value(SecretId=sid)
-        data = json.loads(resp["SecretString"])
-        return data.get("client_secret")
+        return json.loads(raw).get("client_secret")
     except Exception:
         return None
 
@@ -110,40 +115,29 @@ def save_aws_sso_client_config(site: str, config: dict) -> None:
 # ── OAuth token storage ────────────────────────────────────────────────────────
 
 def load_oauth_token(user_id: str, tool_name: str) -> dict | None:
-    """Load a stored OAuth token blob from Secrets Manager, or None if not found."""
-    try:
-        resp = sm.get_secret_value(SecretId=oauth_secret_id(user_id, tool_name))
-        return json.loads(resp["SecretString"])
-    except sm.exceptions.ResourceNotFoundException:
+    """Load a stored OAuth token blob, or None if not found."""
+    raw = secrets_store.get(oauth_secret_id(user_id, tool_name))
+    if raw is None:
         return None
+    try:
+        return json.loads(raw)
     except Exception:
         return None
 
 
 def save_oauth_token(user_id: str, tool_name: str, token_blob: dict) -> None:
-    """Create or update the OAuth token blob in Secrets Manager."""
-    sid = oauth_secret_id(user_id, tool_name)
-    secret_string = json.dumps(token_blob)
-    try:
-        sm.put_secret_value(SecretId=sid, SecretString=secret_string)
-    except sm.exceptions.ResourceNotFoundException:
-        sm.create_secret(
-            Name=sid,
-            SecretString=secret_string,
-            Description=f"OAuth tokens for user {user_id} tool {tool_name}",
-        )
+    """Create or update the OAuth token blob."""
+    secrets_store.put(
+        oauth_secret_id(user_id, tool_name),
+        json.dumps(token_blob),
+        description=f"OAuth tokens for user {user_id} tool {tool_name}",
+    )
 
 
 # ── Secrets Manager key-based credentials ─────────────────────────────────────
 
 def secret_exists(user_id: str, var_name: str) -> bool:
-    try:
-        sm.get_secret_value(SecretId=secret_id(user_id, var_name))
-        return True
-    except sm.exceptions.ResourceNotFoundException:
-        return False
-    except Exception:
-        return False
+    return secrets_store.exists(secret_id(user_id, var_name))
 
 
 # ── User settings (enabled tools) ─────────────────────────────────────────────
