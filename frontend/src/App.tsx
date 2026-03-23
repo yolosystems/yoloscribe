@@ -166,6 +166,9 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('view')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [saveConflict, setSaveConflict] = useState(false)
+  const [etag, setEtag] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const [agents, setAgents] = useState<string[]>([])
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
@@ -280,6 +283,8 @@ export default function App() {
     setError(null)
     setAccessLevel(null)
     setMode('view')
+    setEtag(null)
+    setSaveConflict(false)
     const headers: Record<string, string> = {}
     if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
     fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, {
@@ -295,6 +300,7 @@ export default function App() {
         if (!res.ok) throw new Error(`Failed to load content: ${res.status}`)
         const level = (res.headers.get('X-Page-Access') ?? 'view') as AccessLevel
         setAccessLevel(level)
+        setEtag(res.headers.get('ETag'))
         const text = await res.text()
         setContent(text)
         setSavedContent(text)
@@ -302,7 +308,7 @@ export default function App() {
       .catch((err) => { if (err.name !== 'AbortError') setError(err.message) })
     return () => controller.abort()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, sessionUserId])
+  }, [filePath, sessionUserId, reloadKey])
 
   const isOwner = accessLevel === 'full-control'
   const canEdit = accessLevel === 'full-control' || accessLevel === 'write'
@@ -320,23 +326,27 @@ export default function App() {
       .catch(() => {})
   }, [isOwner, session, filePath])
 
-  async function save() {
+  async function save(force = false) {
     if (content === null || !session) return
     setSaving(true)
+    setSaveConflict(false)
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'text/plain',
+        Authorization: `Bearer ${session.access_token}`,
+      }
+      if (etag && !force) headers['If-Match'] = etag
       const res = await fetch(
         `${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'text/plain',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: content,
-        }
+        { method: 'PUT', headers, body: content }
       )
+      if (res.status === 409) {
+        setSaveConflict(true)
+        return
+      }
       if (!res.ok) throw new Error(`Save failed: ${res.status}`)
       setSavedContent(content)
+      setEtag(null) // backend doesn't return ETag on PUT; clear so next save is unconditional
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -400,13 +410,28 @@ export default function App() {
               <button className="btn btn-danger" onClick={discard}>
                 Discard
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={save}
-                disabled={!isDirty || saving}
-              >
-                {saving ? 'Saving…' : 'Save'}
-              </button>
+              {saveConflict && (
+                <>
+                  <span style={{ color: 'var(--danger, #e53e3e)', fontSize: '0.85em' }}>
+                    Conflict — page changed by another writer.
+                  </span>
+                  <button className="btn btn-danger" onClick={() => save(true)}>
+                    Force Save
+                  </button>
+                  <button className="btn" onClick={() => { setSaveConflict(false); setReloadKey((k) => k + 1) }}>
+                    Reload
+                  </button>
+                </>
+              )}
+              {!saveConflict && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => save()}
+                  disabled={!isDirty || saving}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              )}
               <button className="btn" onClick={() => setMode('view')}>
                 View
               </button>
