@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES
 from rate_limit import limiter
-from s3_helpers import get_content, put_content, is_safe_path, enqueue_index_job
+from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job
 from settings_cache import get_page_settings, page_path_from_file_path
 
 _audit_log = logging.getLogger("yoloscribe.audit")
@@ -31,6 +31,14 @@ _ALLOWED_ATTRS = {
 }
 
 router = APIRouter()
+
+
+def _get_content_with_etag_safe(site: str, path: str) -> tuple[str, str | None]:
+    """Return (content, etag), falling back to ("", None) if the object is missing."""
+    try:
+        return get_content_with_etag(site, path)
+    except Exception:
+        return "", None
 
 
 @router.get(
@@ -84,9 +92,11 @@ async def get_content_route(
                     access = "full-control"
             except HTTPException:
                 pass
-        content = get_content(site, path)
+        content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = access
+        if etag:
+            resp.headers["ETag"] = etag
         return resp
 
     # private or shared — authentication required
@@ -97,9 +107,11 @@ async def get_content_route(
     user_site = get_site_for_user(claims.user_id)
 
     if user_site == site:
-        content = get_content(site, path)
+        content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = "full-control"
+        if etag:
+            resp.headers["ETag"] = etag
         return resp
 
     if visibility == "shared":
@@ -107,9 +119,11 @@ async def get_content_route(
         shared_with = settings.get("shared_with", [])
         match = next((u for u in shared_with if u.get("email") == user_email), None)
         if match:
-            content = get_content(site, path)
+            content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
             resp = Response(content=content, media_type="text/plain; charset=utf-8")
             resp.headers["X-Page-Access"] = match.get("access", "view")
+            if etag:
+                resp.headers["ETag"] = etag
             return resp
 
     raise HTTPException(status_code=403, detail="Access denied")
@@ -130,7 +144,7 @@ async def put_content_route(
     site: str = "default",
     path: str = "content.md",
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
-) -> dict[str, str]:
+) -> Response:
     if not is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
 
@@ -180,7 +194,17 @@ async def put_content_route(
             })
         )
 
-    put_content(site, path, text)
+    if_match = request.headers.get("If-Match")
+    if if_match:
+        saved = put_content_conditional(site, path, text, if_match)
+        if not saved:
+            return Response(
+                content='{"detail":"Conflict: the page was modified by another writer. Reload and try again."}',
+                status_code=409,
+                media_type="application/json",
+            )
+    else:
+        put_content(site, path, text)
     if is_content_path:
         enqueue_index_job(f"{site}/{path}", claims.user_id)
-    return {"status": "saved"}
+    return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")

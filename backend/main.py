@@ -108,7 +108,7 @@ app.add_middleware(
     allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Page-Access", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
+    expose_headers=["X-Page-Access", "ETag", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
 )
 
 # ── Rate limiter wiring ────────────────────────────────────────────────────────
