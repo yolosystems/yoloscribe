@@ -36,6 +36,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
+SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
+S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 
 
 def _safe_k8s_name(*parts: str, max_len: int = 63) -> str:
@@ -205,8 +207,10 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
 
 def main() -> None:
     _session = boto3.Session(profile_name=AWS_PROFILE or None)
-    sqs = _session.client("sqs", region_name=AWS_REGION)
-    s3 = _session.client("s3", region_name=AWS_REGION)
+    _sqs_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": SQS_ENDPOINT_URL} if SQS_ENDPOINT_URL else {})}
+    _s3_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": S3_ENDPOINT_URL} if S3_ENDPOINT_URL else {})}
+    sqs = _session.client("sqs", **_sqs_kwargs)
+    s3 = _session.client("s3", **_s3_kwargs)
 
     image_pull_secrets: list = []
     if LOCAL_RUNNER:
