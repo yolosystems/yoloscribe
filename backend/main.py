@@ -16,8 +16,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from config import SUPABASE_URL, S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, AWS_REGION, BEDROCK_EMBEDDING_MODEL, mcp_api_base, jwks_client, s3, sqs_indexing, s3vectors
-from config import SUPABASE_SERVICE_ROLE_KEY, MAX_REQUEST_BYTES
+from config import S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, AWS_REGION, BEDROCK_EMBEDDING_MODEL, mcp_api_base, auth_provider, user_site_repo, s3, sqs_indexing, s3vectors
+from config import MAX_REQUEST_BYTES
 from rate_limit import limiter
 from mcp_server import create_mcp_app
 from routers import (
@@ -129,7 +129,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 # ── Mount MCP server ───────────────────────────────────────────────────────────
 
-if jwks_client is not None:
+if auth_provider is not None:
     _mcp_app = create_mcp_app(  # noqa: F811
         s3_client=s3,
         bucket=S3_BUCKET,
@@ -138,9 +138,8 @@ if jwks_client is not None:
         vectors_index=S3_VECTORS_INDEX_NAME,
         bedrock_embedding_model=BEDROCK_EMBEDDING_MODEL,
         bedrock_region=AWS_REGION,
-        jwks_client=jwks_client,
-        supabase_url=SUPABASE_URL,
-        supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY,
+        auth_provider=auth_provider,
+        user_site_repo=user_site_repo,
         sqs_indexing_client=sqs_indexing,
         sqs_indexing_queue_url=os.environ.get("SQS_INDEXING_QUEUE_URL", ""),
         base_url=mcp_api_base(),
@@ -148,7 +147,7 @@ if jwks_client is not None:
     app.mount("/mcp/v1", _mcp_app)
     logging.info("MCP server mounted at /mcp/v1")
 else:
-    logging.warning("MCP server not mounted: SUPABASE_URL is not configured")
+    logging.warning("MCP server not mounted: auth provider is not configured")
 
 # ── Routers ────────────────────────────────────────────────────────────────────
 

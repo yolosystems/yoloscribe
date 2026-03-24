@@ -1,70 +1,38 @@
 """JWT authentication helpers for the YoloScribe API."""
 
-import dataclasses
 import datetime
 import hashlib
-import json
-import urllib.request
 
-import jwt as pyjwt
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from config import LOCAL_MODE, LOCAL_SITE_NAME, LOCAL_USER_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, jwks_client
-from supabase_helpers import supabase_get_api_token_by_hash, supabase_update_token_last_used
+from auth_providers.base import JWTClaims  # re-exported for call-site backwards compat
+from config import LOCAL_MODE, LOCAL_SITE_NAME, LOCAL_USER_ID, auth_provider, api_token_repo, user_site_repo
 
 _bearer = HTTPBearer(auto_error=False)
 
-
-@dataclasses.dataclass
-class JWTClaims:
-    user_id: str
-    email: str | None
+__all__ = ["JWTClaims", "decode_jwt", "get_site_for_user", "get_user_context",
+           "get_jwt_claims", "get_user_id", "require_site_owner", "_bearer"]
 
 
 def decode_jwt(credentials: HTTPAuthorizationCredentials | None) -> JWTClaims:
-    """Validate Supabase JWT and return user_id + email."""
+    """Validate a JWT and return user_id + email."""
     if LOCAL_MODE:
         return JWTClaims(user_id=LOCAL_USER_ID, email="local@localhost")
-    if jwks_client is None:
-        raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured")
+    if auth_provider is None:
+        raise HTTPException(status_code=500, detail="Auth provider is not configured")
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication token")
-    token = credentials.credentials
-    try:
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
-        payload = pyjwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256", "ES256"],
-            audience="authenticated",
-        )
-        return JWTClaims(user_id=payload["sub"], email=payload.get("email"))
-    except pyjwt.exceptions.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
+    return auth_provider.decode_jwt(credentials.credentials)
 
 
 def get_site_for_user(user_id: str) -> str | None:
-    """Look up the user's site name from the user_site table via Supabase PostgREST."""
+    """Look up the user's site name."""
     if LOCAL_MODE:
         return LOCAL_SITE_NAME
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    if user_site_repo is None:
         return None
-    url = f"{SUPABASE_URL}/rest/v1/user_site?user_uuid=eq.{user_id}&select=site_name&limit=1"
-    req = urllib.request.Request(
-        url,
-        method="GET",
-        headers={
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        },
-    )
-    try:
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read())
-            return data[0]["site_name"] if data else None
-    except Exception:
-        return None
+    return user_site_repo.get_site_for_user(user_id)
 
 
 def get_user_id(
@@ -80,8 +48,10 @@ def resolve_api_token(raw_token: str) -> tuple[str, str | None]:
     Raises HTTPException(401) if the token is unknown, revoked, or expired.
     Updates last_used_at in the background (best-effort, never raises).
     """
+    if api_token_repo is None:
+        raise HTTPException(status_code=401, detail="Invalid or revoked API token")
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    row = supabase_get_api_token_by_hash(token_hash)
+    row = api_token_repo.get_by_hash(token_hash)
     if row is None:
         raise HTTPException(status_code=401, detail="Invalid or revoked API token")
     expires_at = row.get("expires_at")
@@ -92,14 +62,14 @@ def resolve_api_token(raw_token: str) -> tuple[str, str | None]:
                 raise HTTPException(status_code=401, detail="API token has expired")
         except ValueError:
             pass  # Unparseable expiry — treat as non-expiring
-    supabase_update_token_last_used(row["id"])
+    api_token_repo.update_last_used(row["id"])
     return row["user_id"], row.get("site_name")
 
 
 def get_user_context(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> tuple[str, str | None]:
-    """Extract user_id + site_name from a Supabase JWT or an `as_`-prefixed API token."""
+    """Extract user_id + site_name from a JWT or an `as_`-prefixed API token."""
     if LOCAL_MODE:
         return LOCAL_USER_ID, LOCAL_SITE_NAME
     if credentials is None:

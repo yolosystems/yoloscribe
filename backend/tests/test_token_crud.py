@@ -66,31 +66,28 @@ class TestTokenHashing:
 
 
 # ---------------------------------------------------------------------------
-# Supabase helper stubs (unit-level, no network calls)
+# SupabaseApiTokenRepository (unit-level, no network calls)
 # ---------------------------------------------------------------------------
 
 
-class TestSupabaseTokenHelpers:
-    """Verify that helpers correctly format PostgREST calls without hitting Supabase."""
+class TestSupabaseApiTokenRepository:
+    """Verify that SupabaseApiTokenRepository correctly formats PostgREST calls."""
+
+    def _repo(self):
+        from auth_providers.supabase import SupabaseApiTokenRepository
+        return SupabaseApiTokenRepository("https://fake.supabase.co", "fake-key")
 
     def test_insert_builds_correct_payload(self, monkeypatch):
-        import supabase_helpers as sh
-        calls = []
-
-        class _FakeResp:
-            def read(self):
-                return b'[{"id": "test-uuid"}]'
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-
-        monkeypatch.setattr(sh, "SUPABASE_URL", "https://fake.supabase.co")
-        monkeypatch.setattr(sh, "SUPABASE_SERVICE_ROLE_KEY", "fake-key")
-
         import urllib.request
         import json
 
+        repo = self._repo()
         captured = {}
-        original_urlopen = urllib.request.urlopen
+
+        class _FakeResp:
+            def read(self): return b'[{"id": "test-uuid"}]'
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
 
         def fake_urlopen(req):
             captured["url"] = req.full_url
@@ -99,8 +96,7 @@ class TestSupabaseTokenHelpers:
             return _FakeResp()
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-
-        result = sh.supabase_insert_api_token("uid", "mysite", "My Bot", "hash123")
+        result = repo.insert_token("uid", "mysite", "My Bot", "hash123")
 
         assert result == "test-uuid"
         assert "api_tokens" in captured["url"]
@@ -111,43 +107,37 @@ class TestSupabaseTokenHelpers:
         assert captured["method"] == "POST"
 
     def test_list_filters_revoked(self, monkeypatch):
-        import supabase_helpers as sh
-        monkeypatch.setattr(sh, "SUPABASE_URL", "https://fake.supabase.co")
-        monkeypatch.setattr(sh, "SUPABASE_SERVICE_ROLE_KEY", "fake-key")
-
         import urllib.request
 
+        repo = self._repo()
+        captured_url = {}
+
         class _FakeResp:
-            def read(self):
-                return b'[{"id": "a"}, {"id": "b"}]'
+            def read(self): return b'[{"id": "a"}, {"id": "b"}]'
             def __enter__(self): return self
             def __exit__(self, *a): pass
-
-        captured_url = {}
 
         def fake_urlopen(req):
             captured_url["url"] = req.full_url
             return _FakeResp()
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-        rows = sh.supabase_list_api_tokens("uid")
+        rows = repo.list_tokens("uid")
 
         assert len(rows) == 2
         assert "revoked_at=is.null" in captured_url["url"]
 
     def test_revoke_patches_revoked_at(self, monkeypatch):
-        import supabase_helpers as sh
-        monkeypatch.setattr(sh, "SUPABASE_URL", "https://fake.supabase.co")
-        monkeypatch.setattr(sh, "SUPABASE_SERVICE_ROLE_KEY", "fake-key")
+        import urllib.request
+        import json
 
-        import urllib.request, json
+        repo = self._repo()
+        captured = {}
 
         class _FakeResp:
             def read(self): return b'[{"id": "tok"}]'
             def __enter__(self): return self
             def __exit__(self, *a): pass
-
-        captured = {}
 
         def fake_urlopen(req):
             captured["url"] = req.full_url
@@ -156,7 +146,7 @@ class TestSupabaseTokenHelpers:
             return _FakeResp()
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-        found = sh.supabase_revoke_api_token("tok-id", "uid")
+        found = repo.revoke_token("tok-id", "uid")
 
         assert found is True
         assert captured["method"] == "PATCH"
