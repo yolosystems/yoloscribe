@@ -66,20 +66,35 @@ config:
   awsAccountId: ""
   awsRegion: ""
   k8sNamespace: ""
-  supabaseUrl: ""
   cloudfrontDomain: ""
   s3VectorsBucket: ""
   s3VectorsIndexName: "yoloscribe"
   bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
   mcpBaseUrl: ""
+  # Auth provider — supabase (default) or cognito
+  authProvider: "supabase"
+  # Supabase (only used when authProvider=supabase)
+  supabaseUrl: ""
 
 # ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
 # Pass via --set on the command line; never commit a real value here.
 webhookSecret: ""
 
-# ── Supabase service role key (for /provision and site ownership lookups) ─────
+# ── Supabase service role key (authProvider=supabase) ─────────────────────────
 # Pass via --set on the command line; never commit a real value here.
 supabaseServiceRoleKey: ""
+
+# ── Cognito config (authProvider=cognito) ─────────────────────────────────────
+cognito:
+  userPoolId: ""
+  clientId: ""
+  domain: ""                                        # e.g. https://your-pool.auth.us-east-1.amazoncognito.com
+  dynamoDbUserSiteTable: "yoloscribe-user-site"
+  dynamoDbApiTokensTable: "yoloscribe-api-tokens"
+
+# ── Cognito app client secret (authProvider=cognito) ──────────────────────────
+# Pass via --set on the command line; never commit a real value here.
+cognitoClientSecret: ""
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)
