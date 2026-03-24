@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-import { type Session } from '@supabase/supabase-js'
-import { supabase } from './supabase'
+import { authClient, type AuthSession } from './auth'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
@@ -24,14 +23,14 @@ type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 // code paths continue to work without changes.
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
 
-const LOCAL_SESSION = {
+const LOCAL_SESSION: AuthSession = {
   access_token: 'local',
   user: {
     id: 'local-user-00000000',
     email: 'local@localhost',
     user_metadata: { full_name: 'Local User' },
   },
-} as unknown as import('@supabase/supabase-js').Session
+}
 
 // In dev mode always use the Vite proxy (/api → localhost:8000) regardless of
 // any VITE_API_BASE shell variable that may be set from running the deploy script.
@@ -170,7 +169,7 @@ export default function App() {
   const [etag, setEtag] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [agents, setAgents] = useState<string[]>([])
-  const [session, setSession] = useState<Session | null | undefined>(undefined)
+  const [session, setSession] = useState<AuthSession | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [createPageOpen, setCreatePageOpen] = useState(false)
@@ -187,10 +186,10 @@ export default function App() {
       setSession(LOCAL_SESSION)
       return
     }
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const unsubscribe = authClient.onAuthStateChange((s) => {
       setSession(s)
     })
-    return () => subscription.unsubscribe()
+    return unsubscribe
   }, [])
 
   // Load site theme from config.json (user sites only)
@@ -242,15 +241,12 @@ export default function App() {
 
   function signIn() {
     if (LOCAL_MODE) return
-    supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin },
-    })
+    authClient.signIn()
   }
 
   function signOut() {
     if (LOCAL_MODE) return
-    supabase.auth.signOut()
+    authClient.signOut()
   }
 
   // Update filePath on hash navigation
@@ -524,7 +520,7 @@ export default function App() {
           token={session.access_token}
           onClose={() => setDeleteModalOpen(false)}
           onDeleted={async () => {
-            await supabase.auth.signOut()
+            await authClient.signOut()
             window.location.href = '/'
           }}
         />
