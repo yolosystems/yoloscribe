@@ -66,6 +66,9 @@ spec:
                   key: webhook-secret
                   optional: true
             {{- end }}
+            - name: AUTH_PROVIDER
+              value: {{ .Values.config.authProvider | default "supabase" | quote }}
+            {{- if eq (.Values.config.authProvider | default "supabase") "supabase" }}
             - name: SUPABASE_URL
               value: {{ .Values.config.supabaseUrl | quote }}
             {{- if .Values.supabaseServiceRoleKey }}
@@ -74,6 +77,25 @@ spec:
                 secretKeyRef:
                   name: {{ include "yoloscribe-backend.secretName" . }}
                   key: supabase-service-role-key
+            {{- end }}
+            {{- else if eq .Values.config.authProvider "cognito" }}
+            - name: COGNITO_USER_POOL_ID
+              value: {{ .Values.cognito.userPoolId | quote }}
+            - name: COGNITO_CLIENT_ID
+              value: {{ .Values.cognito.clientId | quote }}
+            - name: COGNITO_DOMAIN
+              value: {{ .Values.cognito.domain | quote }}
+            {{- if .Values.cognitoClientSecret }}
+            - name: COGNITO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.secretName" . }}
+                  key: cognito-client-secret
+            {{- end }}
+            - name: DYNAMODB_USER_SITE_TABLE
+              value: {{ .Values.cognito.dynamoDbUserSiteTable | quote }}
+            - name: DYNAMODB_API_TOKENS_TABLE
+              value: {{ .Values.cognito.dynamoDbApiTokensTable | quote }}
             {{- end }}
             {{- if .Values.config.cloudfrontDomain }}
             - name: CLOUDFRONT_DOMAIN

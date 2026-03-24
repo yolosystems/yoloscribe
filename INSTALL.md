@@ -143,20 +143,102 @@ AWS_REGION=eu-west-1 \
 - GSI `token_hash-index`: PK `token_hash` (S) — for auth-time lookup
 - Attributes: `user_id`, `site_name`, `name`, `token_hash`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`
 
-## 2. Configure environment variables
+## 2. Cognito app clients
 
-Set these in your Helm values or `.env` file:
+Create **two** Cognito app clients on your User Pool:
+
+| Client | Type | Used by |
+|---|---|---|
+| `yoloscribe-backend` | Confidential (has client secret) | Backend — MCP OAuth PKCE, token exchange |
+| `yoloscribe-frontend` | Public (no secret, PKCE only) | Browser — user sign-in via Hosted UI |
+
+Register the following callback URLs on each client:
+- `https://<your-domain>/` — frontend redirect after sign-in
+- `https://<your-domain>/mcp/oauth/callback/*` — backend MCP OAuth (confidential client only)
+
+## 3. Deploy with Helm
+
+The `infra/helm/yoloscribe-backend` chart supports `authProvider: cognito`. Create a values file for your environment (e.g. `backend.prod.values.yaml`):
+
+```yaml
+image:
+  repository: ghcr.io/<your-org>/yoloscribe-backend
+  tag: latest
+
+config:
+  authProvider: cognito
+  awsRegion: us-east-1
+  s3Bucket: yoloscribe-prod
+  sqsQueueUrl: https://sqs.us-east-1.amazonaws.com/<account>/yoloscribe-prod-jobs
+  eksOidcProvider: oidc.eks.us-east-1.amazonaws.com/id/<cluster-id>
+  awsAccountId: "<account-id>"
+  k8sNamespace: yoloscribe
+  cloudfrontDomain: <your-cloudfront-domain>
+  mcpBaseUrl: https://<your-domain>
+  allowedOrigins: "https://<your-domain>"
+
+cognito:
+  userPoolId: us-east-1_XXXXXXXXX
+  clientId: <confidential-app-client-id>    # backend client
+  domain: https://your-pool.auth.us-east-1.amazoncognito.com
+
+ingress:
+  enabled: true
+  host: <your-domain>
+  certificateArn: arn:aws:acm:us-east-1:<account>:certificate/<cert-id>
+
+serviceAccount:
+  iamRoleArn: arn:aws:iam::<account>:role/yoloscribe-backend
+```
+
+Then deploy:
+
+```bash
+helm upgrade --install yoloscribe-backend infra/helm/yoloscribe-backend \
+  -f backend.prod.values.yaml \
+  --set cognitoClientSecret=<confidential-client-secret> \
+  --set webhookSecret=<webhook-secret> \
+  --set anthropicApiKey=sk-ant-... \
+  --namespace yoloscribe --create-namespace
+```
+
+**IAM permissions required by the backend service account (IRSA):**
+- `cognito-idp:AdminDeleteUser` on your User Pool
+- `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query` on both DynamoDB tables
+- `s3:GetObject`, `PutObject`, `DeleteObject`, `ListBucket` on your S3 bucket
+- `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` secrets
+- `iam:CreateRole`, `PutRolePolicy`, `GetRole` on `yoloscribe-user-*` roles
+- `sqs:SendMessage` on your SQS queues
+
+## 4. Build and deploy the frontend
+
+Build the frontend with Cognito env vars:
+
+```bash
+cd frontend
+VITE_AUTH_PROVIDER=cognito \
+VITE_COGNITO_CLIENT_ID=<public-app-client-id> \
+VITE_COGNITO_DOMAIN=https://your-pool.auth.us-east-1.amazoncognito.com \
+VITE_API_BASE=https://<your-domain>/api \
+npm run build
+```
+
+Upload `dist/` to your S3 bucket / CloudFront origin. The public Cognito app client handles browser sign-in via PKCE — no client secret required in the frontend bundle.
+
+## 5. Configure environment variables (non-Helm)
+
+If deploying without Helm (e.g. ECS, App Runner), set these on the backend container:
 
 ```
 AUTH_PROVIDER=cognito
 
 COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
-COGNITO_CLIENT_ID=<your-app-client-id>
-COGNITO_CLIENT_SECRET=<your-app-client-secret>
-COGNITO_DOMAIN=https://your-domain.auth.us-east-1.amazoncognito.com
+COGNITO_CLIENT_ID=<confidential-app-client-id>
+COGNITO_CLIENT_SECRET=<confidential-app-client-secret>
+COGNITO_DOMAIN=https://your-pool.auth.us-east-1.amazoncognito.com
 AWS_REGION=us-east-1
 
-# Optional — only if you renamed the tables
+# Optional — only if you renamed the tables in step 1
 DYNAMODB_USER_SITE_TABLE=yoloscribe-user-site
 DYNAMODB_API_TOKENS_TABLE=yoloscribe-api-tokens
 ```
@@ -165,7 +247,7 @@ DYNAMODB_API_TOKENS_TABLE=yoloscribe-api-tokens
 - `cognito-idp:AdminDeleteUser` on your User Pool
 - `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query` on both DynamoDB tables
 
-## 3. Post-confirmation Lambda trigger (user provisioning)
+## 6. Post-confirmation Lambda trigger (user provisioning)
 
 With Supabase, a webhook fires after sign-up. With Cognito, the equivalent is a **post-confirmation Lambda trigger**.
 
@@ -184,7 +266,7 @@ YoloScribe does not ship the Lambda function. Configure your own trigger pointin
 
 This webhook triggers IAM/K8s infrastructure provisioning for the new user — the same path as Supabase.
 
-## 4. MCP server connection
+## 7. MCP server connection
 
 For Cognito operators, skip the MCP OAuth PKCE flow and connect Claude Code directly with a YoloScribe API token:
 
