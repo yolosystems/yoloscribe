@@ -23,10 +23,11 @@ import time
 
 import boto3
 
+from .log_setup import configure_logging
 from .parse import parse_agent_md
 
+configure_logging()
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")

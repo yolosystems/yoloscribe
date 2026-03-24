@@ -5,6 +5,9 @@ import logging
 import os
 
 from fastapi import FastAPI
+from log_setup import configure_logging
+
+configure_logging()
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler

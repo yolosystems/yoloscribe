@@ -140,6 +140,7 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
 | `ANTHROPIC_API_KEY` | backend | Required for Claude API (used by strands AnthropicModel) |
 | `S3_BUCKET` | backend | S3 bucket name |
 | `ALLOWED_ORIGINS` | backend | Comma-separated CORS origins |
+| `LOG_LEVEL` | backend + agent-runner | Root log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`); default: `INFO` |
 | `AWS_PROFILE` | backend | Optional named AWS profile |
 | `YOLOSCRIBE_MODEL` | backend + agent-runner | Global model key fallback (see model registry below) |
 | `YOLOSCRIBE_CHAT_MODEL` | backend | ChatAgent (orchestrator) model key |
