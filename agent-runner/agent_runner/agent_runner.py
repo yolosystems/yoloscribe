@@ -26,6 +26,8 @@ import os
 import re
 import time
 
+from .log_setup import configure_logging
+
 log = logging.getLogger(__name__)
 
 import boto3
@@ -440,7 +442,7 @@ def _put_content_conditional(s3, key: str, content: str, etag: str | None) -> bo
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    configure_logging()
     log.info("Agent runner starting: bucket=%s agent_md=%s user=%s", BUCKET, AGENT_MD_KEY, USER_ID)
 
     # Expose the package directory so mcp.json files can reference bundled
@@ -572,7 +574,7 @@ def main() -> None:
             log.error("Additionally failed to write error to content: %s", write_exc)
         return
 
-    print(f"Done. Wrote {len(updated)} chars to s3://{BUCKET}/{CONTENT_KEY}")
+    log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
     _enqueue_index_job(CONTENT_KEY)
 
 

@@ -9,6 +9,7 @@ dependencies = [
     "strands-agents-tools>=0.1.0",
     "mcp>=1.0.0",
     "mcp-oauth",
+    "python-json-logger>=3.2.0",
     "yolo-secrets",
 ]
 
