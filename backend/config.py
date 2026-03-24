@@ -4,8 +4,6 @@ import logging
 import os
 
 import boto3
-import jwt as pyjwt
-from jwt import PyJWKClient
 
 # ── Environment variables ──────────────────────────────────────────────────────
 
@@ -60,17 +58,11 @@ MAX_CONTENT_BYTES: int = int(os.environ.get("MAX_CONTENT_BYTES", 512 * 1024))   
 MAX_SHARED_WRITE_BYTES: int = int(os.environ.get("MAX_SHARED_WRITE_BYTES", 128 * 1024))  # 128 KB
 MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))            # 1 MB
 
-# ── Supabase JWKS client ───────────────────────────────────────────────────────
+# ── Auth provider singletons ───────────────────────────────────────────────────
 
-jwks_client = (
-    PyJWKClient(
-        f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json",
-        cache_keys=True,
-        lifespan=600,
-    )
-    if SUPABASE_URL
-    else None
-)
+from auth_providers import create_providers  # noqa: E402
+
+auth_provider, user_site_repo, api_token_repo = create_providers()
 
 # ── AWS clients ────────────────────────────────────────────────────────────────
 

@@ -5,29 +5,30 @@ Claude Code and other MCP-compatible AI agents.
 
 Mounted at /mcp/v1 in the FastAPI app via create_mcp_app().
 
-Authentication: Bearer token (Supabase JWT). Every request must carry
-  Authorization: Bearer <supabase-jwt>
-The token is validated against the Supabase JWKS endpoint; the user's site is
-resolved from the user_site table and stored in request.state for all tools.
+Authentication: Bearer token (JWT or as_ API token). Every request must carry
+  Authorization: Bearer <token>
+The token is validated by the injected AuthProvider; the user's site is
+resolved via the injected UserSiteRepository and stored in request.state.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import logging
 import re
-import time
 import uuid
 from typing import Any
 
-import httpx
-import jwt as pyjwt
+from fastapi import HTTPException
 from fastmcp import Context, FastMCP
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from auth_providers.base import AuthProvider, UserSiteRepository
 
 log = logging.getLogger(__name__)
 
@@ -49,50 +50,20 @@ def _user(ctx: Context) -> _MCPUser:
     return ctx.request_context.request.state.mcp_user
 
 
-# ── Site lookup cache (5-minute TTL) ──────────────────────────────────────────
-
-_site_cache: dict[str, tuple[str | None, float]] = {}
-
-
-async def _lookup_site(user_id: str, supabase_url: str, supabase_key: str) -> str | None:
-    """Resolve user_id → site_name via Supabase, with a 5-minute in-memory cache."""
-    now = time.time()
-    if user_id in _site_cache:
-        site, ts = _site_cache[user_id]
-        if now - ts < 300:
-            return site
-
-    site: str | None = None
-    if supabase_url and supabase_key:
-        url = f"{supabase_url}/rest/v1/user_site?user_uuid=eq.{user_id}&select=site_name&limit=1"
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {supabase_key}",
-                        "apikey": supabase_key,
-                    },
-                )
-                rows = resp.json()
-                if isinstance(rows, list) and rows:
-                    site = rows[0].get("site_name")
-        except Exception as exc:
-            log.warning("Site lookup failed for user %s: %s", user_id, exc)
-
-    _site_cache[user_id] = (site, now)
-    return site
-
-
 # ── Auth middleware ────────────────────────────────────────────────────────────
 
 
 class _MCPAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, jwks_client, supabase_url: str, supabase_key: str, base_url: str = "") -> None:
+    def __init__(
+        self,
+        app,
+        auth_provider: AuthProvider,
+        user_site_repo: UserSiteRepository,
+        base_url: str = "",
+    ) -> None:
         super().__init__(app)
-        self._jwks = jwks_client
-        self._supa_url = supabase_url
-        self._supa_key = supabase_key
+        self._auth_provider = auth_provider
+        self._user_site_repo = user_site_repo
         self._base_url = base_url
 
     def _www_authenticate(self) -> str:
@@ -116,23 +87,17 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
 
         token = auth[7:]
         try:
-            signing_key = self._jwks.get_signing_key_from_jwt(token)
-            payload = pyjwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256", "ES256"],
-                audience="authenticated",
-            )
-            user_id: str = payload["sub"]
-            email: str | None = payload.get("email")
-        except pyjwt.exceptions.PyJWTError as exc:
+            claims = self._auth_provider.decode_jwt(token)
+            user_id: str = claims.user_id
+            email: str | None = claims.email
+        except HTTPException as exc:
             return JSONResponse(
-                {"error": f"Invalid token: {exc}"},
-                status_code=401,
+                {"error": exc.detail},
+                status_code=exc.status_code,
                 headers={"WWW-Authenticate": self._www_authenticate()},
             )
 
-        site = await _lookup_site(user_id, self._supa_url, self._supa_key)
+        site = await asyncio.to_thread(self._user_site_repo.get_site_for_user, user_id)
         if not site:
             return JSONResponse(
                 {"error": "No site provisioned for this account. Please sign up first."},
@@ -213,9 +178,8 @@ def create_mcp_app(
     vectors_index: str,
     bedrock_embedding_model: str,
     bedrock_region: str,
-    jwks_client,
-    supabase_url: str,
-    supabase_service_role_key: str,
+    auth_provider: AuthProvider,
+    user_site_repo: UserSiteRepository,
     sqs_indexing_client,
     sqs_indexing_queue_url: str,
     base_url: str = "",
@@ -747,9 +711,8 @@ def create_mcp_app(
         middleware=[
             Middleware(
                 _MCPAuthMiddleware,
-                jwks_client=jwks_client,
-                supabase_url=supabase_url,
-                supabase_key=supabase_service_role_key,
+                auth_provider=auth_provider,
+                user_site_repo=user_site_repo,
                 base_url=base_url,
             )
         ],

@@ -7,11 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import get_jwt_claims, JWTClaims, get_user_context
-from supabase_helpers import (
-    supabase_insert_api_token,
-    supabase_list_api_tokens,
-    supabase_revoke_api_token,
-)
+from config import api_token_repo
 
 router = APIRouter()
 
@@ -71,8 +67,10 @@ async def create_token(
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Token name must not be empty")
 
+    if api_token_repo is None:
+        raise HTTPException(status_code=503, detail="Auth provider is not configured")
     raw = _generate_token()
-    token_id = supabase_insert_api_token(
+    token_id = api_token_repo.insert_token(
         user_id=user_id,
         site_name=site_name,
         name=body.name.strip(),
@@ -93,7 +91,7 @@ async def list_tokens(
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> list[TokenListItem]:
     user_id, _ = ctx
-    rows = supabase_list_api_tokens(user_id)
+    rows = api_token_repo.list_tokens(user_id) if api_token_repo is not None else []
     return [TokenListItem(**row) for row in rows]
 
 
@@ -109,7 +107,9 @@ async def revoke_token(
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> dict[str, str]:
     user_id, _ = ctx
-    found = supabase_revoke_api_token(token_id=token_id, user_id=user_id)
+    if api_token_repo is None:
+        raise HTTPException(status_code=503, detail="Auth provider is not configured")
+    found = api_token_repo.revoke_token(token_id=token_id, user_id=user_id)
     if not found:
         raise HTTPException(status_code=404, detail="Token not found or already revoked")
     return {"status": "revoked"}

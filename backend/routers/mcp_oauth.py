@@ -24,11 +24,10 @@ import time
 import urllib.parse
 import uuid
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
-from config import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, mcp_api_base
+from config import auth_provider, mcp_api_base
 from state import (
     McpAuthPending,
     McpCode,
@@ -120,8 +119,8 @@ async def mcp_oauth_authorize(
     if not is_loopback and (registered is None or redirect_uri not in registered.redirect_uris):
         raise HTTPException(status_code=400, detail="redirect_uri must be a loopback address or pre-registered via DCR")
 
-    if not SUPABASE_URL:
-        raise HTTPException(status_code=503, detail="Supabase is not configured on this server")
+    if auth_provider is None:
+        raise HTTPException(status_code=503, detail="Auth provider is not configured on this server")
 
     supabase_verifier = secrets.token_urlsafe(48)
     supabase_challenge = pkce_s256(supabase_verifier)
@@ -139,14 +138,11 @@ async def mcp_oauth_authorize(
 
     base = mcp_api_base()
     callback_url = f"{base}/mcp/oauth/callback/{urllib.parse.quote(internal_state, safe='')}"
-    supabase_auth_url = (
-        f"{SUPABASE_URL}/auth/v1/authorize"
-        f"?provider=google"
-        f"&code_challenge={urllib.parse.quote(supabase_challenge, safe='')}"
-        f"&code_challenge_method=S256"
-        f"&redirect_to={urllib.parse.quote(callback_url, safe='')}"
+    authorize_url = auth_provider.get_authorize_url(
+        redirect_uri=callback_url,
+        code_challenge=supabase_challenge,
     )
-    return RedirectResponse(url=supabase_auth_url, status_code=302)
+    return RedirectResponse(url=authorize_url, status_code=302)
 
 
 @router.get(
@@ -180,17 +176,12 @@ async def mcp_oauth_callback(
         return Response(content="Missing code parameter from Supabase.", status_code=400)  # type: ignore[return-value]
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            token_resp = await client.post(
-                f"{SUPABASE_URL}/auth/v1/token",
-                params={"grant_type": "pkce"},
-                json={"auth_code": code, "code_verifier": pending.supabase_pkce_verifier},
-                headers={"apikey": SUPABASE_SERVICE_ROLE_KEY},
-            )
-            token_resp.raise_for_status()
-            token_data = token_resp.json()
+        token_data = await auth_provider.exchange_code(
+            code=code,
+            code_verifier=pending.supabase_pkce_verifier,
+        )
     except Exception as exc:
-        logging.warning("MCP OAuth: Supabase code exchange failed: %s", exc)
+        logging.warning("MCP OAuth: code exchange failed: %s", exc)
         del mcp_auth_pending[mcp_state]
         error_params = urllib.parse.urlencode({"error": "server_error", "error_description": "Token exchange failed"})
         return RedirectResponse(url=f"{pending.cc_redirect_uri}?{error_params}", status_code=302)
@@ -267,19 +258,11 @@ async def mcp_oauth_token(request: Request) -> dict:
         refresh_token: str = body.get("refresh_token", "")
         if not refresh_token:
             raise HTTPException(status_code=400, detail="refresh_token is required")
-        if not SUPABASE_URL:
-            raise HTTPException(status_code=503, detail="Supabase is not configured on this server")
+        if auth_provider is None:
+            raise HTTPException(status_code=503, detail="Auth provider is not configured on this server")
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    f"{SUPABASE_URL}/auth/v1/token",
-                    params={"grant_type": "refresh_token"},
-                    json={"refresh_token": refresh_token},
-                    headers={"apikey": SUPABASE_SERVICE_ROLE_KEY},
-                )
-                resp.raise_for_status()
-                token_data = resp.json()
+            token_data = await auth_provider.refresh_token(refresh_token)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Token refresh failed: {exc}") from exc
 

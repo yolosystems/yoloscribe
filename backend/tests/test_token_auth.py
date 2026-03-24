@@ -103,10 +103,22 @@ class TestRateLimitKey:
 
 
 class TestResolveApiToken:
+    def _patch_repo(self, monkeypatch, get_by_hash_fn, update_last_used_fn=None):
+        """Patch config.api_token_repo with a minimal stub."""
+        import config
+        from unittest.mock import MagicMock
+        repo = MagicMock()
+        repo.get_by_hash.side_effect = get_by_hash_fn
+        if update_last_used_fn:
+            repo.update_last_used.side_effect = update_last_used_fn
+        monkeypatch.setattr(config, "api_token_repo", repo)
+        import auth
+        monkeypatch.setattr(auth, "api_token_repo", repo)
+        return repo
+
     def test_unknown_token_raises_401(self, monkeypatch):
         import auth
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", lambda h: None)
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", lambda _: None)
+        self._patch_repo(monkeypatch, lambda h: None)
 
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
@@ -115,14 +127,12 @@ class TestResolveApiToken:
 
     def test_valid_token_returns_user_and_site(self, monkeypatch):
         import auth
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", lambda h: {
-            "id": "tok-uuid",
-            "user_id": "user-abc",
-            "site_name": "my-site",
-            "expires_at": None,
-        })
         last_used_calls = []
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", last_used_calls.append)
+        self._patch_repo(
+            monkeypatch,
+            lambda h: {"id": "tok-uuid", "user_id": "user-abc", "site_name": "my-site", "expires_at": None},
+            lambda token_id: last_used_calls.append(token_id),
+        )
 
         user_id, site_name = auth.resolve_api_token("as_" + "a" * 64)
         assert user_id == "user-abc"
@@ -131,13 +141,10 @@ class TestResolveApiToken:
 
     def test_expired_token_raises_401(self, monkeypatch):
         import auth
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", lambda h: {
-            "id": "tok-uuid",
-            "user_id": "user-abc",
-            "site_name": "my-site",
-            "expires_at": "2020-01-01T00:00:00Z",  # In the past
-        })
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", lambda _: None)
+        self._patch_repo(
+            monkeypatch,
+            lambda h: {"id": "tok-uuid", "user_id": "user-abc", "site_name": "my-site", "expires_at": "2020-01-01T00:00:00Z"},
+        )
 
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
@@ -147,26 +154,20 @@ class TestResolveApiToken:
 
     def test_non_expiring_token_succeeds(self, monkeypatch):
         import auth
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", lambda h: {
-            "id": "tok-uuid",
-            "user_id": "user-abc",
-            "site_name": "my-site",
-            "expires_at": None,
-        })
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", lambda _: None)
+        self._patch_repo(
+            monkeypatch,
+            lambda h: {"id": "tok-uuid", "user_id": "user-abc", "site_name": "my-site", "expires_at": None},
+        )
 
         user_id, _ = auth.resolve_api_token("as_" + "a" * 64)
         assert user_id == "user-abc"
 
     def test_future_expiry_token_succeeds(self, monkeypatch):
         import auth
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", lambda h: {
-            "id": "tok-uuid",
-            "user_id": "user-abc",
-            "site_name": "my-site",
-            "expires_at": "2099-12-31T23:59:59Z",
-        })
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", lambda _: None)
+        self._patch_repo(
+            monkeypatch,
+            lambda h: {"id": "tok-uuid", "user_id": "user-abc", "site_name": "my-site", "expires_at": "2099-12-31T23:59:59Z"},
+        )
 
         user_id, _ = auth.resolve_api_token("as_" + "a" * 64)
         assert user_id == "user-abc"
@@ -179,8 +180,7 @@ class TestResolveApiToken:
             received_hash["hash"] = h
             return None
 
-        monkeypatch.setattr(auth, "supabase_get_api_token_by_hash", fake_lookup)
-        monkeypatch.setattr(auth, "supabase_update_token_last_used", lambda _: None)
+        self._patch_repo(monkeypatch, fake_lookup)
 
         raw = "as_" + "c" * 64
         from fastapi import HTTPException
