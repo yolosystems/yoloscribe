@@ -646,7 +646,15 @@ export default function App() {
                   )}
                 </div>
               ) : (
-                <MarkdownEditor content={content} onChange={setContent} />
+                <MarkdownEditor
+                  content={content}
+                  onChange={setContent}
+                  isOwner={isOwner}
+                  site={SITE}
+                  apiBase={API_BASE}
+                  token={session?.access_token}
+                  pagePath={getPagePath(filePath)}
+                />
               )}
             </div>
           </>

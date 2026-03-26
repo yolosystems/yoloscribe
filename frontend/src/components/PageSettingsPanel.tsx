@@ -10,12 +10,42 @@ interface Settings {
   shared_with: SharedUser[]
 }
 
+interface AssetItem {
+  path: string
+  size: number
+  content_type: string
+  last_modified: string | null
+}
+
 interface Props {
   apiBase: string
   site: string
   filePath: string
   token: string
   onClose: () => void
+}
+
+function pagePath(filePath: string): string {
+  if (filePath === 'content.md' || filePath.startsWith('.agents/')) return ''
+  if (filePath.endsWith('/content.md')) return filePath.slice(0, -'/content.md'.length)
+  const agentsIdx = filePath.indexOf('/.agents/')
+  if (agentsIdx !== -1) return filePath.slice(0, agentsIdx)
+  return ''
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  } catch {
+    return '—'
+  }
 }
 
 export default function PageSettingsPanel({ apiBase, site, filePath, token, onClose }: Props) {
@@ -25,6 +55,8 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
   const [error, setError] = useState<string | null>(null)
   const [newEmail, setNewEmail] = useState('')
   const [newAccess, setNewAccess] = useState<'view' | 'write'>('view')
+  const [assets, setAssets] = useState<AssetItem[]>([])
+  const [assetsLoading, setAssetsLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
@@ -36,6 +68,19 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
       .then((data: Settings) => setSettings(data))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
+  }, [apiBase, site, filePath, token])
+
+  useEffect(() => {
+    setAssetsLoading(true)
+    const page = pagePath(filePath)
+    fetch(
+      `${apiBase}/assets?site=${encodeURIComponent(site)}&page_path=${encodeURIComponent(page)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+      .then((res) => (res.ok ? res.json() : { assets: [] }))
+      .then((data) => setAssets(data.assets ?? []))
+      .catch(() => setAssets([]))
+      .finally(() => setAssetsLoading(false))
   }, [apiBase, site, filePath, token])
 
   async function save() {
@@ -221,6 +266,47 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
           </div>
         </div>
       )}
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ fontWeight: 600, marginBottom: '0.75rem', fontSize: '0.875rem' }}>Assets</div>
+        {assetsLoading ? (
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Loading…</div>
+        ) : assets.length === 0 ? (
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+            No assets uploaded to this page yet.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-muted)' }}>
+                <th style={{ textAlign: 'left', padding: '0.25rem 0.5rem', fontWeight: 500 }}>File</th>
+                <th style={{ textAlign: 'left', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Type</th>
+                <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Size</th>
+                <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Uploaded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.map((a) => {
+                const filename = a.path.split('/').pop() ?? a.path
+                return (
+                  <tr key={a.path} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '0.4rem 0.5rem' }}>{filename}</td>
+                    <td style={{ padding: '0.4rem 0.5rem', color: 'var(--text-muted)' }}>
+                      {a.content_type}
+                    </td>
+                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>
+                      {formatBytes(a.size)}
+                    </td>
+                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: 'var(--text-muted)' }}>
+                      {formatDate(a.last_modified)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose}>Cancel</button>
