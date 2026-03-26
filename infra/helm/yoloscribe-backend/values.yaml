@@ -46,9 +46,9 @@ ingress:
 # ── Service account (IRSA) ───────────────────────────────────────────────────
 # The attached IAM role must have the policy defined in
 # infra/iam/yoloscribe-backend-policy.json, which covers:
-#   - s3:GetObject / PutObject / ListBucket  on yoloscribe-* buckets
+#   - s3:GetObject / PutObject / DeleteObject / ListBucket  on yoloscribe-* buckets
 #   - secretsmanager:CreateSecret / PutSecretValue / GetSecretValue / DescribeSecret
-#     on yoloscribe* secrets (write access needed to store per-user API keys)
+#     on yoloscribe* secrets (per-user API keys + CloudFront signing key)
 #   - iam:CreateRole / PutRolePolicy / GetRole on yoloscribe-user-* roles
 #   - sqs:SendMessage on yoloscribe-* queues
 serviceAccount:
@@ -67,6 +67,11 @@ config:
   awsRegion: ""
   k8sNamespace: ""
   cloudfrontDomain: ""
+  # CloudFront signed-cookie media delivery (leave empty to disable).
+  # cloudfrontSigningKeyId: the key pair ID returned by setup_cloudfront_media.sh
+  # cloudfrontMediaDomain: CloudFront domain for /{site}/assets/* (may differ from cloudfrontDomain)
+  cloudfrontSigningKeyId: ""
+  cloudfrontMediaDomain: ""
   s3VectorsBucket: ""
   s3VectorsIndexName: "yoloscribe"
   bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
