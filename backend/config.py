@@ -13,6 +13,12 @@ SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "")
+# CloudFront key pair ID (e.g. "K2JCJMDEHXQW5F") registered in the distribution's
+# trusted key group.  Required for signed-cookie media auth in production.
+CLOUDFRONT_SIGNING_KEY_ID = os.environ.get("CLOUDFRONT_SIGNING_KEY_ID", "")
+# Separate CloudFront domain for media assets, if different from the main domain.
+# Falls back to CLOUDFRONT_DOMAIN when unset.
+CLOUDFRONT_MEDIA_DOMAIN = os.environ.get("CLOUDFRONT_MEDIA_DOMAIN", "") or CLOUDFRONT_DOMAIN
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
 FRONTEND_URL = (
@@ -81,6 +87,14 @@ _sm = None if LOCAL_MODE else boto_session.client("secretsmanager", region_name=
 
 from yolo_secrets import make_secrets_store  # noqa: E402
 secrets_store = make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=S3_BUCKET, sm_client=_sm)
+
+# ── CloudFront signed-cookie signing key ───────────────────────────────────────
+# Loaded eagerly at startup so /media-auth can sign cookies without a per-request
+# Secrets Manager round-trip.  Skipped in LOCAL_MODE (no CloudFront locally).
+
+if not LOCAL_MODE and CLOUDFRONT_SIGNING_KEY_ID:
+    from cloudfront_signing import load_signing_key  # noqa: E402
+    load_signing_key(secrets_store)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
