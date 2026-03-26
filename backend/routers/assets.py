@@ -1,25 +1,34 @@
-"""Asset upload and serving endpoints for YoloScribe.
+"""Asset upload, serving, and media-auth endpoints for YoloScribe.
 
-POST /upload   — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
-GET  /asset    — serves image assets from S3 with page visibility access control.
-               (Video/audio assets are served via CloudFront signed cookies — PR2.)
-GET  /assets   — lists asset keys under a given page path; owner-only.
+POST /upload      — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
+GET  /asset       — serves image assets (and video/audio in LOCAL_MODE) from S3 with
+                    page visibility access control.
+GET  /assets      — lists asset keys with metadata under a given page path; owner-only.
+GET  /media-auth  — issues CloudFront signed cookies for video/audio playback; no-op in
+                    LOCAL_MODE (all assets served through /asset instead).
 """
 
 import logging
 
 from fastapi import APIRouter, HTTPException, Security
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
-from auth import decode_jwt, get_site_for_user, require_site_owner, _bearer
-from config import S3_BUCKET, CLOUDFRONT_DOMAIN, s3
+import cloudfront_signing
+from auth import decode_jwt, get_site_for_user, get_user_context, require_site_owner, _bearer
+from config import (
+    CLOUDFRONT_MEDIA_DOMAIN,
+    CLOUDFRONT_SIGNING_KEY_ID,
+    LOCAL_MODE,
+    S3_BUCKET,
+    s3,
+)
 from s3_helpers import (
     ASSET_MAX_BYTES,
-    is_safe_asset_path,
-    asset_mime_type,
     asset_media_category,
+    asset_mime_type,
     asset_page_path,
+    is_safe_asset_path,
 )
 from settings_cache import get_page_settings
 
@@ -29,6 +38,9 @@ router = APIRouter()
 
 # Pre-signed PUT URL expiry in seconds (15 minutes is generous for large uploads).
 _PRESIGN_EXPIRY = 900
+
+# Cookie TTL matches the signing TTL in cloudfront_signing.
+_COOKIE_TTL = cloudfront_signing.COOKIE_TTL
 
 
 @router.post(
@@ -71,9 +83,9 @@ async def upload_asset(
     )
 
     # Build the public asset URL.  In production this goes through CloudFront;
-    # in local dev it hits MinIO directly via the /asset proxy endpoint.
-    if CLOUDFRONT_DOMAIN:
-        asset_url = f"https://{CLOUDFRONT_DOMAIN}/{site}/{path}"
+    # in local dev all assets (including video/audio) go through the /asset proxy.
+    if not LOCAL_MODE and CLOUDFRONT_MEDIA_DOMAIN and category != "image":
+        asset_url = f"https://{CLOUDFRONT_MEDIA_DOMAIN}/{site}/{path}"
     else:
         asset_url = f"/api/asset?site={site}&path={path}"
 
@@ -90,10 +102,10 @@ async def upload_asset(
     tags=["assets"],
     summary="Serve an asset from S3",
     description=(
-        "Proxies the asset bytes from S3 to the browser. "
-        "Page visibility rules apply — private/shared pages require a JWT. "
-        "Only image assets are served here; video and audio are served via "
-        "CloudFront signed cookies (see GET /media-auth, implemented in PR2)."
+        "Proxies asset bytes from S3 to the browser with page visibility access control. "
+        "Images are always served here. In LOCAL_MODE, video and audio are also served "
+        "here (CloudFront is unavailable locally). In production, video and audio are "
+        "served directly via CloudFront using signed cookies issued by GET /media-auth."
     ),
 )
 async def get_asset(
@@ -108,8 +120,8 @@ async def get_asset(
     category = asset_media_category(mime)
 
     # In production, video/audio are served via CloudFront signed cookies.
-    # Block proxy serving of non-image assets so the endpoint isn't misused.
-    if category != "image":
+    # Block proxy serving of non-image assets so the endpoint isn't misused in prod.
+    if category != "image" and not LOCAL_MODE:
         raise HTTPException(
             status_code=400,
             detail="Video and audio assets must be accessed via CloudFront (see GET /media-auth)",
@@ -149,7 +161,10 @@ async def get_asset(
     "/assets",
     tags=["assets"],
     summary="List assets for a page",
-    description="Owner-only. Returns the list of asset keys stored under the given page path.",
+    description=(
+        "Owner-only. Returns asset metadata (path, size, content_type, last_modified) "
+        "for all assets stored under the given page path."
+    ),
 )
 async def list_assets(
     site: str,
@@ -163,10 +178,86 @@ async def list_assets(
     prefix = f"{site}/{page_path + '/' if page_path else ''}assets/"
     paginator = s3.get_paginator("list_objects_v2")
 
-    keys: list[str] = []
+    assets: list[dict] = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
         for obj in page.get("Contents", []):
-            # Strip the site prefix so the caller gets paths relative to the site.
-            keys.append(obj["Key"].removeprefix(f"{site}/"))
+            rel_path = obj["Key"].removeprefix(f"{site}/")
+            mime = asset_mime_type(rel_path)
+            assets.append(
+                {
+                    "path": rel_path,
+                    "size": obj.get("Size", 0),
+                    "content_type": mime,
+                    "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+                }
+            )
 
-    return {"assets": keys}
+    return {"assets": assets}
+
+
+@router.get(
+    "/media-auth",
+    tags=["assets"],
+    summary="Issue CloudFront signed cookies for media playback",
+    description=(
+        "Issues three CloudFront signed cookies (CloudFront-Policy, "
+        "CloudFront-Signature, CloudFront-Key-Pair-Id) scoped to the "
+        "authenticated user's site assets prefix, valid for 1 hour. "
+        "The browser automatically sends these cookies on subsequent requests "
+        "to the CloudFront distribution. "
+        "In LOCAL_MODE this endpoint returns 200 with no cookies set — all "
+        "assets are served through GET /asset instead."
+    ),
+)
+async def media_auth(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> Response:
+    # In local dev there is no CloudFront — return 200 so the frontend doesn't
+    # need to branch on LOCAL_MODE.
+    if LOCAL_MODE:
+        return Response(content='{"status":"local_mode"}', media_type="application/json")
+
+    if not CLOUDFRONT_MEDIA_DOMAIN or not CLOUDFRONT_SIGNING_KEY_ID:
+        raise HTTPException(
+            status_code=503,
+            detail="CloudFront media domain or signing key ID is not configured",
+        )
+
+    if not cloudfront_signing.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="CloudFront signing key is not available",
+        )
+
+    user_id, user_site = get_user_context(credentials)
+    if not user_site:
+        raise HTTPException(status_code=403, detail="No site associated with this account")
+
+    try:
+        cookies = cloudfront_signing.sign_media_cookies(
+            cloudfront_domain=CLOUDFRONT_MEDIA_DOMAIN,
+            site=user_site,
+            key_pair_id=CLOUDFRONT_SIGNING_KEY_ID,
+        )
+    except Exception as exc:
+        log.error("Failed to sign CloudFront cookies for site %s: %s", user_site, exc)
+        raise HTTPException(status_code=500, detail="Failed to generate media access cookies")
+
+    resp = Response(content='{"status":"ok"}', media_type="application/json")
+
+    # Cookies must be sent to the CloudFront domain so the browser attaches them
+    # to CloudFront requests.  SameSite=None; Secure is required for cross-origin
+    # cookie delivery (the API is on a different origin from CloudFront).
+    cookie_opts = {
+        "domain": CLOUDFRONT_MEDIA_DOMAIN,
+        "max_age": _COOKIE_TTL,
+        "httponly": True,
+        "secure": True,
+        "samesite": "none",
+        "path": f"/{user_site}/assets",
+    }
+
+    for name, value in cookies.items():
+        resp.set_cookie(name, value, **cookie_opts)
+
+    return resp
