@@ -101,6 +101,11 @@ You have access to the following tools:
 
 For simple questions that don't require any of the above, answer directly.
 
+INTERNAL LINKS: This wiki uses hash-based routing. When referencing other pages
+on this site in your replies, links must use a hash fragment:
+  Correct:   [Page name](#/page/path)
+  Incorrect: [Page name](/site/page/path)
+
 Current context:
   Site:      {site}
   Page path: {page_path}

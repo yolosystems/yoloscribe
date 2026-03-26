@@ -31,6 +31,8 @@ Follow these steps:
 4. Call create_page with the full page path and the content the user described
    (pass content="" if they want the default welcome page).
 5. Reply with a confirmation and tell the user they are being navigated to the new page.
+   If you include a link in your reply, use hash-based routing: #/{full_page_path}
+   For example: [agentscribe/mcp-server](#/agentscribe/mcp-server)
 
 Current context:
   Site:        {site}
