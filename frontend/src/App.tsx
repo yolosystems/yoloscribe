@@ -180,7 +180,7 @@ export default function App() {
   const [tokensOpen, setTokensOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
 
-  // Subscribe to Supabase auth state (skipped in LOCAL_MODE)
+  // Subscribe to auth state changes (skipped in LOCAL_MODE).
   useEffect(() => {
     if (LOCAL_MODE) {
       setSession(LOCAL_SESSION)
@@ -191,6 +191,26 @@ export default function App() {
     })
     return unsubscribe
   }, [])
+
+  // Fetch CloudFront signed cookies on session establish and refresh at 55 min
+  // so video/audio assets remain accessible without interruption (YOL-129).
+  // In LOCAL_MODE the backend returns 200 with no cookies — the call is harmless
+  // and keeps the code path exercised locally.
+  useEffect(() => {
+    if (!session) return
+
+    function fetchMediaAuth() {
+      fetch(`${API_BASE}/media-auth`, {
+        credentials: 'include',   // cookies must be sent cross-origin to CloudFront domain
+        headers: { Authorization: `Bearer ${session!.access_token}` },
+      }).catch(() => {/* best-effort; never block rendering */})
+    }
+
+    fetchMediaAuth()
+    // Re-fetch 5 minutes before the 1-hour cookie TTL expires.
+    const id = setInterval(fetchMediaAuth, 55 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [session?.user.id])  // re-run only when the user identity changes, not on token refresh
 
   // Load site theme from config.json (user sites only)
   useEffect(() => {
@@ -615,7 +635,7 @@ export default function App() {
                 <div className="state-center">Loading…</div>
               ) : mode === 'view' ? (
                 <div className="view-scroll">
-                  <MarkdownViewer content={content} />
+                  <MarkdownViewer content={content} site={SITE} apiBase={API_BASE} />
                   {isContentPage && (
                     <ChildPagesList
                       apiBase={API_BASE}
