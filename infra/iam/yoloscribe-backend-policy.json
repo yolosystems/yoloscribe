@@ -7,15 +7,16 @@
       "Action": [
         "s3:GetObject",
         "s3:PutObject",
+        "s3:DeleteObject",
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::agentscribe-*",
-        "arn:aws:s3:::agentscribe-*/*"
+        "arn:aws:s3:::yoloscribe-*",
+        "arn:aws:s3:::yoloscribe-*/*"
       ]
     },
     {
-      "Sid": "SecretsManagerWrite",
+      "Sid": "SecretsManagerReadWrite",
       "Effect": "Allow",
       "Action": [
         "secretsmanager:CreateSecret",
@@ -23,7 +24,7 @@
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret"
       ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:agentscribe*"
+      "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe*"
     },
     {
       "Sid": "IAMProvisionUserRoles",
@@ -33,7 +34,7 @@
         "iam:PutRolePolicy",
         "iam:GetRole"
       ],
-      "Resource": "arn:aws:iam::*:role/agentscribe-user-*"
+      "Resource": "arn:aws:iam::*:role/yoloscribe-user-*"
     },
     {
       "Sid": "SQSSend",
@@ -41,7 +42,7 @@
       "Action": [
         "sqs:SendMessage"
       ],
-      "Resource": "arn:aws:sqs:*:*:agentscribe-*"
+      "Resource": "arn:aws:sqs:*:*:yoloscribe-*"
     },
     {
       "Sid": "BedrockEmbed",

@@ -210,7 +210,34 @@ helm upgrade --install yoloscribe-backend infra/helm/yoloscribe-backend \
 - `iam:CreateRole`, `PutRolePolicy`, `GetRole` on `yoloscribe-user-*` roles
 - `sqs:SendMessage` on your SQS queues
 
-## 4. Build and deploy the frontend
+## 4. Set up CloudFront media delivery (optional)
+
+Skip this step if you do not need video or audio support. Images are always served through the backend and require no additional setup.
+
+Run the one-time setup script to create a CloudFront key pair, register it as a trusted signer on your distribution's `*/assets/*` cache behaviour, and store the private key in Secrets Manager:
+
+```bash
+AWS_PROFILE=myprofile AWS_REGION=us-east-1 \
+DISTRIBUTION_ID=E1EXAMPLE \
+./scripts/setup_cloudfront_media.sh
+```
+
+The script prints the `cloudfrontSigningKeyId` value to add to your Helm values file. Then re-deploy with:
+
+```bash
+helm upgrade yoloscribe-backend infra/helm/yoloscribe-backend \
+  -f backend.prod.values.yaml \
+  --set config.cloudfrontSigningKeyId=<key-pair-id> \
+  --set config.cloudfrontMediaDomain=<your-cloudfront-domain> \
+  ...
+```
+
+The `*/assets/*` cache behaviour on your CloudFront distribution must have:
+- **Trusted key groups:** the group created by the script (`yoloscribe-media-group`)
+- **Cache policy:** `CachingDisabled` (signed cookies are per-user; caching would leak content across users)
+- **Viewer protocol policy:** HTTPS only
+
+## 5. Build and deploy the frontend
 
 Build the frontend with Cognito env vars:
 
@@ -220,8 +247,11 @@ VITE_AUTH_PROVIDER=cognito \
 VITE_COGNITO_CLIENT_ID=<public-app-client-id> \
 VITE_COGNITO_DOMAIN=https://your-pool.auth.us-east-1.amazoncognito.com \
 VITE_API_BASE=https://<your-domain>/api \
+VITE_CLOUDFRONT_MEDIA_DOMAIN=<your-cloudfront-domain> \
 npm run build
 ```
+
+Omit `VITE_CLOUDFRONT_MEDIA_DOMAIN` if you skipped step 4 (no video/audio support). Images will still work.
 
 Upload `dist/` to your S3 bucket / CloudFront origin. The public Cognito app client handles browser sign-in via PKCE — no client secret required in the frontend bundle.
 

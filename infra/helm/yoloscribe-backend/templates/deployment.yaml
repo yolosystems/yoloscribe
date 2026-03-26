@@ -101,6 +101,14 @@ spec:
             - name: CLOUDFRONT_DOMAIN
               value: {{ .Values.config.cloudfrontDomain | quote }}
             {{- end }}
+            {{- if .Values.config.cloudfrontSigningKeyId }}
+            - name: CLOUDFRONT_SIGNING_KEY_ID
+              value: {{ .Values.config.cloudfrontSigningKeyId | quote }}
+            {{- end }}
+            {{- if .Values.config.cloudfrontMediaDomain }}
+            - name: CLOUDFRONT_MEDIA_DOMAIN
+              value: {{ .Values.config.cloudfrontMediaDomain | quote }}
+            {{- end }}
             {{- if .Values.ingress.host }}
             - name: OAUTH_REDIRECT_URI
               value: {{ printf "https://%s/oauth/callback" .Values.ingress.host | quote }}
