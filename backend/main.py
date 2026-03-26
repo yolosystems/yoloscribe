@@ -21,6 +21,7 @@ from config import MAX_REQUEST_BYTES
 from rate_limit import limiter
 from mcp_server import create_mcp_app
 from routers import (
+    assets_router,
     chat_router,
     content_router,
     health_router,
@@ -52,6 +53,7 @@ async def _lifespan(app):
 
 _OPENAPI_TAGS = [
     {"name": "health", "description": "Service liveness check."},
+    {"name": "assets", "description": "Upload and serve media assets (images, video, audio) stored in S3."},
     {"name": "content", "description": "Read and write page content stored in S3."},
     {"name": "pages", "description": "List and create wiki pages within a site."},
     {"name": "agents", "description": "List AI agent definitions for a page."},
@@ -152,6 +154,7 @@ else:
 # ── Routers ────────────────────────────────────────────────────────────────────
 
 app.include_router(health_router)
+app.include_router(assets_router)
 app.include_router(content_router)
 app.include_router(pages_router)
 app.include_router(settings_router)
