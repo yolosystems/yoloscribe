@@ -259,6 +259,17 @@ Current context:
                 shared["updated_content"] = updated
             except Exception:
                 pass
+            # Enqueue an indexing job after a successful content write so that
+            # edits made via the chat agent are reflected in semantic search.
+            # This is independent of whether get_content succeeded above.
+            try:
+                from s3_helpers import enqueue_index_job as _enqueue_idx
+                _content_key = (
+                    f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
+                )
+                _enqueue_idx(_content_key, user_id)
+            except Exception:
+                pass
             return result
 
         @tool
@@ -347,6 +358,12 @@ Current context:
             if match:
                 created_page = match.group(1)
                 shared["navigate_to"] = f"#/{created_page}"
+                # Enqueue an indexing job so the new page is discoverable via search.
+                try:
+                    from s3_helpers import enqueue_index_job as _enqueue_idx
+                    _enqueue_idx(f"{site}/{created_page}/content.md", user_id)
+                except Exception:
+                    pass
             return result
 
         @tool
