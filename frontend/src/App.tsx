@@ -291,9 +291,14 @@ export default function App() {
   // Stable identity key: re-fetch when page changes or when user logs in/out,
   // but NOT on every token refresh (which changes access_token but not user.id).
   const sessionUserId = session?.user.id ?? null
+  // true once onAuthStateChange has delivered the first callback (session is no
+  // longer undefined).  We gate the content fetch on this so we never send an
+  // unauthenticated request for a private page before the session is known.
+  const authReady = session !== undefined
 
   // Fetch the markdown file through the API (works in dev and production).
   useEffect(() => {
+    if (!authReady) return   // wait for auth state to resolve before fetching
     const controller = new AbortController()
     setContent(null)
     setError(null)
@@ -324,7 +329,7 @@ export default function App() {
       .catch((err) => { if (err.name !== 'AbortError') setError(err.message) })
     return () => controller.abort()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, sessionUserId, reloadKey])
+  }, [filePath, sessionUserId, authReady, reloadKey])
 
   const isOwner = accessLevel === 'full-control'
   const canEdit = accessLevel === 'full-control' || accessLevel === 'write'

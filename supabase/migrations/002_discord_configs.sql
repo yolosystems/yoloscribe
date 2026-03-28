@@ -1,5 +1,5 @@
 -- Migration 002: discord_configs table
--- Links a Discord channel to an AgentScribe site via a stored API token.
+-- Links a Discord channel to an YoloScribe site via a stored API token.
 -- The raw API token is AES-encrypted before storage; the bot decrypts it at
 -- runtime using a key held in a Kubernetes Secret.
 --

@@ -34,7 +34,7 @@
         "iam:PutRolePolicy",
         "iam:GetRole"
       ],
-      "Resource": "arn:aws:iam::*:role/yoloscribe-user-*"
+      "Resource": "arn:aws:iam::*:role/yoloscribe/yoloscribe-user-*"
     },
     {
       "Sid": "SQSSend",

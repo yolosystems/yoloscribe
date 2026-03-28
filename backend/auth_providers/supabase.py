@@ -118,7 +118,8 @@ class SupabaseUserSiteRepository(UserSiteRepository):
         except Exception:
             site = None
 
-        self._cache[user_id] = (site, now)
+        if site is not None:
+            self._cache[user_id] = (site, now)
         return site
 
     def insert_user_site(self, user_id: str, site_name: str, theme: str) -> None:
@@ -148,6 +149,7 @@ class SupabaseUserSiteRepository(UserSiteRepository):
             urllib.request.urlopen(req)
         except Exception as exc:
             log.warning("Failed to delete user_site row for %s: %s", user_id, exc)
+        self._cache.pop(user_id, None)
 
 
 class SupabaseApiTokenRepository(ApiTokenRepository):

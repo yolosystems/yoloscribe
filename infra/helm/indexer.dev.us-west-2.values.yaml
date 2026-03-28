@@ -7,14 +7,14 @@ ghcr:
   username: nate-yolodev
 
 serviceAccount:
-  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-indexer"  # set after running infra/iam/create_indexer_role.sh
+  iamRoleArn: "arn:aws:iam::295934381903:role/yoloscribe-indexer"  # set after running infra/iam/create_indexer_role.sh
 
 config:
-  sqsIndexingQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/agentscribe-dev-indexing"
-  s3VectorsBucket: "agentscribe-dev-vectors"
-  s3VectorsIndexName: "agentscribe-dev"
+  sqsIndexingQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-indexing"
+  s3VectorsBucket: "yoloscribe-dev-vectors"
+  s3VectorsIndexName: "yoloscribe-dev"
   awsRegion: "us-west-2"
   bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
   k8sNamespace: "yolo"
-  indexerServiceAccount: "agentscribe-indexer"
+  indexerServiceAccount: "yoloscribe-indexer"
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"

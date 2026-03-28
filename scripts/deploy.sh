@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUCKET="agentscribe-dev"  # Phase 3: rename to yoloscribe-dev
-SITE="knuth-home"
+BUCKET="yoloscribe-dev"  # Phase 3: rename to yoloscribe-dev
+SITE="knuth"
 
 # Set VITE_API_BASE to your ALB URL before running, e.g.:
 #   VITE_API_BASE=https://your-alb.amazonaws.com ./scripts/deploy.sh

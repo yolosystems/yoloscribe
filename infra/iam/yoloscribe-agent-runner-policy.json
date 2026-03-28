@@ -9,7 +9,7 @@
         "sqs:DeleteMessage",
         "sqs:GetQueueAttributes"
       ],
-      "Resource": "arn:aws:sqs:*:*:agentscribe-*"
+      "Resource": "arn:aws:sqs:*:*:yoloscribe-*"
     },
     {
       "Sid": "S3ReadAgentDefs",
@@ -19,8 +19,8 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::agentscribe-*",
-        "arn:aws:s3:::agentscribe-*/*"
+        "arn:aws:s3:::yoloscribe-*",
+        "arn:aws:s3:::yoloscribe-*/*"
       ]
     }
   ]

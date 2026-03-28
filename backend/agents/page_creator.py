@@ -32,7 +32,7 @@ Follow these steps:
    (pass content="" if they want the default welcome page).
 5. Reply with a confirmation and tell the user they are being navigated to the new page.
    If you include a link in your reply, use hash-based routing: #/{full_page_path}
-   For example: [agentscribe/mcp-server](#/agentscribe/mcp-server)
+   For example: [yoloscribe/mcp-server](#/yoloscribe/mcp-server)
 
 Current context:
   Site:        {site}

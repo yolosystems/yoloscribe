@@ -7,5 +7,5 @@ ghcr:
   username: nate-yolodev
 
 config:
-  yoloscribeApiUrl: "https://agentscribe-dev.runyolo.dev"
+  yoloscribeApiUrl: "https://yoloscribe-dev.runyolo.dev"
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"

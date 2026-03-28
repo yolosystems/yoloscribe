@@ -10,10 +10,10 @@ replicaCount: 1
 
 ingress:
   enabled: true
-  host: agentscribe-dev.runyolo.dev
+  host: yoloscribe-dev.runyolo.dev
   certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"
   group:
-    name: "agentscribe-dev"    # e.g. yolo-prod; leave empty for a dedicated ALB
+    name: "yoloscribe-dev"    # e.g. yolo-prod; leave empty for a dedicated ALB
     order: 20
   annotations:
     kubernetes.io/ingress.class: alb
@@ -24,16 +24,16 @@ ingress:
     alb.ingress.kubernetes.io/ssl-redirect: "443"
 
 serviceAccount:
-  iamRoleArn: "arn:aws:iam::295934381903:role/agentscribe-dev-serviceaccount"
+  iamRoleArn: "arn:aws:iam::295934381903:role/yoloscribe-backend"
 
 config:
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
-  mcpBaseUrl: "https://agentscribe-dev.runyolo.dev"
+  mcpBaseUrl: "https://yoloscribe-dev.runyolo.dev"
   cloudfrontDomain: "scribe.runyolo.dev"
-  s3Bucket: "agentscribe-dev"
+  s3Bucket: "yoloscribe-dev"
   allowedOrigins: "*"
   model: "claude-opus-4-6"
-  sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/agentscribe-dev-jobs"
+  sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-jobs"
   eksOidcProvider: "oidc.eks.us-west-2.amazonaws.com/id/329F46753B3AC6C1484FA9A7D94216B0"
   awsAccountId: "295934381903"
   awsRegion: "us-west-2"
