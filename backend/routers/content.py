@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
-from config import MAX_CONTENT_BYTES
+from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from rate_limit import limiter
 from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job
 from settings_cache import get_page_settings, page_path_from_file_path

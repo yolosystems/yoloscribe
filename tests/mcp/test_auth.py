@@ -64,11 +64,11 @@ def skip(name: str, reason: str) -> None:
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "").rstrip("/")
+MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "").rstrip("/") + "/"
 USER_A_JWT   = os.environ.get("USER_A_JWT", "")
 USER_B_JWT   = os.environ.get("USER_B_JWT", "")
 USER_A_SITE  = os.environ.get("USER_A_SITE", "")
-API_BASE_URL = os.environ.get("API_BASE_URL", MCP_BASE_URL.removesuffix("/mcp/v1"))
+API_BASE_URL = os.environ.get("API_BASE_URL", MCP_BASE_URL.removesuffix("/mcp/v1/"))
 
 if not MCP_BASE_URL:
     print("ERROR: MCP_BASE_URL is required")
