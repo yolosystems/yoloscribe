@@ -522,6 +522,17 @@ export default function App() {
                   <div className="auth-avatar-menu">
                     <div className="auth-avatar-email">{session.user.email}</div>
                     <button className="btn" onClick={signOut}>Sign out</button>
+                    {window.location.hostname === 'localhost' && (
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          navigator.clipboard.writeText(session.access_token)
+                          setAvatarOpen(false)
+                        }}
+                      >
+                        Copy JWT
+                      </button>
+                    )}
                     {isOwner && (
                       <button
                         className="btn btn-danger"

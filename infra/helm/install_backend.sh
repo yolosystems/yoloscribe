@@ -12,6 +12,22 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+DRY_RUN=false
+EXTRA_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    *) EXTRA_ARGS+=("$arg") ;;
+  esac
+done
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[dry-run] Helm will render templates but make no changes to the cluster."
+  EXTRA_ARGS+=(--dry-run)
+fi
+
 if [[ -z "${STAGE:-}" ]]; then
   echo "Error: STAGE is not set (e.g. dev, staging, prod)"
   exit 1
@@ -57,4 +73,4 @@ helm upgrade --install yoloscribe-backend \
   --set webhookSecret="$WEBHOOK_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
-  "$@"
+  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

@@ -91,7 +91,7 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
             "Action": "s3:ListBucket",
             "Resource": s3_bucket_arn,
             "Condition": {
-                "StringLike": {"s3:prefix": [f"{site_name}/*", ".tools/*"]}
+                "StringLike": {"s3:prefix": [f"{site_name}/*", ".tools/*", ".skills/*"]}
             },
         },
     ]

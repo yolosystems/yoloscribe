@@ -10,7 +10,7 @@ replicaCount: 1
 
 ingress:
   enabled: true
-  host: yoloscribe-dev.runyolo.dev
+  host: api-dev.yoloscribe.com
   certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"
   group:
     name: "yoloscribe-dev"    # e.g. yolo-prod; leave empty for a dedicated ALB
@@ -28,8 +28,8 @@ serviceAccount:
 
 config:
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
-  mcpBaseUrl: "https://yoloscribe-dev.runyolo.dev"
-  cloudfrontDomain: "scribe.runyolo.dev"
+  mcpBaseUrl: "https://api-dev.yoloscribe.com"
+  cloudfrontDomain: "app-dev.yoloscribe.com"
   s3Bucket: "yoloscribe-dev"
   allowedOrigins: "*"
   model: "claude-opus-4-6"
