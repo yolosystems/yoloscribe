@@ -11,7 +11,7 @@ replicaCount: 1
 ingress:
   enabled: true
   host: api-dev.yoloscribe.com
-  certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/e8939bd1-08d4-44b2-88bd-a258f6ad9c09"
+  certificateArn: "arn:aws:acm:us-west-2:295934381903:certificate/fa4c9a82-7f47-436e-9c20-945386ac7675"
   group:
     name: "yoloscribe-dev"    # e.g. yolo-prod; leave empty for a dedicated ALB
     order: 20
@@ -31,7 +31,7 @@ config:
   mcpBaseUrl: "https://api-dev.yoloscribe.com"
   cloudfrontDomain: "app-dev.yoloscribe.com"
   s3Bucket: "yoloscribe-dev"
-  allowedOrigins: "*"
+  allowedOrigins: "https://app-dev.yoloscribe.com"
   sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-jobs"
   eksOidcProvider: "oidc.eks.us-west-2.amazonaws.com/id/329F46753B3AC6C1484FA9A7D94216B0"
   awsAccountId: "295934381903"
