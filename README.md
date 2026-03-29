@@ -132,7 +132,7 @@ Yolo Scribe exposes a remote MCP server at `/mcp/v1` for use with Claude Code an
 **Connect with Claude Code:**
 
 ```bash
-claude mcp add --transport http yoloscribe https://your-domain/mcp/v1
+claude mcp add --transport http yoloscribe https://your-domain/mcp/v1/
 ```
 
 Claude Code will discover the OAuth endpoints automatically and prompt you to sign in with Google. No token copy-pasting required.

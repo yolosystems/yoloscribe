@@ -129,7 +129,7 @@ All operations are scoped to the authenticated user's site. Agent sessions (`.mc
 
 **Connect with Claude Code:**
 ```bash
-claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
+claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
   --header "Authorization: Bearer <supabase-jwt>"
 ```
 

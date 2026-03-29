@@ -11,6 +11,7 @@ serviceAccount:
 
 config:
   sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-jobs"
+  sqsIndexingQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-indexing"
   awsRegion: "us-west-2"
   k8sNamespace: "yolo"
   anthropicSecretName: "yoloscribe-secrets"

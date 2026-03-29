@@ -49,7 +49,7 @@ Response timeout: 30 seconds per tool call.
 
 **Supabase JWT:**
 ```bash
-claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
+claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
   --header "Authorization: Bearer <supabase-jwt>"
 ```
 

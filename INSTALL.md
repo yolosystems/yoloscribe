@@ -304,7 +304,7 @@ For Cognito operators, skip the MCP OAuth PKCE flow and connect Claude Code dire
 2. Add the MCP server to Claude Code:
 
 ```bash
-claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1 \
+claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
   --header "Authorization: Bearer as_<your-token>"
 ```
 
