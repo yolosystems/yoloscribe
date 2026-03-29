@@ -30,6 +30,7 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application source — copy all top-level .py files and subdirs
 COPY backend/*.py ./
 COPY backend/agents/ ./agents/
+COPY backend/auth_providers/ ./auth_providers/
 COPY backend/aws/ ./aws/
 COPY backend/routers/ ./routers/
 
