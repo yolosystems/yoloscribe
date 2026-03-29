@@ -59,7 +59,6 @@ serviceAccount:
 config:
   s3Bucket: ""
   allowedOrigins: ""
-  model: ""
   sqsQueueUrl: ""
   sqsIndexingQueueUrl: ""
   eksOidcProvider: ""

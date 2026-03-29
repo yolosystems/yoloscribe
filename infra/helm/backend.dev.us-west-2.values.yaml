@@ -32,7 +32,6 @@ config:
   cloudfrontDomain: "app-dev.yoloscribe.com"
   s3Bucket: "yoloscribe-dev"
   allowedOrigins: "*"
-  model: "claude-opus-4-6"
   sqsQueueUrl: "https://sqs.us-west-2.amazonaws.com/295934381903/yoloscribe-dev-jobs"
   eksOidcProvider: "oidc.eks.us-west-2.amazonaws.com/id/329F46753B3AC6C1484FA9A7D94216B0"
   awsAccountId: "295934381903"
