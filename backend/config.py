@@ -36,6 +36,10 @@ BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.tita
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_SITE_NAME: str = os.environ.get("LOCAL_SITE_NAME", "local")
 LOCAL_USER_ID: str = os.environ.get("LOCAL_USER_ID", "local-user-00000000")
+# Static Bearer token accepted by the MCP server in LOCAL_MODE.
+# Defaults to "local" so the server works out of the box with no config.
+# Set to a non-default value if your local backend is reachable on a network.
+LOCAL_MCP_API_KEY: str = os.environ.get("LOCAL_MCP_API_KEY", "local")
 
 S3_ENDPOINT_URL: str = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
