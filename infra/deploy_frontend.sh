@@ -13,6 +13,8 @@
 #   VITE_SITE                   — site name; also used as the S3 deploy prefix
 #   VITE_SUPABASE_URL           — Supabase project URL
 #   VITE_SUPABASE_ANON_KEY      — Supabase anon key
+#   VITE_CLOUDFRONT_MEDIA_DOMAIN — CloudFront domain for video/audio assets
+#                                  (e.g. app-dev.yoloscribe.com)
 #   FRONTEND_BUCKET             — root S3 bucket (e.g. yoloscribe-dev)
 #
 # Optional:
@@ -57,16 +59,22 @@ if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${VITE_CLOUDFRONT_MEDIA_DOMAIN:-}" ]]; then
+  echo "Error: VITE_CLOUDFRONT_MEDIA_DOMAIN is not set (e.g. app-dev.yoloscribe.com)"
+  exit 1
+fi
+
 if [[ -z "${AWS_PROFILE:-}" ]]; then
   echo "Error: AWS_PROFILE is not set"
   exit 1
 fi
 
 echo "── Building frontend ────────────────────────────────────────────────────────"
-echo "  VITE_API_BASE        = $VITE_API_BASE"
-echo "  VITE_SITE            = $VITE_SITE"
-echo "  VITE_SUPABASE_URL    = $VITE_SUPABASE_URL"
-echo "  VITE_SUPABASE_ANON_KEY = (set)"
+echo "  VITE_API_BASE                = $VITE_API_BASE"
+echo "  VITE_SITE                    = $VITE_SITE"
+echo "  VITE_SUPABASE_URL            = $VITE_SUPABASE_URL"
+echo "  VITE_SUPABASE_ANON_KEY       = (set)"
+echo "  VITE_CLOUDFRONT_MEDIA_DOMAIN = $VITE_CLOUDFRONT_MEDIA_DOMAIN"
 echo ""
 
 cd "$FRONTEND_DIR"
@@ -75,6 +83,7 @@ VITE_API_BASE="$VITE_API_BASE" \
   VITE_SITE="$VITE_SITE" \
   VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
   VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
+  VITE_CLOUDFRONT_MEDIA_DOMAIN="$VITE_CLOUDFRONT_MEDIA_DOMAIN" \
   npm run build
 
 # The main site (VITE_SITE=default) deploys to the bucket root so that
