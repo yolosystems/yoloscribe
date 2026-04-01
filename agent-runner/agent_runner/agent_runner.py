@@ -94,6 +94,13 @@ def _s3_client():
     kwargs = {"region_name": AWS_REGION}
     if S3_ENDPOINT_URL:
         kwargs["endpoint_url"] = S3_ENDPOINT_URL
+        # Use dedicated MINIO_* credentials so that AWS_ACCESS_KEY_ID /
+        # AWS_SECRET_ACCESS_KEY are free for Bedrock in LOCAL_MODE.
+        minio_key = os.environ.get("MINIO_ACCESS_KEY_ID")
+        minio_secret = os.environ.get("MINIO_SECRET_ACCESS_KEY")
+        if minio_key and minio_secret:
+            kwargs["aws_access_key_id"] = minio_key
+            kwargs["aws_secret_access_key"] = minio_secret
     return _session.client("s3", **kwargs)
 
 

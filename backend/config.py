@@ -82,6 +82,15 @@ boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else bot
 _s3_kwargs = {"endpoint_url": S3_ENDPOINT_URL} if S3_ENDPOINT_URL else {}
 _sqs_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": SQS_ENDPOINT_URL} if SQS_ENDPOINT_URL else {})}
 
+# When S3_ENDPOINT_URL is set (MinIO), use dedicated MINIO_* credentials so
+# that AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are free for Bedrock.
+if S3_ENDPOINT_URL:
+    _minio_key = os.environ.get("MINIO_ACCESS_KEY_ID")
+    _minio_secret = os.environ.get("MINIO_SECRET_ACCESS_KEY")
+    if _minio_key and _minio_secret:
+        _s3_kwargs["aws_access_key_id"] = _minio_key
+        _s3_kwargs["aws_secret_access_key"] = _minio_secret
+
 s3 = boto_session.client("s3", **_s3_kwargs)
 sqs = boto_session.client("sqs", **_sqs_kwargs) if SQS_QUEUE_URL else None
 sqs_indexing = boto_session.client("sqs", **_sqs_kwargs) if SQS_INDEXING_QUEUE_URL else None
