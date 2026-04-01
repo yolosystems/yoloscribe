@@ -345,10 +345,10 @@ def _load_local_mcp_config() -> dict[str, dict]:
 def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[list, list]:
     """Build STDIO MCPClient instances from local-mcp-servers.json (LOCAL_MODE only).
 
-    Resolution chain: agent.md → skill names → SKILL.md (tools list) → local-mcp-servers.json
-
-    Tool names in the skill's tools list must match top-level keys in mcpServers.
-    Each matched entry must have a "command" field. "args" and "env" are optional;
+    All servers defined in local-mcp-servers.json are loaded unconditionally —
+    no skill/tool-name filtering. Skills can still reference local tool names and
+    those tools will be present because every configured server is started.
+    Each entry must have a "command" field; "args" and "env" are optional.
     "env" is merged on top of the current process environment so PATH etc. are inherited.
     """
     try:
@@ -360,29 +360,26 @@ def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[lis
         return [], []
 
     local_servers = _load_local_mcp_config()
-    tool_names = _collect_tool_names(skill_names, site, s3)
+    if not local_servers:
+        return [], []
+
     clients: list = []
 
-    for tool_name in tool_names:
-        server_cfg = local_servers.get(tool_name)
-        if server_cfg is None:
-            log.warning("No local MCP server config found for tool '%s' — skipping", tool_name)
-            continue
-
+    for server_name, server_cfg in local_servers.items():
         command = server_cfg.get("command")
         if not command:
-            log.warning("Local MCP server '%s' has no 'command' — skipping", tool_name)
+            log.warning("Local MCP server '%s' has no 'command' — skipping", server_name)
             continue
 
         args = server_cfg.get("args", [])
         env = {**os.environ, **server_cfg.get("env", {})}
 
-        log.info("Building local STDIO MCP client for tool '%s' (command=%s)", tool_name, command)
+        log.info("Building local STDIO MCP client for '%s' (command=%s)", server_name, command)
         params = StdioServerParameters(command=command, args=args, env=env)
         clients.append(
             MCPClient(
                 lambda p=params: stdio_client(p),
-                prefix=tool_name,
+                prefix=server_name,
             )
         )
 
