@@ -26,10 +26,10 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "haiku":   ModelSpec("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":  ModelSpec("anthropic", "claude-sonnet-4-6"),
     "opus":    ModelSpec("anthropic", "claude-opus-4-6"),
-    # Amazon Bedrock cross-region inference profiles
-    "bedrock-haiku":  ModelSpec("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-    "bedrock-sonnet": ModelSpec("bedrock", "us.anthropic.claude-sonnet-4-6-20250514-v1:0"),
-    "bedrock-opus":   ModelSpec("bedrock", "us.anthropic.claude-opus-4-6-20250514-v1:0"),
+    # Amazon Bedrock
+    "bedrock-haiku":  ModelSpec("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "bedrock-sonnet": ModelSpec("bedrock", "anthropic.claude-sonnet-4-6-20250514-v1:0"),
+    "bedrock-opus":   ModelSpec("bedrock", "anthropic.claude-opus-4-6-20250514-v1:0"),
 }
 
 DEFAULT_MODEL_KEY = "sonnet"

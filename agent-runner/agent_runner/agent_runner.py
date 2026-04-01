@@ -59,9 +59,9 @@ _MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "haiku":          ("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":         ("anthropic", "claude-sonnet-4-6"),
     "opus":           ("anthropic", "claude-opus-4-6"),
-    "bedrock-haiku":  ("bedrock",   "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-    "bedrock-sonnet": ("bedrock",   "us.anthropic.claude-sonnet-4-6-20250514-v1:0"),
-    "bedrock-opus":   ("bedrock",   "us.anthropic.claude-opus-4-6-20250514-v1:0"),
+    "bedrock-haiku":  ("bedrock",   "anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "bedrock-sonnet": ("bedrock",   "anthropic.claude-sonnet-4-6-20250514-v1:0"),
+    "bedrock-opus":   ("bedrock",   "anthropic.claude-opus-4-6-20250514-v1:0"),
 }
 _DEFAULT_MODEL_KEY = "sonnet"
 
