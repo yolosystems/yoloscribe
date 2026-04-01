@@ -14,6 +14,8 @@ Environment variables:
     AWS_REGION      AWS region
     ANTHROPIC_API_KEY  Anthropic API key
     AWS_PROFILE     (optional) named AWS profile for local development
+    LOCAL_MCP_CONFIG_PATH  (optional) path to local-mcp-servers.json for LOCAL_MODE STDIO tools
+                           (default: /app/local-mcp-servers.json)
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
+LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -297,8 +300,97 @@ def _parse_skill_tools(text: str) -> list[str]:
 # ── MCP client construction ───────────────────────────────────────────────────
 
 
-def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
-    """Build Strands MCPClient instances for all skills used by an agent.
+def _collect_tool_names(skill_names: list[str], site: str, s3) -> list[str]:
+    """Resolve skill names → tool names via SKILL.md frontmatter."""
+    tool_names: list[str] = []
+    seen: set[str] = set()
+    for skill_name in skill_names:
+        skill_key = f"{site}/.skills/{skill_name}/SKILL.md"
+        try:
+            obj = s3.get_object(Bucket=BUCKET, Key=skill_key)
+            skill_text = obj["Body"].read().decode("utf-8")
+            names = _parse_skill_tools(skill_text)
+        except Exception as exc:
+            log.warning("Failed to read SKILL.md for skill '%s': %s", skill_name, exc)
+            continue
+        if not names:
+            log.warning("Skill '%s' has no tools defined — skipping", skill_name)
+            continue
+        for name in names:
+            if name not in seen:
+                seen.add(name)
+                tool_names.append(name)
+    return tool_names
+
+
+def _load_local_mcp_config() -> dict[str, dict]:
+    """Load local STDIO MCP server configs from LOCAL_MCP_CONFIG_PATH.
+
+    Returns a dict mapping server_name → server_config, or empty dict if the
+    file is absent or unparseable.
+    """
+    if not os.path.exists(LOCAL_MCP_CONFIG_PATH):
+        return {}
+    try:
+        with open(LOCAL_MCP_CONFIG_PATH) as f:
+            data = json.load(f)
+        servers = data.get("mcpServers", {})
+        log.info("Loaded %d local MCP server(s) from %s", len(servers), LOCAL_MCP_CONFIG_PATH)
+        return servers
+    except Exception as exc:
+        log.warning("Failed to load local MCP config from %s: %s", LOCAL_MCP_CONFIG_PATH, exc)
+        return {}
+
+
+def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[list, list]:
+    """Build STDIO MCPClient instances from local-mcp-servers.json (LOCAL_MODE only).
+
+    Resolution chain: agent.md → skill names → SKILL.md (tools list) → local-mcp-servers.json
+
+    Tool names in the skill's tools list must match top-level keys in mcpServers.
+    Each matched entry must have a "command" field. "args" and "env" are optional;
+    "env" is merged on top of the current process environment so PATH etc. are inherited.
+    """
+    try:
+        from mcp import StdioServerParameters
+        from mcp.client.stdio import stdio_client
+        from strands.tools.mcp import MCPClient
+    except ImportError:
+        log.warning("MCP stdio client not available; no local MCP tools will be loaded")
+        return [], []
+
+    local_servers = _load_local_mcp_config()
+    tool_names = _collect_tool_names(skill_names, site, s3)
+    clients: list = []
+
+    for tool_name in tool_names:
+        server_cfg = local_servers.get(tool_name)
+        if server_cfg is None:
+            log.warning("No local MCP server config found for tool '%s' — skipping", tool_name)
+            continue
+
+        command = server_cfg.get("command")
+        if not command:
+            log.warning("Local MCP server '%s' has no 'command' — skipping", tool_name)
+            continue
+
+        args = server_cfg.get("args", [])
+        env = {**os.environ, **server_cfg.get("env", {})}
+
+        log.info("Building local STDIO MCP client for tool '%s' (command=%s)", tool_name, command)
+        params = StdioServerParameters(command=command, args=args, env=env)
+        clients.append(
+            MCPClient(
+                lambda p=params: stdio_client(p),
+                prefix=tool_name,
+            )
+        )
+
+    return clients, []
+
+
+def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
+    """Build HTTP MCPClient instances for all skills used by an agent.
 
     Resolution chain: agent.md → skill names → SKILL.md (tools list) → .tools/{name}/mcp.json
 
@@ -317,66 +409,63 @@ def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[li
 
     clients: list = []
     errors: list[OAuthTokenError] = []
+    tool_names = _collect_tool_names(skill_names, site, s3)
 
-    for skill_name in skill_names:
-        # Step 1: load SKILL.md to get the list of tool names
-        skill_key = f"{site}/.skills/{skill_name}/SKILL.md"
+    for tool_name in tool_names:
+        tool_key = f".tools/{tool_name}/mcp.json"
         try:
-            obj = s3.get_object(Bucket=BUCKET, Key=skill_key)
-            skill_text = obj["Body"].read().decode("utf-8")
-            tool_names = _parse_skill_tools(skill_text)
+            obj = s3.get_object(Bucket=BUCKET, Key=tool_key)
+            config = json.loads(obj["Body"].read().decode("utf-8"))
         except Exception as exc:
-            log.warning("Failed to read SKILL.md for skill '%s': %s", skill_name, exc)
+            log.warning("Failed to read mcp.json for tool '%s': %s", tool_name, exc)
             continue
 
-        if not tool_names:
-            log.warning("Skill '%s' has no tools defined — skipping", skill_name)
-            continue
-
-        # Step 2: for each tool, load mcp.json and build an MCP client
-        for tool_name in tool_names:
-            tool_key = f".tools/{tool_name}/mcp.json"
-            try:
-                obj = s3.get_object(Bucket=BUCKET, Key=tool_key)
-                config = json.loads(obj["Body"].read().decode("utf-8"))
-            except Exception as exc:
-                log.warning("Failed to read mcp.json for tool '%s': %s", tool_name, exc)
+        for server_name, server_cfg in config.get("mcpServers", {}).items():
+            if "url" not in server_cfg:
+                log.warning("Skipping non-remote MCP server '%s' in tool '%s'", server_name, tool_name)
                 continue
 
-            for server_name, server_cfg in config.get("mcpServers", {}).items():
-                if "url" not in server_cfg:
-                    log.warning("Skipping non-remote MCP server '%s' in tool '%s'", server_name, tool_name)
+            auth = server_cfg.get("auth", "none")
+            headers: dict[str, str] = {}
+            if auth == "oauth":
+                try:
+                    token_data = _load_and_refresh_oauth_token(tool_name, USER_ID, store)
+                except OAuthTokenError as exc:
+                    errors.append(exc)
+                    continue
+                headers["Authorization"] = f"Bearer {token_data['access_token']}"
+            elif auth == "aws-sso":
+                try:
+                    headers = _get_aws_sso_credential_headers(USER_ID, store)
+                except OAuthTokenError as exc:
+                    errors.append(exc)
                     continue
 
-                auth = server_cfg.get("auth", "none")
-                headers: dict[str, str] = {}
-                if auth == "oauth":
-                    try:
-                        token_data = _load_and_refresh_oauth_token(tool_name, USER_ID, store)
-                    except OAuthTokenError as exc:
-                        errors.append(exc)
-                        continue
-                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
-                elif auth == "aws-sso":
-                    try:
-                        headers = _get_aws_sso_credential_headers(USER_ID, store)
-                    except OAuthTokenError as exc:
-                        errors.append(exc)
-                        continue
-
-                server_url = server_cfg["url"]
-                log.info(
-                    "Building remote MCP client for tool '%s' server '%s' (auth=%s, skill=%s)",
-                    tool_name, server_name, auth, skill_name,
+            server_url = server_cfg["url"]
+            log.info(
+                "Building remote MCP client for tool '%s' server '%s' (auth=%s)",
+                tool_name, server_name, auth,
+            )
+            clients.append(
+                MCPClient(
+                    lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
+                    prefix=tool_name,
                 )
-                clients.append(
-                    MCPClient(
-                        lambda u=server_url, h=headers: streamablehttp_client(u, headers=h),
-                        prefix=tool_name,
-                    )
-                )
+            )
 
     return clients, errors
+
+
+def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
+    """Build Strands MCPClient instances for all skills used by an agent.
+
+    In LOCAL_MODE: reads local-mcp-servers.json and builds STDIO clients — no S3 tool
+    lookup, no OAuth. In production: reads .tools/{name}/mcp.json from S3 and builds
+    HTTP clients with OAuth/SSO auth as configured.
+    """
+    if LOCAL_MODE:
+        return _build_local_mcp_clients(skill_names, site, s3)
+    return _build_remote_mcp_clients(skill_names, site, s3, store)
 
 
 # ── Tool name sanitisation ────────────────────────────────────────────────────

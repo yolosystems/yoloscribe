@@ -1,10 +1,11 @@
 REGISTRY    := ghcr.io
 GITHUB_USER ?= nate-yolodev
 IMAGE       := $(REGISTRY)/$(GITHUB_USER)/yoloscribe-agent-runner
+LOCAL_IMAGE := $(IMAGE)-local
 TAG         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo latest)
 PLATFORM    := linux/amd64
 
-.PHONY: lock login release
+.PHONY: lock login release release-local
 
 ## Generate/update uv.lock (required by the Dockerfile --frozen flag)
 lock:
@@ -26,4 +27,15 @@ release: lock login
 		-t $(IMAGE):$(TAG) \
 		-t $(IMAGE):latest \
 		-f Dockerfile \
+		..
+
+## Build the local-mode image (adds Node.js LTS for STDIO MCP servers) and push to ghcr.io.
+## Use this image in docker-compose for local development with local MCP servers.
+release-local: lock login
+	docker buildx build \
+		--platform $(PLATFORM) \
+		--push \
+		-t $(LOCAL_IMAGE):$(TAG) \
+		-t $(LOCAL_IMAGE):latest \
+		-f Dockerfile.local \
 		..

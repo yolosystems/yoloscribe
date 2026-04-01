@@ -87,7 +87,7 @@ services:
   agent-runner:
     build:
       context: .
-      dockerfile: agent-runner/Dockerfile
+      dockerfile: agent-runner/Dockerfile.local
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -107,9 +107,14 @@ services:
       SQS_ENDPOINT_URL: "http://elasticmq:9324"
       LOCAL_MODE: "true"
       LOCAL_RUNNER: "true"
+      # LOCAL_MCP_CONFIG_PATH: "/app/local-mcp-servers.json"  # uncomment with volumes below
 
       # Claude
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+    # To use local STDIO MCP servers, copy local-mcp-servers.json.example to
+    # local-mcp-servers.json, fill it in, then uncomment these lines:
+    # volumes:
+    #   - ./local-mcp-servers.json:/app/local-mcp-servers.json:ro
 
   # ── Frontend ──────────────────────────────────────────────────────────────────
   # Serves the built React SPA via nginx at http://localhost:5173/local/

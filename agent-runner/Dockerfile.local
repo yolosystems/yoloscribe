@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+# Install Node.js LTS for STDIO MCP servers that use node/npx.
+# Python + uv (below) cover Python-based STDIO MCP servers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY libs/ libs/
+COPY agent-runner/pyproject.toml agent-runner/uv.lock agent-runner/
+WORKDIR /app/agent-runner
+RUN uv sync --no-dev --frozen
+COPY agent-runner/agent_runner/ agent_runner/
+CMD ["uv", "run", "polling-worker"]
