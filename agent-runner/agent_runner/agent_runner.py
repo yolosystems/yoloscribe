@@ -75,7 +75,13 @@ def _resolve_model_key(*env_vars: str) -> str:
 
 
 def _build_model(model_key: str):
-    provider, model_id = _MODEL_REGISTRY.get(model_key) or _MODEL_REGISTRY[_DEFAULT_MODEL_KEY]
+    entry = _MODEL_REGISTRY.get(model_key)
+    if entry is None:
+        # Treat unrecognised keys as direct Bedrock model IDs or inference profile ARNs.
+        from strands.models.bedrock import BedrockModel
+        model_id = model_key if model_key else _MODEL_REGISTRY[_DEFAULT_MODEL_KEY][1]
+        return BedrockModel(model_id=model_id, max_tokens=16384)
+    provider, model_id = entry
     if provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(

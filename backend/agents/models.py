@@ -38,9 +38,16 @@ DEFAULT_MODEL_KEY = "sonnet"
 def build_strands_model(model_key: str):
     """Return a strands-compatible model object for the given registry key.
 
-    Falls back to DEFAULT_MODEL_KEY if the key is not found in MODEL_REGISTRY.
+    If the key is not in MODEL_REGISTRY, it is passed directly to BedrockModel
+    as a model ID or inference profile ARN (e.g. arn:aws:bedrock:...).
+    Falls back to DEFAULT_MODEL_KEY only if the key is empty.
     """
-    spec = MODEL_REGISTRY.get(model_key) or MODEL_REGISTRY[DEFAULT_MODEL_KEY]
+    spec = MODEL_REGISTRY.get(model_key)
+    if spec is None:
+        from strands.models.bedrock import BedrockModel
+        fallback = MODEL_REGISTRY[DEFAULT_MODEL_KEY]
+        model_id = model_key if model_key else fallback.model_id
+        return BedrockModel(model_id=model_id)
     if spec.provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(
