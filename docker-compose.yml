@@ -68,8 +68,8 @@ services:
       # MinIO (S3)
       S3_BUCKET: "${S3_BUCKET:-yoloscribe}"
       S3_ENDPOINT_URL: "http://minio:9000"
-      AWS_ACCESS_KEY_ID: "yoloscribe"
-      AWS_SECRET_ACCESS_KEY: "yoloscribe"
+      MINIO_ACCESS_KEY_ID: "yoloscribe"
+      MINIO_SECRET_ACCESS_KEY: "yoloscribe"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
 
       # ElasticMQ (SQS)
@@ -77,8 +77,12 @@ services:
       SQS_INDEXING_QUEUE_URL: "http://elasticmq:9324/000000000000/yoloscribe-indexing"
       SQS_ENDPOINT_URL: "http://elasticmq:9324"
 
-      # Claude
+      # Claude / Bedrock (set YOLOSCRIBE_MODEL=bedrock-sonnet etc. in .env to use Bedrock)
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      YOLOSCRIBE_MODEL: "${YOLOSCRIBE_MODEL:-sonnet}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
 
       # Optional
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:5173}"
@@ -87,7 +91,7 @@ services:
   agent-runner:
     build:
       context: .
-      dockerfile: agent-runner/Dockerfile
+      dockerfile: agent-runner/Dockerfile.local
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -97,8 +101,8 @@ services:
       # MinIO (S3)
       BUCKET: "${S3_BUCKET:-yoloscribe}"
       S3_ENDPOINT_URL: "http://minio:9000"
-      AWS_ACCESS_KEY_ID: "yoloscribe"
-      AWS_SECRET_ACCESS_KEY: "yoloscribe"
+      MINIO_ACCESS_KEY_ID: "yoloscribe"
+      MINIO_SECRET_ACCESS_KEY: "yoloscribe"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
 
       # ElasticMQ (SQS)
@@ -107,9 +111,18 @@ services:
       SQS_ENDPOINT_URL: "http://elasticmq:9324"
       LOCAL_MODE: "true"
       LOCAL_RUNNER: "true"
+      LOCAL_MCP_CONFIG_PATH: "/app/local-mcp-servers.json"
 
-      # Claude
+      # Claude / Bedrock (set YOLOSCRIBE_MODEL=bedrock-sonnet etc. in .env to use Bedrock)
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      YOLOSCRIBE_MODEL: "${YOLOSCRIBE_MODEL:-sonnet}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+    # To use local STDIO MCP servers, copy local-mcp-servers.json.example to
+    # local-mcp-servers.json, fill it in, then uncomment these lines:
+    volumes:
+      - ./local-mcp-servers.json:/app/local-mcp-servers.json:ro
 
   # ── Frontend ──────────────────────────────────────────────────────────────────
   # Serves the built React SPA via nginx at http://localhost:5173/local/

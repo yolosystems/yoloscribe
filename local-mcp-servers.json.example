@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "my-local-tool": {
+      "command": "uv",
+      "args": ["run", "python", "/path/to/my_mcp_server.py"],
+      "env": {
+        "MY_VAR": "some-value"
+      }
+    }
+  }
+}

@@ -26,10 +26,10 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "haiku":   ModelSpec("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":  ModelSpec("anthropic", "claude-sonnet-4-6"),
     "opus":    ModelSpec("anthropic", "claude-opus-4-6"),
-    # Amazon Bedrock cross-region inference profiles
-    "bedrock-haiku":  ModelSpec("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-    "bedrock-sonnet": ModelSpec("bedrock", "us.anthropic.claude-sonnet-4-6-20250514-v1:0"),
-    "bedrock-opus":   ModelSpec("bedrock", "us.anthropic.claude-opus-4-6-20250514-v1:0"),
+    # Amazon Bedrock
+    "bedrock-haiku":  ModelSpec("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "bedrock-sonnet": ModelSpec("bedrock", "anthropic.claude-sonnet-4-6-20250514-v1:0"),
+    "bedrock-opus":   ModelSpec("bedrock", "anthropic.claude-opus-4-6-20250514-v1:0"),
 }
 
 DEFAULT_MODEL_KEY = "sonnet"
@@ -38,9 +38,16 @@ DEFAULT_MODEL_KEY = "sonnet"
 def build_strands_model(model_key: str):
     """Return a strands-compatible model object for the given registry key.
 
-    Falls back to DEFAULT_MODEL_KEY if the key is not found in MODEL_REGISTRY.
+    If the key is not in MODEL_REGISTRY, it is passed directly to BedrockModel
+    as a model ID or inference profile ARN (e.g. arn:aws:bedrock:...).
+    Falls back to DEFAULT_MODEL_KEY only if the key is empty.
     """
-    spec = MODEL_REGISTRY.get(model_key) or MODEL_REGISTRY[DEFAULT_MODEL_KEY]
+    spec = MODEL_REGISTRY.get(model_key)
+    if spec is None:
+        from strands.models.bedrock import BedrockModel
+        fallback = MODEL_REGISTRY[DEFAULT_MODEL_KEY]
+        model_id = model_key if model_key else fallback.model_id
+        return BedrockModel(model_id=model_id)
     if spec.provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(

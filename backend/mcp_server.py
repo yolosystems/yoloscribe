@@ -57,16 +57,26 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app,
-        auth_provider: AuthProvider,
-        user_site_repo: UserSiteRepository,
+        auth_provider: AuthProvider | None,
+        user_site_repo: UserSiteRepository | None,
         base_url: str = "",
+        local_mode: bool = False,
+        local_site_name: str = "local",
+        local_user_id: str = "local-user-00000000",
+        local_api_key: str = "local",
     ) -> None:
         super().__init__(app)
         self._auth_provider = auth_provider
         self._user_site_repo = user_site_repo
         self._base_url = base_url
+        self._local_mode = local_mode
+        self._local_site_name = local_site_name
+        self._local_user_id = local_user_id
+        self._local_api_key = local_api_key
 
     def _www_authenticate(self) -> str:
+        if self._local_mode:
+            return 'Bearer realm="YoloScribe (local)"'
         if self._base_url:
             metadata_url = f"{self._base_url}/.well-known/oauth-authorization-server"
             return f'Bearer realm="YoloScribe", resource_metadata="{metadata_url}"'
@@ -75,6 +85,23 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # CORS preflights pass through; CORS headers are added by the parent app.
         if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # In LOCAL_MODE, validate against the static API key and resolve the
+        # site from LOCAL_SITE_NAME / LOCAL_USER_ID — no JWT validation needed.
+        if self._local_mode:
+            auth = request.headers.get("authorization", "")
+            if not auth.lower().startswith("bearer ") or auth[7:] != self._local_api_key:
+                return JSONResponse(
+                    {"error": f"Invalid API key. Use: Authorization: Bearer {self._local_api_key}"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": self._www_authenticate()},
+                )
+            request.state.mcp_user = _MCPUser(
+                user_id=self._local_user_id,
+                email=None,
+                site=self._local_site_name,
+            )
             return await call_next(request)
 
         auth = request.headers.get("authorization", "")
@@ -178,11 +205,15 @@ def create_mcp_app(
     vectors_index: str,
     bedrock_embedding_model: str,
     bedrock_region: str,
-    auth_provider: AuthProvider,
-    user_site_repo: UserSiteRepository,
+    auth_provider: AuthProvider | None,
+    user_site_repo: UserSiteRepository | None,
     sqs_indexing_client,
     sqs_indexing_queue_url: str,
     base_url: str = "",
+    local_mode: bool = False,
+    local_site_name: str = "local",
+    local_user_id: str = "local-user-00000000",
+    local_api_key: str = "local",
 ):
     """Create and return the FastMCP ASGI app, ready to mount at /mcp/v1."""
     mcp = FastMCP(
@@ -714,6 +745,10 @@ def create_mcp_app(
                 auth_provider=auth_provider,
                 user_site_repo=user_site_repo,
                 base_url=base_url,
+                local_mode=local_mode,
+                local_site_name=local_site_name,
+                local_user_id=local_user_id,
+                local_api_key=local_api_key,
             )
         ],
     )

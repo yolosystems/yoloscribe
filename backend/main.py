@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from config import S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, AWS_REGION, BEDROCK_EMBEDDING_MODEL, mcp_api_base, auth_provider, user_site_repo, s3, sqs_indexing, s3vectors
+from config import LOCAL_MODE, LOCAL_SITE_NAME, LOCAL_USER_ID, LOCAL_MCP_API_KEY
 from config import MAX_REQUEST_BYTES
 from rate_limit import limiter
 from mcp_server import create_mcp_app
@@ -131,7 +132,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 # ── Mount MCP server ───────────────────────────────────────────────────────────
 
-if auth_provider is not None:
+if LOCAL_MODE or auth_provider is not None:
     _mcp_app = create_mcp_app(  # noqa: F811
         s3_client=s3,
         bucket=S3_BUCKET,
@@ -145,9 +146,13 @@ if auth_provider is not None:
         sqs_indexing_client=sqs_indexing,
         sqs_indexing_queue_url=os.environ.get("SQS_INDEXING_QUEUE_URL", ""),
         base_url=mcp_api_base(),
+        local_mode=LOCAL_MODE,
+        local_site_name=LOCAL_SITE_NAME,
+        local_user_id=LOCAL_USER_ID,
+        local_api_key=LOCAL_MCP_API_KEY,
     )
     app.mount("/mcp/v1", _mcp_app)
-    logging.info("MCP server mounted at /mcp/v1")
+    logging.info("MCP server mounted at /mcp/v1%s", " (local mode)" if LOCAL_MODE else "")
 else:
     logging.warning("MCP server not mounted: auth provider is not configured")
 
@@ -161,7 +166,8 @@ app.include_router(settings_router)
 app.include_router(chat_router)
 app.include_router(tools_router)
 app.include_router(oauth_router)
-app.include_router(mcp_oauth_router)
+if not LOCAL_MODE:
+    app.include_router(mcp_oauth_router)
 app.include_router(site_router)
 app.include_router(tokens_router)
 app.include_router(webhooks_router)

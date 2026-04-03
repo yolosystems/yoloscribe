@@ -36,6 +36,10 @@ BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.tita
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_SITE_NAME: str = os.environ.get("LOCAL_SITE_NAME", "local")
 LOCAL_USER_ID: str = os.environ.get("LOCAL_USER_ID", "local-user-00000000")
+# Static Bearer token accepted by the MCP server in LOCAL_MODE.
+# Defaults to "local" so the server works out of the box with no config.
+# Set to a non-default value if your local backend is reachable on a network.
+LOCAL_MCP_API_KEY: str = os.environ.get("LOCAL_MCP_API_KEY", "local")
 
 S3_ENDPOINT_URL: str = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
@@ -77,6 +81,15 @@ boto_session = boto3.Session(profile_name=_aws_profile) if _aws_profile else bot
 
 _s3_kwargs = {"endpoint_url": S3_ENDPOINT_URL} if S3_ENDPOINT_URL else {}
 _sqs_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": SQS_ENDPOINT_URL} if SQS_ENDPOINT_URL else {})}
+
+# When S3_ENDPOINT_URL is set (MinIO), use dedicated MINIO_* credentials so
+# that AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are free for Bedrock.
+if S3_ENDPOINT_URL:
+    _minio_key = os.environ.get("MINIO_ACCESS_KEY_ID")
+    _minio_secret = os.environ.get("MINIO_SECRET_ACCESS_KEY")
+    if _minio_key and _minio_secret:
+        _s3_kwargs["aws_access_key_id"] = _minio_key
+        _s3_kwargs["aws_secret_access_key"] = _minio_secret
 
 s3 = boto_session.client("s3", **_s3_kwargs)
 sqs = boto_session.client("sqs", **_sqs_kwargs) if SQS_QUEUE_URL else None
