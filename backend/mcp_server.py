@@ -28,11 +28,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from agents.base import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
 log = logging.getLogger(__name__)
 
 _PAGE_PATH_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$")
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 # ── User context ───────────────────────────────────────────────────────────────
 
@@ -169,6 +171,18 @@ def _validate_page_path(page_path: str) -> None:
         )
 
 
+def _validate_skill_name(skill_name: str) -> None:
+    if not _SKILL_NAME_RE.match(skill_name):
+        raise ValueError(
+            f"Invalid skill name '{skill_name}'. "
+            "Use lowercase letters, digits, hyphens, and underscores."
+        )
+
+
+def _skill_key(site: str, skill_name: str) -> str:
+    return f"{site}/.skills/{skill_name}/SKILL.md"
+
+
 def _now_iso() -> str:
     return datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
 
@@ -220,7 +234,8 @@ def create_mcp_app(
         "YoloScribe",
         instructions=(
             "YoloScribe is an AI-powered wiki. You can read, create, update, and delete "
-            "wiki pages, run semantic or keyword searches, and manage agent sessions. "
+            "wiki pages, run semantic or keyword searches, manage agent sessions, and "
+            "list, create, and update skills. "
             "All operations are scoped to the authenticated user's site."
         ),
     )
@@ -734,6 +749,100 @@ def create_mcp_app(
                 break
 
         return {"agents": agents}
+
+    # ── Skills ────────────────────────────────────────────────────────────────
+    # Skills are stored at {site}/.skills/{skill_name}/SKILL.md.
+    # The file format is a YAML frontmatter block followed by markdown instructions.
+
+    @mcp.tool()
+    async def skill_list(ctx: Context = None) -> dict:
+        """List all skills defined for the user's site.
+
+        Returns each skill's name, description, and referenced tools.
+        """
+        user = _user(ctx)
+        prefix = f"{user.site}/.skills/"
+        skills: list[dict] = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+            for cp in s3_page.get("CommonPrefixes", []):
+                skill_name = cp["Prefix"][len(prefix):].rstrip("/")
+                key = f"{cp['Prefix']}SKILL.md"
+                try:
+                    resp = s3_client.get_object(Bucket=bucket, Key=key)
+                    text = resp["Body"].read().decode("utf-8")
+                    fm, _ = _parse_frontmatter(text)
+                    tools_list = fm.get("tools", [])
+                    if isinstance(tools_list, str):
+                        tools_list = [tools_list]
+                    skills.append(
+                        {
+                            "name": skill_name,
+                            "description": fm.get("description", ""),
+                            "tools": tools_list,
+                            "updated_at": resp["LastModified"].isoformat(),
+                        }
+                    )
+                except Exception:
+                    skills.append({"name": skill_name, "description": "", "tools": []})
+        return {"skills": skills}
+
+    @mcp.tool()
+    async def skill_create(
+        skill_name: str,
+        content: str,
+        ctx: Context = None,
+    ) -> dict:
+        """Create a new skill (SKILL.md) for the user's site.
+
+        Args:
+            skill_name: Skill name (lowercase letters, digits, hyphens, underscores).
+            content: Full SKILL.md content including YAML frontmatter.
+        """
+        _validate_skill_name(skill_name)
+        user = _user(ctx)
+        key = _skill_key(user.site, skill_name)
+        existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+        if existing.get("KeyCount", 0) > 0:
+            raise ValueError(
+                f"Skill '{skill_name}' already exists. Use skill_update to modify it."
+            )
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        return {"skill_name": skill_name, "created_at": _now_iso()}
+
+    @mcp.tool()
+    async def skill_update(
+        skill_name: str,
+        content: str,
+        ctx: Context = None,
+    ) -> dict:
+        """Update an existing skill's SKILL.md content.
+
+        Args:
+            skill_name: Name of the skill to update.
+            content: New full SKILL.md content including YAML frontmatter.
+        """
+        _validate_skill_name(skill_name)
+        user = _user(ctx)
+        key = _skill_key(user.site, skill_name)
+        try:
+            s3_client.head_object(Bucket=bucket, Key=key)
+        except Exception:
+            raise ValueError(
+                f"Skill '{skill_name}' does not exist. Use skill_create to create it."
+            )
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        return {"skill_name": skill_name, "updated_at": _now_iso()}
 
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
