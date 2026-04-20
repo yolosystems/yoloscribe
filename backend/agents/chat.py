@@ -73,7 +73,8 @@ You have access to the following tools:
 - content_writer  — use when the user wants to add, edit, or rewrite wiki
                     content on the current page.
 - creator         — use when the user wants to define a new AI agent for
-                    the current page (creates an agent.md file).
+                    the current page, OR edit/update an existing agent.md.
+                    This is the only tool that writes agent.md files.
                     After successfully creating an agent, ask the user:
                     "Would you like to run this agent now?" If yes, use runner.
 - page_creator    — use when the user wants to create a new page or child
@@ -166,7 +167,7 @@ Current context:
         shared: dict = {"updated_content": None, "navigate_to": None}
 
         # Build fresh sub-agent @tool functions with current context baked in.
-        tools = self._make_tools(site=site, page_path=page_path, shared=shared, user_id=user_id, user_site=user_site)
+        tools = self._make_tools(site=site, page_path=page_path, file_path=file_path, shared=shared, user_id=user_id, user_site=user_site)
 
         # Rebuild the strands Agent with fresh prompt + tools for this request.
         from strands import Agent
@@ -210,7 +211,9 @@ Current context:
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
-    def _make_tools(self, site: str, page_path: str, shared: dict, user_id: str = "knuth", user_site: str = "") -> list:
+    def _make_tools(self, site: str, page_path: str, file_path: str = "content.md", shared: dict = None, user_id: str = "knuth", user_site: str = "") -> list:
+        if shared is None:
+            shared = {}
         # Create a per-request scoped S3Tools instance so the ownership check is
         # bound to the authenticated user for this specific request.
         s3_tools = S3Tools(
@@ -274,12 +277,13 @@ Current context:
 
         @tool
         def creator(instruction: str) -> str:
-            """Create a new AI agent definition (agent.md) for the current page.
+            """Create or edit an AI agent definition (agent.md) for the current page.
 
-            Use this when the user wants to define a new agent.
+            Use this when the user wants to define a new agent OR edit/update an
+            existing agent.md file (e.g. changing its description, skills, or schedule).
 
             Args:
-                instruction: The user's agent creation request.
+                instruction: The user's agent creation or editing request.
             """
             agent = CreatorAgent(
                 s3_tools=s3_tools,
@@ -496,18 +500,25 @@ Current context:
         )
         list_tools_tool = tool(_list_tools)
 
-        return [
+        # When viewing an agent.md file, content_writer must not be offered —
+        # it always writes to content.md and would corrupt the page the agent
+        # belongs to. Agent edits go through creator (put_agent overwrite=True).
+        is_agent_page = "/.agents/" in file_path or file_path.startswith(".agents/")
+
+        tools_list = [
             list_tools_tool,
             list_skills_tool,
             s3_tools.list_agents,
             http_request,
-            content_writer,
             creator,
             page_creator,
             runner,
             search,
             create_skill,
         ]
+        if not is_agent_page:
+            tools_list.insert(4, content_writer)
+        return tools_list
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
