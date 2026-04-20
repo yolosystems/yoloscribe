@@ -358,9 +358,10 @@ def _load_local_mcp_config() -> dict[str, dict]:
 def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[list, list]:
     """Build STDIO MCPClient instances from local-mcp-servers.json (LOCAL_MODE only).
 
-    All servers defined in local-mcp-servers.json are loaded unconditionally —
-    no skill/tool-name filtering. Skills can still reference local tool names and
-    those tools will be present because every configured server is started.
+    Only servers whose name appears in the tool names required by the agent's skills
+    are loaded — this prevents the LLM from seeing and using unintended tools.
+    Tool names are resolved from each skill's SKILL.md frontmatter (the same
+    source used in production), then matched against local-mcp-servers.json by name.
     Each entry must have a "command" field; "args" and "env" are optional.
     "env" is merged on top of the current process environment so PATH etc. are inherited.
     """
@@ -376,9 +377,18 @@ def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[lis
     if not local_servers:
         return [], []
 
+    required_tool_names = set(_collect_tool_names(skill_names, site, s3))
+    if not required_tool_names:
+        log.warning("No tool names resolved from skills %s — no local MCP clients will be loaded", skill_names)
+        return [], []
+
     clients: list = []
 
     for server_name, server_cfg in local_servers.items():
+        if server_name not in required_tool_names:
+            log.debug("Skipping local MCP server '%s' — not required by agent skills", server_name)
+            continue
+
         command = server_cfg.get("command")
         if not command:
             log.warning("Local MCP server '%s' has no 'command' — skipping", server_name)
