@@ -5,7 +5,7 @@ import re
 
 import json
 
-from config import S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, SQS_INDEXING_QUEUE_URL, s3, s3vectors, sqs_indexing
+from config import S3_BUCKET, S3_VECTORS_BUCKET, S3_VECTORS_INDEX_NAME, SQS_INDEXING_QUEUE_URL, SQS_QUEUE_URL, s3, s3vectors, sqs, sqs_indexing
 
 # ── Path safety ────────────────────────────────────────────────────────────────
 
@@ -171,6 +171,63 @@ def delete_site_vectors(site_name: str) -> None:
         logging.info("Deleted %d vectors for site %s", len(vector_ids), site_name)
     except Exception as exc:
         logging.warning("Failed to delete vectors for site %s: %s", site_name, exc)
+
+
+def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
+    """Enqueue agent-runner jobs for any on_write agents subscribed to this page.
+
+    Lists .agents/ under the written page's directory. For each agent.md with
+    trigger: on_write, a K8s Job is queued via SQS. If the agent carries a ref
+    field, the referenced agent.md is used as the job's entry point.
+
+    Best-effort; never raises.
+    """
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+
+    # Strip trailing /content.md to get the page directory S3 prefix.
+    if not content_key.endswith("/content.md"):
+        return
+    page_dir = content_key[: -len("/content.md")]
+    agents_prefix = f"{page_dir}/.agents/"
+
+    try:
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=agents_prefix)
+    except Exception:
+        logging.warning("Failed to list on_write agents for %s", content_key, exc_info=True)
+        return
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith("/agent.md"):
+            continue
+        try:
+            agent_text = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read().decode("utf-8")
+        except Exception:
+            logging.warning("Failed to read agent.md at %s", key, exc_info=True)
+            continue
+
+        trigger_m = re.search(r"^trigger:\s*(\S+)", agent_text, re.MULTILINE)
+        if not trigger_m or trigger_m.group(1) != "on_write":
+            continue
+
+        ref_m = re.search(r"^ref:\s*(\S+)", agent_text, re.MULTILINE)
+        agent_md_key = f"{site}/{ref_m.group(1).strip()}" if ref_m else key
+
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": S3_BUCKET,
+                    "agent_md_key": agent_md_key,
+                    "content_key": content_key,
+                    "prompt": "A page in your scope has been updated. Review it and apply any necessary updates to your tracked pages.",
+                    "user_id": user_id,
+                }),
+            )
+            logging.info("Enqueued on_write agent %s for %s", agent_md_key, content_key)
+        except Exception:
+            logging.warning("Failed to enqueue on_write agent %s", agent_md_key, exc_info=True)
 
 
 def enqueue_index_job(content_key: str, user_id: str) -> None:

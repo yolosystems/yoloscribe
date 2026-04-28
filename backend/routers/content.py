@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from rate_limit import limiter
-from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job
+from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job, enqueue_on_write_agents
 from settings_cache import get_page_settings, page_path_from_file_path
 
 _audit_log = logging.getLogger("yoloscribe.audit")
@@ -208,5 +208,8 @@ async def put_content_route(
     else:
         put_content(site, path, text)
     if is_content_path:
-        enqueue_index_job(f"{site}/{path}", claims.user_id)
+        content_key = f"{site}/{path}"
+        enqueue_index_job(content_key, claims.user_id)
+        if not is_shared_write:
+            enqueue_on_write_agents(site, content_key, claims.user_id)
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
