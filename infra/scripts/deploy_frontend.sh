@@ -23,8 +23,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRONTEND_DIR="$SCRIPT_DIR/../frontend"
-ENV_FILE="$SCRIPT_DIR/../.env"
+FRONTEND_DIR="$SCRIPT_DIR/../../frontend"
+ENV_FILE="$SCRIPT_DIR/../../.env"
 
 # Load root .env if present
 if [[ -f "$ENV_FILE" ]]; then

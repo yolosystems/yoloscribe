@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
 if [[ -z "${S3_BUCKET:-}" ]] || [[ -z "${VITE_API_BASE:-}" ]]; then

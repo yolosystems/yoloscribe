@@ -23,7 +23,7 @@ fi
 AWS="aws --profile $AWS_PROFILE"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRONTEND_DIR="$SCRIPT_DIR/../frontend"
+FRONTEND_DIR="$SCRIPT_DIR/../../frontend"
 
 echo "==> Building frontend (API base: $API_BASE)"
 cd "$FRONTEND_DIR"
