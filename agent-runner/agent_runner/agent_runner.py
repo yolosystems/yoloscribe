@@ -16,6 +16,7 @@ Environment variables:
     AWS_PROFILE     (optional) named AWS profile for local development
     LOCAL_MCP_CONFIG_PATH  (optional) path to local-mcp-servers.json for LOCAL_MODE STDIO tools
                            (default: /app/local-mcp-servers.json)
+    AGENT_RUNNER_MAX_PAGE_READS  max wiki_read calls per agent run (default: 10)
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
+AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -514,6 +516,43 @@ def _sanitize_tool_names(tools: list) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
+class _ReadLimitedTool:
+    """Proxy that caps wiki_read calls to AGENT_RUNNER_MAX_PAGE_READS per run."""
+
+    def __init__(self, wrapped, counter: list[int], max_reads: int) -> None:
+        self._wrapped = wrapped
+        self._counter = counter
+        self._max_reads = max_reads
+
+    def __call__(self, **kwargs):
+        if self._counter[0] >= self._max_reads:
+            return (
+                f"Error: Page read limit of {self._max_reads} reached. "
+                f"This agent is not permitted to read more pages in a single run. "
+                f"Complete your task based on what you have already read."
+            )
+        self._counter[0] += 1
+        return self._wrapped(**kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._wrapped, name)
+
+
+def _apply_read_limit(tools: list, max_reads: int) -> list:
+    """Wrap any wiki_read tools to enforce the per-run page read limit."""
+    if max_reads <= 0:
+        return tools
+    counter: list[int] = [0]
+    result = []
+    for t in tools:
+        name = getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "")
+        if name == "wiki_read":
+            result.append(_ReadLimitedTool(t, counter, max_reads))
+        else:
+            result.append(t)
+    return result
+
+
 def _write_notification(s3, site: str, message: str) -> None:
     """Prepend a notification entry to {site}/.user/notifications.md."""
     import datetime
@@ -637,6 +676,9 @@ def main() -> None:
                 except Exception as exc:
                     log.warning("Failed to load tools from MCP client: %s", exc)
 
+            tools = _apply_read_limit(tools, AGENT_RUNNER_MAX_PAGE_READS)
+            log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
+
             model_key = agent_def.model or _resolve_model_key(
                 "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
             )
@@ -645,6 +687,8 @@ def main() -> None:
             system_prompt = (
                 agent_def.description
                 + "\n\n"
+                + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
+                f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
                 + "IMPORTANT: When you have finished your work, your final message must contain "
                 "ONLY the complete updated markdown content — no preamble, no explanation, no "
                 "summary, no commentary. Output the raw markdown and nothing else."
