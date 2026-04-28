@@ -112,7 +112,7 @@ This section covers replacing Supabase with an all-AWS auth stack. Use this path
 Run the setup script once before deploying:
 
 ```bash
-AWS_PROFILE=myprofile AWS_REGION=us-east-1 ./scripts/setup_dynamodb.sh
+AWS_PROFILE=myprofile AWS_REGION=us-east-1 ./infra/scripts/setup_dynamodb.sh
 ```
 
 This creates two tables (idempotent — safe to re-run):
@@ -128,7 +128,7 @@ Override table names with env vars if needed:
 DYNAMODB_USER_SITE_TABLE=my-user-site \
 DYNAMODB_API_TOKENS_TABLE=my-api-tokens \
 AWS_REGION=eu-west-1 \
-./scripts/setup_dynamodb.sh
+./infra/scripts/setup_dynamodb.sh
 ```
 
 **Table schemas:**
@@ -219,7 +219,7 @@ Run the one-time setup script to create a CloudFront key pair, register it as a 
 ```bash
 AWS_PROFILE=myprofile AWS_REGION=us-east-1 \
 DISTRIBUTION_ID=E1EXAMPLE \
-./scripts/setup_cloudfront_media.sh
+./infra/scripts/setup_cloudfront_media.sh
 ```
 
 The script prints the `cloudfrontSigningKeyId` value to add to your Helm values file. Then re-deploy with:
