@@ -24,7 +24,7 @@ import time
 import boto3
 
 from .log_setup import configure_logging
-from .parse import parse_agent_md
+from .parse import AgentDefinitionError, parse_agent_md
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -171,14 +171,30 @@ def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str)
             raise
 
 
+def _write_notification_to_s3(s3, bucket: str, site: str, message: str) -> None:
+    import datetime
+    key = f"{site}/.user/notifications.md"
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    try:
+        existing = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    try:
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=(entry + existing).encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception as exc:
+        log.error("Failed to write notification for site %s: %s", site, exc)
+
+
 def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -> None:
     user_id = payload.get("user_id", "default")
     bucket = payload["bucket"]
     agent_md_key = payload["agent_md_key"]
-
-    obj = s3.get_object(Bucket=bucket, Key=agent_md_key)
-    agent_md_text = obj["Body"].read().decode("utf-8")
-    agent_def = parse_agent_md(agent_md_text)
 
     # Derive site and agent name from keys for K8s name construction
     # agent_md_key: {site}/[{page}/].agents/{agent_name}/agent.md
@@ -186,10 +202,21 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
     site = parts[0] if parts else "unknown"
     agent_name = parts[-2] if len(parts) >= 2 else "unknown"
 
+    obj = s3.get_object(Bucket=bucket, Key=agent_md_key)
+    try:
+        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+    except AgentDefinitionError as exc:
+        log.error("Invalid agent.md at %s: %s", agent_md_key, exc)
+        _write_notification_to_s3(
+            s3, bucket, site,
+            f"**Invalid agent definition** (`{agent_md_key}`):\n\n{exc}",
+        )
+        return
+
     container = _build_container(payload)
     pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
 
-    if agent_def.schedule:
+    if agent_def.trigger == "schedule":
         cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id, max_len=52)
         _upsert_cronjob(
             batch_v1,
