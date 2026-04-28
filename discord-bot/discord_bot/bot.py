@@ -173,6 +173,9 @@ class YoloScribeBot(discord.Client):
         if not text.strip():
             return  # Empty message after stripping prefix — nothing to send
 
+        # Pre-fetch the target page content so the agent has it in context.
+        current_content = await self._fetch_content(raw_token, site_name, file_path)
+
         # Track request volume; post high-volume warning if threshold just crossed.
         if rate_tracker.record_request(str(message.channel.id)):
             try:
@@ -210,6 +213,7 @@ class YoloScribeBot(discord.Client):
                 site=site_name,
                 file_path=file_path,
                 message=text,
+                current_content=current_content,
             )
         except RateLimitError as exc:
             log.warning("Rate limit for channel %s: retry after %s", message.channel.id, exc.retry_after)
@@ -237,12 +241,28 @@ class YoloScribeBot(discord.Client):
         except discord.HTTPException:
             pass
 
+    async def _fetch_content(self, raw_token: str, site: str, file_path: str) -> str:
+        """Fetch the current content of a wiki page. Returns empty string on failure."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{YOLOSCRIBE_API_URL}/content",
+                    headers={"Authorization": f"Bearer {raw_token}"},
+                    params={"site": site, "path": file_path},
+                )
+                if resp.status_code == 200:
+                    return resp.text
+        except Exception as exc:
+            log.warning("Failed to pre-fetch content for %s/%s: %s", site, file_path, exc)
+        return ""
+
     async def _call_chat(
         self,
         raw_token: str,
         site: str,
         file_path: str,
         message: str,
+        current_content: str = "",
     ) -> str:
         """POST to the YoloScribe /chat endpoint and return the reply text."""
         async with httpx.AsyncClient(timeout=120) as client:
@@ -251,7 +271,7 @@ class YoloScribeBot(discord.Client):
                 headers={"Authorization": f"Bearer {raw_token}"},
                 json={
                     "message": message,
-                    "current_content": "",
+                    "current_content": current_content,
                     "history": [],
                     "site": site,
                     "file_path": file_path,

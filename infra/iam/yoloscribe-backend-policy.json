@@ -53,7 +53,10 @@
     {
       "Sid": "S3VectorsQuery",
       "Effect": "Allow",
-      "Action": "s3vectors:QueryVectors",
+      "Action": [
+        "s3vectors:QueryVectors",
+        "s3vectors:GetVectors"
+      ],
       "Resource": "arn:aws:s3vectors:*:*:bucket/*/index/*"
     }
   ]

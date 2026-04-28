@@ -70,8 +70,7 @@ async def get_content_route(
 
     # Non-content paths are always owner-only
     if not is_content_path:
-        claims = decode_jwt(credentials)
-        user_site = get_site_for_user(claims.user_id)
+        _, user_site = get_user_context(credentials)
         require_site_owner(site, user_site)
         content = get_content(site, path)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
@@ -86,8 +85,7 @@ async def get_content_route(
         access = "view"
         if credentials is not None:
             try:
-                claims = decode_jwt(credentials)
-                user_site = get_site_for_user(claims.user_id)
+                _, user_site = get_user_context(credentials)
                 if user_site == site:
                     access = "full-control"
             except HTTPException:
@@ -103,8 +101,7 @@ async def get_content_route(
     if credentials is None:
         raise HTTPException(status_code=403, detail="Authentication required")
 
-    claims = decode_jwt(credentials)
-    user_site = get_site_for_user(claims.user_id)
+    _, user_site = get_user_context(credentials)
 
     if user_site == site:
         content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
@@ -115,7 +112,12 @@ async def get_content_route(
         return resp
 
     if visibility == "shared":
-        user_email = claims.email
+        # API tokens are always owner-scoped so they never reach here;
+        # shared access requires an email from a JWT.
+        try:
+            user_email = decode_jwt(credentials).email
+        except HTTPException:
+            raise HTTPException(status_code=403, detail="Access denied")
         shared_with = settings.get("shared_with", [])
         match = next((u for u in shared_with if u.get("email") == user_email), None)
         if match:

@@ -148,13 +148,27 @@ class SearchAgent:
         except Exception:
             return ""
 
+    @staticmethod
+    def _page_link(s3_path: str) -> str:
+        """Convert an S3 content key to a page path (no leading #).
+
+        e.g. "knuth/projects/yoloscribe/feature-backlog/content.md"
+             → "projects/yoloscribe/feature-backlog"
+        """
+        parts = s3_path.split("/")
+        # Drop the site prefix (first part) and trailing "content.md"
+        inner = parts[1:]
+        if inner and inner[-1] == "content.md":
+            inner = inner[:-1]
+        return "/".join(inner)
+
     def _generate_summary(self, query: str, chunks: list[dict]) -> str:
         import anthropic
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         chunks_text = "\n\n".join(
-            f"Source: {c['path']}\nExcerpt:\n{c['text'][:800]}"
+            f"Source path: {c['path']}\nPage link: {self._page_link(c['path'])}\nExcerpt:\n{c['text'][:800]}"
             for c in chunks
         )
 
@@ -167,8 +181,11 @@ class SearchAgent:
             f"- A heading linking to the source page\n"
             f"- A brief excerpt (blockquote)\n\n"
             f"Format each result as:\n"
-            f"### [site-name — /path/content.md](/site-name/)\n"
+            f"### [Page title](#page_link)\n"
             f"> excerpt text\n\n"
+            f"Replace 'page_link' with the exact 'Page link' value provided for each source. "
+            f"Do not add extra '#' symbols — the '#' shown in the format above is sufficient. "
+            f"Do not modify or invent URLs. "
             f"Only include results that are genuinely relevant to the query."
         )
 
@@ -187,9 +204,9 @@ class SearchAgent:
             if path in seen_paths:
                 continue
             seen_paths.add(path)
-            site = c["site"]
+            link = self._page_link(path)
             excerpt = c["text"][:300].replace("\n", " ")
-            lines.append(f"### [{site} — /{path}](/{site}/)\n> {excerpt}\n")
+            lines.append(f"### [{link}](#{link})\n> {excerpt}\n")
         return "\n".join(lines)
 
     def _append_search_entry(self, user_site: str, query: str, summary: str) -> None:
