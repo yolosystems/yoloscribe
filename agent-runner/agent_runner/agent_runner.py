@@ -36,7 +36,7 @@ import boto3
 from strands import Agent, ModelRetryStrategy
 from strands_tools import http_request
 
-from .parse import parse_agent_md
+from .parse import AgentDefinitionError, parse_agent_md
 
 BUCKET = os.environ["BUCKET"]
 AGENT_MD_KEY = os.environ["AGENT_MD_KEY"]
@@ -514,6 +514,28 @@ def _sanitize_tool_names(tools: list) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
+def _write_notification(s3, site: str, message: str) -> None:
+    """Prepend a notification entry to {site}/.user/notifications.md."""
+    import datetime
+    key = f"{site}/.user/notifications.md"
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    try:
+        existing = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    combined = entry + existing
+    try:
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=combined.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception as exc:
+        log.error("Failed to write notification for site %s: %s", site, exc)
+
+
 def _write_error_to_content(s3, content: str, error_block: str) -> None:
     s3.put_object(
         Bucket=BUCKET,
@@ -571,7 +593,16 @@ def main() -> None:
     try:
         # 1. Read and parse agent.md
         obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
-        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+        try:
+            agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+        except AgentDefinitionError as exc:
+            log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
+            site = AGENT_MD_KEY.split("/")[0]
+            _write_notification(
+                s3, site,
+                f"**Invalid agent definition** (`{AGENT_MD_KEY}`):\n\n{exc}",
+            )
+            return
 
         # 2. Build MCP clients once — not repeated on write-conflict retries
         site = AGENT_MD_KEY.split("/")[0]
