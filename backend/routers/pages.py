@@ -1,4 +1,5 @@
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -11,12 +12,43 @@ from s3_helpers import PAGE_PATH_RE, default_child_page_md, enqueue_index_job
 router = APIRouter()
 
 
+def _extract_agent_meta(text: str) -> dict:
+    """Extract trigger and scope from agent.md frontmatter."""
+    fm_match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
+    trigger = "manual"
+    scope: list[str] = []
+    is_pointer = False
+    if fm_match:
+        fm = fm_match.group(1)
+        tm = re.search(r"^trigger:\s*(\S+)", fm, re.MULTILINE)
+        if tm:
+            trigger = tm.group(1)
+        if re.search(r"^scope:", fm, re.MULTILINE):
+            scope = re.findall(r"^\s+-\s+(.+)$", fm, re.MULTILINE)
+        if re.search(r"^ref:\s*\S+", fm, re.MULTILINE):
+            is_pointer = True
+    return {"trigger": trigger, "scope": scope, "is_pointer": is_pointer}
+
+
 @router.get("/agents", tags=["agents"], summary="List agents for a page")
 async def list_agents(site: str = "default", page_path: str = "") -> dict:
     prefix = agents_prefix(site, page_path)
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
-    return {"agents": names}
+
+    agents = []
+    for name in names:
+        key = f"{prefix}/{name}/agent.md"
+        meta: dict = {"trigger": "manual", "scope": [], "is_pointer": False}
+        try:
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+            text = obj["Body"].read().decode("utf-8")
+            meta = _extract_agent_meta(text)
+        except Exception:
+            pass
+        agents.append({"name": name, **meta})
+
+    return {"agents": agents}
 
 
 @router.post("/agents", tags=["agents"], summary="Create a new agent")
@@ -41,6 +73,7 @@ async def create_agent(
         raise HTTPException(status_code=409, detail="Agent already exists")
 
     skeleton = (
+        f"---\ntrigger: manual\n---\n\n"
         f"# Agent: {req.agent_name}\n\n"
         f"## Description\n\nDescribe what this agent does.\n\n"
         f"## Skills\n\n- (none)\n"

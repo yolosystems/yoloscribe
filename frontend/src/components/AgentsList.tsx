@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import CreateAgentModal from './CreateAgentModal'
+import type { AgentMeta } from '../App'
 
 interface Props {
-  agents: string[]
+  agents: AgentMeta[]
   activeFilePath: string
   pagePath: string
   apiBase: string
@@ -11,12 +12,25 @@ interface Props {
   onAgentsChanged: () => void
 }
 
+const TRIGGER_LABELS: Record<string, string> = {
+  manual: 'manual',
+  schedule: 'schedule',
+  on_write: 'on write',
+}
+
 export default function AgentsList({ agents, activeFilePath, pagePath, apiBase, site, token, onAgentsChanged }: Props) {
   const [showCreate, setShowCreate] = useState(false)
 
   function navigate(name: string) {
     const hash = pagePath ? `#/${pagePath}/.agents/${name}` : `#/.agents/${name}`
     window.location.hash = hash
+  }
+
+  function navigateRunLog(name: string) {
+    const path = pagePath
+      ? `${pagePath}/.agents/${name}/run_log.md`
+      : `.agents/${name}/run_log.md`
+    window.location.hash = `#/${path}`
   }
 
   function isActive(name: string) {
@@ -61,21 +75,35 @@ export default function AgentsList({ agents, activeFilePath, pagePath, apiBase, 
           {agents.length === 0 ? (
             <div className="agents-empty">No agents</div>
           ) : (
-            agents.map((name) => (
-              <div key={name} className={`agents-item-row${isActive(name) ? ' active' : ''}`}>
-                <button
-                  className="agents-item-name"
-                  onClick={() => navigate(name)}
-                >
-                  {name}
-                </button>
-                <button
-                  className="agents-delete-btn"
-                  title={`Delete ${name}`}
-                  onClick={(e) => handleDelete(name, e)}
-                >
-                  🗑
-                </button>
+            agents.map((agent) => (
+              <div key={agent.name} className={`agents-item-row${isActive(agent.name) ? ' active' : ''}`}>
+                <div className="agents-item-main" onClick={() => navigate(agent.name)}>
+                  <span className="agents-item-name">{agent.name}</span>
+                  <span className={`agents-trigger-badge agents-trigger-${agent.trigger.replace('_', '-')}`}>
+                    {agent.is_pointer ? 'ref' : (TRIGGER_LABELS[agent.trigger] ?? agent.trigger)}
+                  </span>
+                  {agent.scope.length > 0 && (
+                    <span className="agents-scope-hint" title={agent.scope.join(', ')}>
+                      {agent.scope[0]}{agent.scope.length > 1 ? ` +${agent.scope.length - 1}` : ''}
+                    </span>
+                  )}
+                </div>
+                <div className="agents-item-actions">
+                  <button
+                    className="agents-log-btn"
+                    title="View run log"
+                    onClick={(e) => { e.stopPropagation(); navigateRunLog(agent.name) }}
+                  >
+                    log
+                  </button>
+                  <button
+                    className="agents-delete-btn"
+                    title={`Delete ${agent.name}`}
+                    onClick={(e) => handleDelete(agent.name, e)}
+                  >
+                    🗑
+                  </button>
+                </div>
               </div>
             ))
           )}
