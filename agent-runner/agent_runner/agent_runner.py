@@ -553,6 +553,44 @@ def _apply_read_limit(tools: list, max_reads: int) -> list:
     return result
 
 
+def _write_run_log(
+    s3,
+    run_log_key: str,
+    agent_name: str,
+    status: str,
+    trigger: str,
+    duration_s: float,
+    detail: str = "",
+) -> None:
+    """Prepend a run log entry to the agent's run_log.md (best-effort; never raises)."""
+    import datetime
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        f"## {agent_name} — {now}",
+        "",
+        f"**Status:** {status}  ",
+        f"**Trigger:** {trigger}  ",
+        f"**Duration:** {duration_s:.1f}s",
+    ]
+    if detail:
+        lines += ["", detail]
+    lines += ["", "---", ""]
+    entry = "\n".join(lines) + "\n"
+    try:
+        existing = s3.get_object(Bucket=BUCKET, Key=run_log_key)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    try:
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=run_log_key,
+            Body=(entry + existing).encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception as exc:
+        log.warning("Failed to write run_log %s: %s", run_log_key, exc)
+
+
 def _write_notification(s3, site: str, message: str) -> None:
     """Prepend a notification entry to {site}/.user/notifications.md."""
     import datetime
@@ -624,10 +662,14 @@ def main() -> None:
     s3 = _s3_client()
     store = _make_secrets_store(s3)
 
-    # content holds the current page content; populated in step 2.
-    # We declare it here so the top-level except block can use it for
-    # error reporting even if step 2 never ran.
+    _run_start = time.monotonic()
+    _site = AGENT_MD_KEY.split("/")[0]
+    _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
+
+    # content and agent_def are declared here so the top-level except block
+    # can use them for error reporting even if early steps never ran.
     content = ""
+    agent_def = None
 
     try:
         # 1. Read and parse agent.md
@@ -636,9 +678,8 @@ def main() -> None:
             agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
         except AgentDefinitionError as exc:
             log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
-            site = AGENT_MD_KEY.split("/")[0]
             _write_notification(
-                s3, site,
+                s3, _site,
                 f"**Invalid agent definition** (`{AGENT_MD_KEY}`):\n\n{exc}",
             )
             return
@@ -742,6 +783,17 @@ def main() -> None:
                         "another writer on every attempt. Please try again.\n\n"
                     )
                     _write_error_to_content(s3, content, error_block)
+                    _write_run_log(
+                        s3, _run_log_key, agent_def.name, "failed",
+                        agent_def.trigger, time.monotonic() - _run_start,
+                        f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
+                    )
+                    _write_notification(
+                        s3, _site,
+                        f"**Agent write conflict** (`{AGENT_MD_KEY}`):\n\n"
+                        f"Could not save `{CONTENT_KEY}` — page modified by another writer "
+                        f"on every attempt.",
+                    )
                     return
 
                 log.warning(
@@ -756,9 +808,24 @@ def main() -> None:
             _write_error_to_content(s3, content, error_block)
         except Exception as write_exc:
             log.error("Additionally failed to write error to content: %s", write_exc)
+        _agent_name = agent_def.name if agent_def is not None else "unknown"
+        _trigger = agent_def.trigger if agent_def is not None else "manual"
+        _write_run_log(
+            s3, _run_log_key, _agent_name, "failed",
+            _trigger, time.monotonic() - _run_start,
+            f"Error: {exc}",
+        )
+        _write_notification(
+            s3, _site,
+            f"**Agent execution failed** (`{AGENT_MD_KEY}`):\n\n{exc}",
+        )
         return
 
     log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
+    _write_run_log(
+        s3, _run_log_key, agent_def.name, "success",
+        agent_def.trigger, time.monotonic() - _run_start,
+    )
     _enqueue_index_job(CONTENT_KEY)
 
 
