@@ -33,7 +33,10 @@ Your job is to help the user define a new agent for a wiki page by:
 5. Ask how the agent should be triggered:
    - "manual" (default): runs only when explicitly invoked.
    - "schedule": runs on a cron schedule. Ask for a cron expression (e.g. "0 * * * *")
-     and timezone (default UTC).
+     and timezone (default UTC). Then ask whether the agent should operate across
+     multiple pages. If yes, ask for scope patterns (e.g. "*" for direct children,
+     "**" for all descendants, "blog/*" for direct children of blog/). If no scope
+     is given, the agent will only be permitted to read/write its own page.
    - "on_write": runs whenever a page in its scope is saved. Ask the user to specify
      scope patterns (e.g. "**" for all descendants, "blog/*" for direct children of
      blog/). For on_write agents, the agent is defined at the page whose subtree it
