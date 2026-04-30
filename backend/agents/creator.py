@@ -48,10 +48,18 @@ Your job is to help the user define a new agent for a wiki page by:
    overwrite=True.
 7. If the agent's trigger is "on_write":
    - Remind the user that each page they want to trigger this agent must have an
-     on_write subscription. Subscriptions are created via create_on_write_subscription.
-   - Ask if they want to subscribe the current page right now.
-   - If yes, call create_on_write_subscription with the current page_path, the ref
-     pointing to the just-created agent.md, and the agent name.
+     on_write subscription. A subscription is a minimal pointer-only agent.md:
+       ---
+       trigger: on_write
+       ref: {page_path}/.agents/{agent_name}/agent.md
+       ---
+     It has NO description, NO skills, NO body — only frontmatter with trigger and ref.
+     Subscriptions are created via create_on_write_subscription, NOT via put_agent.
+   - Ask if they want to subscribe the current page and/or any named child pages.
+   - For each page the user confirms, call create_on_write_subscription with that
+     page_path, the ref pointing to the just-created agent.md, and the agent name.
+   - NEVER use put_agent to create subscriptions — that writes a full agent definition
+     instead of a pointer and will cause the wrong agent to run.
 8. After the agent is created, call get_skill_required_vars for each chosen skill.
    Compile the full list of required credential names and tell the user:
    "Your agent has been created! Before running it, please authenticate the following
