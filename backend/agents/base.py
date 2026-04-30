@@ -567,7 +567,7 @@ class S3Tools:
 
     @tool
     def create_on_write_subscription(
-        self, site: str, page_path: str, ref: str, agent_name: str
+        self, site: str, page_path: str, ref: str, agent_name: str = ""
     ) -> str:
         """Create an on_write pointer agent linking a page to an upstream agent.
 
@@ -579,10 +579,19 @@ class S3Tools:
             site: The site name.
             page_path: Page that should trigger the upstream agent on writes.
             ref: Site-relative S3 path to the upstream agent.md
-                 (e.g. "projects/.agents/linear-sync/agent.md").
-            agent_name: Name for the pointer — usually the same as the upstream agent.
+                 (e.g. "projects/.agents/link-checker/agent.md").
+            agent_name: Name for the pointer — defaults to the agent name derived
+                        from ref (the second-to-last path segment before agent.md).
         """
         self._require_site_ownership(site)
+        # Derive agent_name from ref if not supplied
+        if not agent_name:
+            ref_parts = ref.rstrip("/").split("/")
+            agent_name = (
+                ref_parts[-2]
+                if len(ref_parts) >= 2 and ref_parts[-1] == "agent.md"
+                else ref_parts[-1]
+            )
         if not AGENT_NAME_RE.match(agent_name):
             return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
         key = f"{site}/{page_path}/.agents/{agent_name}/agent.md"
