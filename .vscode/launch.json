@@ -11,7 +11,7 @@
       "python": "${workspaceFolder}/backend/.venv/bin/python",
       "envFile": "${workspaceFolder}/.env",
       "jinja": true,
-      "justMyCode": true
+      "justMyCode": false
     }
   ]
 }

@@ -51,7 +51,7 @@ Your job is to help the user define a new agent for a wiki page by:
      on_write subscription. A subscription is a minimal pointer-only agent.md:
        ---
        trigger: on_write
-       ref: {page_path}/.agents/{agent_name}/agent.md
+       ref: {{page_path}}/.agents/{{agent_name}}/agent.md
        ---
      It has NO description, NO skills, NO body — only frontmatter with trigger and ref.
      Subscriptions are created via create_on_write_subscription, NOT via put_agent.
