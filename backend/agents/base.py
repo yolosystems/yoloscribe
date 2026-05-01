@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import re
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from strands import Agent, ModelRetryStrategy, tool
 
@@ -583,24 +586,31 @@ class S3Tools:
             agent_name: Name for the pointer — defaults to the agent name derived
                         from ref (the second-to-last path segment before agent.md).
         """
-        self._require_site_ownership(site)
-        # Derive agent_name from ref if not supplied
-        if not agent_name:
-            ref_parts = ref.rstrip("/").split("/")
-            agent_name = (
-                ref_parts[-2]
-                if len(ref_parts) >= 2 and ref_parts[-1] == "agent.md"
-                else ref_parts[-1]
+        try:
+            self._require_site_ownership(site)
+            # Derive agent_name from ref if not supplied
+            if not agent_name:
+                ref_parts = ref.rstrip("/").split("/")
+                agent_name = (
+                    ref_parts[-2]
+                    if len(ref_parts) >= 2 and ref_parts[-1] == "agent.md"
+                    else ref_parts[-1]
+                )
+            if not AGENT_NAME_RE.match(agent_name):
+                return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
+            key = f"{site}/{page_path}/.agents/{agent_name}/agent.md"
+            content = f"---\ntrigger: on_write\nref: {ref}\n---\n"
+            self.write_text(key, content)
+            return (
+                f"Subscription created: page '{page_path}' will trigger "
+                f"agent '{agent_name}' on write."
             )
-        if not AGENT_NAME_RE.match(agent_name):
-            return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
-        key = f"{site}/{page_path}/.agents/{agent_name}/agent.md"
-        content = f"---\ntrigger: on_write\nref: {ref}\n---\n"
-        self.write_text(key, content)
-        return (
-            f"Subscription created: page '{page_path}' will trigger "
-            f"agent '{agent_name}' on write."
-        )
+        except Exception:
+            logger.exception(
+                "create_on_write_subscription failed: site=%r page_path=%r ref=%r agent_name=%r",
+                site, page_path, ref, agent_name,
+            )
+            raise
 
     @tool
     def create_page(self, site: str, page_path: str, content: str = "") -> str:
