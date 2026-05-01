@@ -18,6 +18,13 @@ import TokensPanel from './components/TokensPanel'
 
 type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
+export interface AgentMeta {
+  name: string
+  trigger: 'manual' | 'schedule' | 'on_write' | string
+  scope: string[]
+  is_pointer: boolean
+}
+
 // In LOCAL_MODE Supabase auth is bypassed — the backend accepts all requests
 // as the local user. A synthetic session is used so existing session-gated
 // code paths continue to work without changes.
@@ -168,7 +175,7 @@ export default function App() {
   const [saveConflict, setSaveConflict] = useState(false)
   const [etag, setEtag] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [agents, setAgents] = useState<string[]>([])
+  const [agents, setAgents] = useState<AgentMeta[]>([])
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined)
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)

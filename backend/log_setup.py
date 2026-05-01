@@ -19,7 +19,12 @@ def configure_logging() -> None:
             rename_fields={"asctime": "ts", "levelname": "level", "name": "logger"},
         )
     )
+    level = getattr(logging, _LOG_LEVEL, logging.INFO)
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(getattr(logging, _LOG_LEVEL, logging.INFO))
+    root.setLevel(level)
+    # Strands loggers default to NOTSET and propagate, but Uvicorn's logging
+    # init can reset the root level before our module loads. Setting the
+    # "strands" logger explicitly guarantees it honours LOG_LEVEL.
+    logging.getLogger("strands").setLevel(level)

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import re
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from strands import Agent, ModelRetryStrategy, tool
 
@@ -428,6 +431,8 @@ class S3Tools:
         description: str,
         skills: list[str],
         page_path: str = "",
+        trigger: str = "manual",
+        scope: list[str] | None = None,
         schedule: str = "",
         timezone: str = "",
         model: str = "",
@@ -441,8 +446,11 @@ class S3Tools:
             description: Agent purpose / system prompt.
             skills: List of skill names the agent should use.
             page_path: Relative page path; empty for root.
-            schedule: Optional cron expression for scheduled execution (e.g. "0 * * * *").
-            timezone: Optional timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
+            trigger: When the agent runs — "manual", "schedule", or "on_write".
+            scope: Glob patterns (relative to agent's page) for cross-page agents.
+                   e.g. ["**"] to match all descendants. Leave empty for own-page only.
+            schedule: Cron expression — required when trigger is "schedule".
+            timezone: Timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
                    Leave blank to use the server default.
             overwrite: If False (default) and an agent with this name already exists,
@@ -458,6 +466,13 @@ class S3Tools:
             )
         if err := _check_injection(description, "description"):
             return err
+
+        valid_triggers = {"manual", "schedule", "on_write"}
+        if trigger not in valid_triggers:
+            return f"Error: invalid trigger '{trigger}'. Use one of: manual, schedule, on_write."
+        if trigger == "schedule" and not schedule:
+            return "Error: trigger 'schedule' requires a 'schedule' cron expression."
+
         prefix = agents_prefix(site, page_path)
         key = f"{prefix}/{agent_name}/agent.md"
         if not overwrite:
@@ -467,22 +482,135 @@ class S3Tools:
                     f"Error: agent '{agent_name}' already exists. "
                     f"Pass overwrite=True to replace it, or choose a different name."
                 )
-        skills_list = "\n".join(f"- {s}" for s in skills)
-        optional_sections = ""
+
+        # Build YAML frontmatter
+        fm_lines = ["---", f"trigger: {trigger}"]
         if schedule:
-            optional_sections += f"## Schedule\n\n{schedule}\n\n"
+            fm_lines.append(f"schedule: {schedule}")
         if timezone:
-            optional_sections += f"## Timezone\n\n{timezone}\n\n"
-        if model:
-            optional_sections += f"## Model\n\n{model}\n\n"
-        content = (
+            fm_lines.append(f"timezone: {timezone}")
+        if scope:
+            fm_lines.append("scope:")
+            for pattern in scope:
+                fm_lines.append(f"  - {pattern}")
+        fm_lines.append("---")
+        fm_block = "\n".join(fm_lines) + "\n\n"
+
+        skills_list = "\n".join(f"- {s}" for s in skills)
+        body = (
             f"# Agent: {agent_name}\n\n"
             f"## Description\n\n{description}\n\n"
-            f"{optional_sections}"
             f"## Skills\n\n{skills_list}\n"
         )
-        self.write_text(key, content)
+        if model:
+            body += f"\n## Model\n\n{model}\n"
+
+        self.write_text(key, fm_block + body)
         return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
+
+    @tool
+    def list_ancestor_scope_agents(self, site: str, page_path: str) -> str:
+        """Find agents in ancestor pages that declare cross-page scope.
+
+        Walks up the page hierarchy from page_path to the site root and lists
+        any agents that have scope patterns declared in their frontmatter.
+        Use this when creating a page or agent to offer on_write subscriptions.
+
+        Args:
+            site: The site name.
+            page_path: Relative page path of the new page.
+        """
+        self._require_site_ownership(site)
+        import re as _re
+
+        parts = [p for p in page_path.split("/") if p] if page_path else []
+        # Check all ancestors (not the page itself)
+        ancestors: list[str] = []
+        for i in range(len(parts) - 1, -1, -1):
+            ancestors.append("/".join(parts[:i]) if i > 0 else "")
+
+        found: list[str] = []
+        for ancestor in ancestors:
+            prefix = f"{site}/{ancestor}/.agents/" if ancestor else f"{site}/.agents/"
+            try:
+                resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
+            except Exception:
+                continue
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("/agent.md"):
+                    continue
+                try:
+                    text = self.read_text(key)
+                except Exception:
+                    continue
+                # Parse frontmatter only (between first --- pair)
+                fm_match = _re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, _re.DOTALL)
+                if not fm_match:
+                    continue
+                fm_text = fm_match.group(1)
+                scope_m = _re.search(r"^scope:", fm_text, _re.MULTILINE)
+                if not scope_m:
+                    continue
+                scope_patterns = _re.findall(r"^\s+-\s+(.+)$", fm_text, _re.MULTILINE)
+                if not scope_patterns:
+                    continue
+                agent_name = key.split("/")[-2]
+                ancestor_label = ancestor if ancestor else "(root)"
+                ref = key[len(f"{site}/"):]
+                found.append(
+                    f"- **{agent_name}** at page `{ancestor_label}` "
+                    f"— scope: {', '.join(f'`{p}`' for p in scope_patterns)} "
+                    f"— ref: `{ref}`"
+                )
+
+        if not found:
+            return "No ancestor agents with cross-page scope found."
+        return "Ancestor agents with declared scope:\n\n" + "\n".join(found)
+
+    @tool
+    def create_on_write_subscription(
+        self, site: str, page_path: str, ref: str, agent_name: str = ""
+    ) -> str:
+        """Create an on_write pointer agent linking a page to an upstream agent.
+
+        Creates a minimal agent.md at {page_path}/.agents/{agent_name}/agent.md
+        with trigger: on_write and the given ref. When this page's content.md is
+        saved, the referenced agent will be queued to run against that page.
+
+        Args:
+            site: The site name.
+            page_path: Page that should trigger the upstream agent on writes.
+            ref: Site-relative S3 path to the upstream agent.md
+                 (e.g. "projects/.agents/link-checker/agent.md").
+            agent_name: Name for the pointer — defaults to the agent name derived
+                        from ref (the second-to-last path segment before agent.md).
+        """
+        try:
+            self._require_site_ownership(site)
+            # Derive agent_name from ref if not supplied
+            if not agent_name:
+                ref_parts = ref.rstrip("/").split("/")
+                agent_name = (
+                    ref_parts[-2]
+                    if len(ref_parts) >= 2 and ref_parts[-1] == "agent.md"
+                    else ref_parts[-1]
+                )
+            if not AGENT_NAME_RE.match(agent_name):
+                return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
+            key = f"{site}/{page_path}/.agents/{agent_name}/agent.md"
+            content = f"---\ntrigger: on_write\nref: {ref}\n---\n"
+            self.write_text(key, content)
+            return (
+                f"Subscription created: page '{page_path}' will trigger "
+                f"agent '{agent_name}' on write."
+            )
+        except Exception:
+            logger.exception(
+                "create_on_write_subscription failed: site=%r page_path=%r ref=%r agent_name=%r",
+                site, page_path, ref, agent_name,
+            )
+            raise
 
     @tool
     def create_page(self, site: str, page_path: str, content: str = "") -> str:
@@ -542,32 +670,18 @@ class SkillDefinition:
 def parse_agent_md(text: str) -> AgentDefinition:
     """Parse an agent.md file into an AgentDefinition.
 
-    Expects the following structure (Schedule and Timezone sections are optional):
-
-        # Agent: {name}
-
-        ## Description
-
-        {description}
-
-        ## Schedule        ← optional
-
-        {cron}
-
-        ## Timezone        ← optional
-
-        {tz}
-
-        ## Skills
-
-        - skill-a
-        - skill-b
+    Handles both frontmatter and legacy section-only formats.
+    Frontmatter is stripped before section parsing so skills are always
+    read from the markdown body.
     """
+    # Strip YAML frontmatter if present so section parsing still works
+    _, body = _parse_frontmatter(text)
+
     sections: dict[str, list[str]] = {}
     current_section: str | None = None
     name = ""
 
-    for line in text.splitlines():
+    for line in body.splitlines():
         if line.startswith("# Agent:"):
             name = line[len("# Agent:"):].strip()
         elif line.startswith("## "):

@@ -16,6 +16,7 @@ Environment variables:
     AWS_PROFILE     (optional) named AWS profile for local development
     LOCAL_MCP_CONFIG_PATH  (optional) path to local-mcp-servers.json for LOCAL_MODE STDIO tools
                            (default: /app/local-mcp-servers.json)
+    AGENT_RUNNER_MAX_PAGE_READS  max wiki_read calls per agent run (default: 10)
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ import boto3
 from strands import Agent, ModelRetryStrategy
 from strands_tools import http_request
 
-from .parse import parse_agent_md
+from .parse import AgentDefinitionError, parse_agent_md
 
 BUCKET = os.environ["BUCKET"]
 AGENT_MD_KEY = os.environ["AGENT_MD_KEY"]
@@ -51,6 +52,7 @@ S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
+AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -514,6 +516,103 @@ def _sanitize_tool_names(tools: list) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
+class _ReadLimitedTool:
+    """Proxy that caps wiki_read calls to AGENT_RUNNER_MAX_PAGE_READS per run."""
+
+    def __init__(self, wrapped, counter: list[int], max_reads: int) -> None:
+        self._wrapped = wrapped
+        self._counter = counter
+        self._max_reads = max_reads
+
+    def __call__(self, **kwargs):
+        if self._counter[0] >= self._max_reads:
+            return (
+                f"Error: Page read limit of {self._max_reads} reached. "
+                f"This agent is not permitted to read more pages in a single run. "
+                f"Complete your task based on what you have already read."
+            )
+        self._counter[0] += 1
+        return self._wrapped(**kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._wrapped, name)
+
+
+def _apply_read_limit(tools: list, max_reads: int) -> list:
+    """Wrap any wiki_read tools to enforce the per-run page read limit."""
+    if max_reads <= 0:
+        return tools
+    counter: list[int] = [0]
+    result = []
+    for t in tools:
+        name = getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "")
+        if name == "wiki_read":
+            result.append(_ReadLimitedTool(t, counter, max_reads))
+        else:
+            result.append(t)
+    return result
+
+
+def _write_run_log(
+    s3,
+    run_log_key: str,
+    agent_name: str,
+    status: str,
+    trigger: str,
+    duration_s: float,
+    detail: str = "",
+) -> None:
+    """Prepend a run log entry to the agent's run_log.md (best-effort; never raises)."""
+    import datetime
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        f"## {agent_name} — {now}",
+        "",
+        f"**Status:** {status}  ",
+        f"**Trigger:** {trigger}  ",
+        f"**Duration:** {duration_s:.1f}s",
+    ]
+    if detail:
+        lines += ["", detail]
+    lines += ["", "---", ""]
+    entry = "\n".join(lines) + "\n"
+    try:
+        existing = s3.get_object(Bucket=BUCKET, Key=run_log_key)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    try:
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=run_log_key,
+            Body=(entry + existing).encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception as exc:
+        log.warning("Failed to write run_log %s: %s", run_log_key, exc)
+
+
+def _write_notification(s3, site: str, message: str) -> None:
+    """Prepend a notification entry to {site}/.user/notifications.md."""
+    import datetime
+    key = f"{site}/.user/notifications.md"
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    try:
+        existing = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    combined = entry + existing
+    try:
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=combined.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception as exc:
+        log.error("Failed to write notification for site %s: %s", site, exc)
+
+
 def _write_error_to_content(s3, content: str, error_block: str) -> None:
     s3.put_object(
         Bucket=BUCKET,
@@ -563,15 +662,27 @@ def main() -> None:
     s3 = _s3_client()
     store = _make_secrets_store(s3)
 
-    # content holds the current page content; populated in step 2.
-    # We declare it here so the top-level except block can use it for
-    # error reporting even if step 2 never ran.
+    _run_start = time.monotonic()
+    _site = AGENT_MD_KEY.split("/")[0]
+    _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
+
+    # content and agent_def are declared here so the top-level except block
+    # can use them for error reporting even if early steps never ran.
     content = ""
+    agent_def = None
 
     try:
         # 1. Read and parse agent.md
         obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
-        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+        try:
+            agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+        except AgentDefinitionError as exc:
+            log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
+            _write_notification(
+                s3, _site,
+                f"**Invalid agent definition** (`{AGENT_MD_KEY}`):\n\n{exc}",
+            )
+            return
 
         # 2. Build MCP clients once — not repeated on write-conflict retries
         site = AGENT_MD_KEY.split("/")[0]
@@ -606,6 +717,9 @@ def main() -> None:
                 except Exception as exc:
                     log.warning("Failed to load tools from MCP client: %s", exc)
 
+            tools = _apply_read_limit(tools, AGENT_RUNNER_MAX_PAGE_READS)
+            log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
+
             model_key = agent_def.model or _resolve_model_key(
                 "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
             )
@@ -614,6 +728,8 @@ def main() -> None:
             system_prompt = (
                 agent_def.description
                 + "\n\n"
+                + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
+                f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
                 + "IMPORTANT: When you have finished your work, your final message must contain "
                 "ONLY the complete updated markdown content — no preamble, no explanation, no "
                 "summary, no commentary. Output the raw markdown and nothing else."
@@ -667,6 +783,17 @@ def main() -> None:
                         "another writer on every attempt. Please try again.\n\n"
                     )
                     _write_error_to_content(s3, content, error_block)
+                    _write_run_log(
+                        s3, _run_log_key, agent_def.name, "failed",
+                        agent_def.trigger, time.monotonic() - _run_start,
+                        f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
+                    )
+                    _write_notification(
+                        s3, _site,
+                        f"**Agent write conflict** (`{AGENT_MD_KEY}`):\n\n"
+                        f"Could not save `{CONTENT_KEY}` — page modified by another writer "
+                        f"on every attempt.",
+                    )
                     return
 
                 log.warning(
@@ -681,9 +808,24 @@ def main() -> None:
             _write_error_to_content(s3, content, error_block)
         except Exception as write_exc:
             log.error("Additionally failed to write error to content: %s", write_exc)
+        _agent_name = agent_def.name if agent_def is not None else "unknown"
+        _trigger = agent_def.trigger if agent_def is not None else "manual"
+        _write_run_log(
+            s3, _run_log_key, _agent_name, "failed",
+            _trigger, time.monotonic() - _run_start,
+            f"Error: {exc}",
+        )
+        _write_notification(
+            s3, _site,
+            f"**Agent execution failed** (`{AGENT_MD_KEY}`):\n\n{exc}",
+        )
         return
 
     log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
+    _write_run_log(
+        s3, _run_log_key, agent_def.name, "success",
+        agent_def.trigger, time.monotonic() - _run_start,
+    )
     _enqueue_index_job(CONTENT_KEY)
 
 
