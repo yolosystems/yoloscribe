@@ -28,6 +28,7 @@ from routers import (
     health_router,
     mcp_oauth_router,
     oauth_router,
+    obsidian_router,
     pages_router,
     settings_router,
     site_router,
@@ -67,6 +68,7 @@ _OPENAPI_TAGS = [
     {"name": "secrets", "description": "Manage per-user credentials stored in AWS Secrets Manager."},
     {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
     {"name": "tokens", "description": "Create, list, and revoke site-scoped API tokens."},
+    {"name": "obsidian", "description": "Purpose-built sync API for the YoloScribe Obsidian plugin."},
     {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems."},
     {"name": "mcp", "description": "Remote MCP server for AI coding agents (Claude Code, etc.)."},
 ]
@@ -161,6 +163,7 @@ else:
 app.include_router(health_router)
 app.include_router(assets_router)
 app.include_router(content_router)
+app.include_router(obsidian_router)
 app.include_router(pages_router)
 app.include_router(settings_router)
 app.include_router(chat_router)
