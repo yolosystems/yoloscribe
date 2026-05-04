@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
+import sse_broadcaster
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from rate_limit import limiter
@@ -212,4 +213,6 @@ async def put_content_route(
         enqueue_index_job(content_key, claims.user_id)
         if not is_shared_write:
             enqueue_on_write_agents(site, content_key, claims.user_id)
+        page_path = page_path_from_file_path(path)
+        sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "web"})
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
