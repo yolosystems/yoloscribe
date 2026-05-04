@@ -6,9 +6,12 @@ import {
 } from "./settings";
 import { bootstrapSync, deltaSync } from "./sync";
 import { registerSaveHandler } from "./save";
+import { SseClient } from "./events";
 
 export default class YoloScribePlugin extends Plugin {
 	settings: YoloScribeSettings;
+	sseStatus: "disconnected" | "connected" | "reconnecting" = "disconnected";
+	private sseClient: SseClient | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -17,11 +20,14 @@ export default class YoloScribePlugin extends Plugin {
 		if (this.settings.apiToken) {
 			await this.syncOnOpen();
 			registerSaveHandler(this);
+			this.sseClient = new SseClient(this);
+			this.sseClient.connect();
 		}
 	}
 
 	onunload() {
-		// SSE teardown will be wired here in a subsequent issue.
+		this.sseClient?.disconnect();
+		this.sseClient = null;
 	}
 
 	async loadSettings() {
