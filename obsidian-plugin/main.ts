@@ -5,6 +5,7 @@ import {
 	YoloScribeSettingTab,
 } from "./settings";
 import { bootstrapSync, deltaSync } from "./sync";
+import { registerSaveHandler } from "./save";
 
 export default class YoloScribePlugin extends Plugin {
 	settings: YoloScribeSettings;
@@ -15,6 +16,7 @@ export default class YoloScribePlugin extends Plugin {
 
 		if (this.settings.apiToken) {
 			await this.syncOnOpen();
+			registerSaveHandler(this);
 		}
 	}
 
