@@ -1,0 +1,10 @@
+{
+  "id": "yoloscribe",
+  "name": "YoloScribe",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Bidirectional sync between your Obsidian vault and a YoloScribe wiki site.",
+  "author": "Yolo Systems",
+  "authorUrl": "https://yoloscribe.com",
+  "isDesktopOnly": false
+}
