@@ -1,9 +1,10 @@
-import { Plugin } from "obsidian";
+import { Notice, Plugin } from "obsidian";
 import {
 	DEFAULT_SETTINGS,
 	type YoloScribeSettings,
 	YoloScribeSettingTab,
 } from "./settings";
+import { bootstrapSync, deltaSync } from "./sync";
 
 export default class YoloScribePlugin extends Plugin {
 	settings: YoloScribeSettings;
@@ -11,10 +12,14 @@ export default class YoloScribePlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new YoloScribeSettingTab(this.app, this));
+
+		if (this.settings.apiToken) {
+			await this.syncOnOpen();
+		}
 	}
 
 	onunload() {
-		// Sync teardown will be wired here in subsequent issues.
+		// SSE teardown will be wired here in a subsequent issue.
 	}
 
 	async loadSettings() {
@@ -27,5 +32,18 @@ export default class YoloScribePlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async syncOnOpen(): Promise<void> {
+		try {
+			if (!this.settings.lastSyncedAt) {
+				await bootstrapSync(this);
+			} else {
+				await deltaSync(this);
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			new Notice(`YoloScribe: sync failed — ${msg}. Check settings.`);
+		}
 	}
 }
