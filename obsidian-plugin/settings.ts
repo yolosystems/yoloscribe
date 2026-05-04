@@ -163,6 +163,7 @@ export class YoloScribeSettingTab extends PluginSettingTab {
 			statusEl.setText(
 				`✓ Connected to site: ${data.site} (${data.page_count} pages)`
 			);
+			await this.plugin.activate();
 		} catch {
 			statusEl.setText(
 				`✗ Could not reach ${apiBaseUrl} — check the base URL.`

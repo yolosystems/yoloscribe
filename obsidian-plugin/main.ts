@@ -19,6 +19,7 @@ export default class YoloScribePlugin extends Plugin {
 	private _sseStatus: "disconnected" | "connected" | "reconnecting" = "disconnected";
 	private sseClient: SseClient | null = null;
 	private statusBarEl: HTMLElement | null = null;
+	private _active = false;
 
 	get sseStatus() { return this._sseStatus; }
 	set sseStatus(val: "disconnected" | "connected" | "reconnecting") {
@@ -34,15 +35,26 @@ export default class YoloScribePlugin extends Plugin {
 		this.addSettingTab(new YoloScribeSettingTab(this.app, this));
 
 		if (this.settings.apiToken) {
+			await this.activate();
+		}
+	}
+
+	// Called from onload() when a token is already present, and from the
+	// settings tab after a successful token verify. Idempotent.
+	async activate(): Promise<void> {
+		if (this._active) return;
+		this._active = true;
+
+		if (!this.statusBarEl) {
 			this.statusBarEl = this.addStatusBarItem();
 			this.statusBarEl.setText(STATUS_LABELS["disconnected"]);
 			this.statusBarEl.title = "YoloScribe: disconnected";
-
-			await this.syncOnOpen();
-			registerSaveHandler(this);
-			this.sseClient = new SseClient(this);
-			this.sseClient.connect();
 		}
+
+		await this.syncOnOpen();
+		registerSaveHandler(this);
+		this.sseClient = new SseClient(this);
+		this.sseClient.connect();
 	}
 
 	onunload() {
