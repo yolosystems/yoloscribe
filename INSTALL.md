@@ -1,311 +1,202 @@
-# Local Development — Quick Start
+# Installation
 
-No AWS account required. Everything runs locally via Docker Compose.
+## Local development (no AWS required)
 
-## Prerequisites
+The full stack runs via Docker Compose using MinIO (S3) and ElasticMQ (SQS) in place of AWS services. No sign-in required.
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker + Docker Compose)
-- [Node.js](https://nodejs.org/) 18+ (for the frontend)
-- An [Anthropic API key](https://console.anthropic.com/)
-
-## 1. Configure
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/), an [Anthropic API key](https://console.anthropic.com/)
 
 ```bash
 cp .env.local .env
-```
-
-Open `.env` and set your API key:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-## 2. Start everything
-
-```bash
+# Set ANTHROPIC_API_KEY in .env
 docker compose up -d
 ```
 
-This starts:
-| Service | URL | Description |
-|---|---|---|
-| **frontend** | http://localhost:5173 | React SPA (nginx, built) → redirects to `/local/` |
-| **backend** | http://localhost:8000 | FastAPI backend |
-| **agent-runner** | — | Async agent worker (polls SQS) |
-| **MinIO** | http://localhost:9000 | Local S3 (API) |
-| MinIO console | http://localhost:9001 | Web UI — user: `yoloscribe` / pass: `yoloscribe` |
-| **ElasticMQ** | http://localhost:9324 | Local SQS |
+Open http://localhost:5173 — redirects to `/local/`.
 
-## 3. Open the browser
+| Service | URL |
+|---|---|
+| Wiki | http://localhost:5173 |
+| Backend + Swagger | http://localhost:8000/docs |
+| MinIO console | http://localhost:9001 (user/pass: `yoloscribe`) |
+| ElasticMQ | http://localhost:9324 |
 
-Navigate to http://localhost:5173 — it redirects automatically to your local wiki at `/local/`.
+### Active frontend development
 
-No sign-in required. The topbar shows **Local** instead of an auth avatar.
-
-## How local mode works
-
-Setting `LOCAL_MODE=true` makes the following changes:
-
-- **Auth** — all requests are treated as the `local` user with site `local`. No sign-in required.
-- **Provisioning** — `/provision` skips Supabase and IAM/K8s calls; it just writes files to S3 (MinIO).
-- **S3** — all bucket operations go to MinIO via `S3_ENDPOINT_URL`.
-- **SQS** — all queue operations go to ElasticMQ via `SQS_ENDPOINT_URL`.
-- **Agent indexing** — `LOCAL_RUNNER=true` runs the index job inline (no K8s).
-
-## Active frontend development (optional)
-
-The frontend container serves a pre-built bundle — there's no hot reload. If you're working on the frontend, run the Vite dev server on the host instead:
+The frontend container serves a pre-built bundle. For hot reload, run the Vite dev server on the host instead:
 
 ```bash
-# Start everything except the frontend container
 docker compose up -d minio minio-init elasticmq backend agent-runner
-
-# Run the Vite dev server with local mode flags
-cd frontend
-npm install
-VITE_LOCAL_MODE=true npm run dev
+cd frontend && npm install && VITE_LOCAL_MODE=true npm run dev
 ```
 
-The Vite proxy (`/api → localhost:8000`) routes API calls to the backend container. Open http://localhost:5173/local/.
-
-After frontend changes, rebuild the container with:
+### Running backend outside Docker
 
 ```bash
-docker compose build frontend && docker compose up -d frontend
-```
-
-## Running backend outside Docker (optional)
-
-If you want to iterate on the backend without rebuilding the image:
-
-```bash
-# Start only the infrastructure services
 docker compose up -d minio minio-init elasticmq
-
-# Run the backend locally
-cd backend
-uv sync
-uv run --env-file ../.env uvicorn main:app --reload
+cd backend && uv sync && uv run --env-file ../.env uvicorn main:app --reload
 ```
 
-## Limitations
+### Limitations in local mode
 
-The following features require AWS in production and are disabled / degraded in local mode:
+- **Semantic search** — requires S3 Vectors + Bedrock; not available locally
+- **Single user only** — local mode runs as a fixed `local` user with no auth; multi-user provisioning (Supabase/Cognito rows, per-user IAM roles) is not needed and not supported
 
-- **OAuth tool credentials** — Secrets Manager is not available; saving credentials will fail.
-- **Semantic search** — requires S3 Vectors + Bedrock; not available locally.
-- **User provisioning** — Supabase row is not created; only the S3 content is written.
+OAuth-based skill credentials work in local mode — tokens are stored in MinIO at `_secrets/` instead of Secrets Manager.
 
 ---
 
-# AWS Self-Hosted Install (Cognito + DynamoDB)
+## Production install
 
-This section covers replacing Supabase with an all-AWS auth stack. Use this path if you are self-hosting YoloScribe and do not want a Supabase dependency.
+### Third-party services
 
-**Prerequisites:**
-- An AWS account with an existing Cognito User Pool configured for your identity provider (Google, Okta, SAML, etc.)
-- The Cognito Hosted UI enabled on your User Pool
-- An app client with a client secret, and the YoloScribe callback URL registered as an allowed redirect URI
+#### Anthropic API
 
-## 1. Create DynamoDB tables
+Create an API key at [console.anthropic.com](https://console.anthropic.com). Set as `ANTHROPIC_API_KEY`. Required — all agent execution goes through the Claude API (or Bedrock; see AWS section below).
 
-Run the setup script once before deploying:
+#### Supabase (default auth)
 
-```bash
-AWS_PROFILE=myprofile AWS_REGION=us-east-1 ./infra/scripts/setup_dynamodb.sh
-```
+YoloScribe uses [Supabase](https://supabase.com) for auth by default. Free tier is sufficient.
 
-This creates two tables (idempotent — safe to re-run):
+- Create a project and enable **Google OAuth** under Authentication → Providers
+- Note your **Project URL** (`SUPABASE_URL`) and **service role key** (`SUPABASE_SERVICE_ROLE_KEY`)
+- Note your **anon key** (`VITE_SUPABASE_ANON_KEY`) for the frontend build
+- Configure a **webhook** on the Auth → Webhooks page pointing at `https://your-domain/webhooks/user-created` (event: `INSERT` on `auth.users`); set `WEBHOOK_SECRET` to match
 
-| Table | Purpose |
-|---|---|
-| `yoloscribe-user-site` | Maps user UUID → site name |
-| `yoloscribe-api-tokens` | Stores hashed API tokens |
+The webhook fires when a user signs up and triggers per-user IAM role + Kubernetes ServiceAccount provisioning.
 
-Override table names with env vars if needed:
+#### Cognito (alternative — all-AWS, no Supabase)
 
-```bash
-DYNAMODB_USER_SITE_TABLE=my-user-site \
-DYNAMODB_API_TOKENS_TABLE=my-api-tokens \
-AWS_REGION=eu-west-1 \
-./infra/scripts/setup_dynamodb.sh
-```
+If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_PROVIDER=cognito` on the backend.
 
-**Table schemas:**
+- Create a **User Pool** with your identity provider (Google, Okta, SAML, etc.) and the Hosted UI enabled
+- Create **two app clients**: a confidential client (with secret) for the backend, and a public PKCE-only client for the browser
+- Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on the confidential client
+- Configure a **post-confirmation Lambda trigger** to POST to `https://your-domain/webhooks/user-created` with `{"user_id": "<sub>", "email": "<email>"}` and `X-Webhook-Secret` header
 
-`yoloscribe-user-site`:
-- PK: `user_id` (S) — Cognito sub (UUID)
-- Attributes: `site_name` (S), `theme` (S)
+Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below).
 
-`yoloscribe-api-tokens`:
-- PK: `token_id` (S) — UUID
-- GSI `user_id-index`: PK `user_id` (S), SK `created_at` (S) — for listing a user's tokens
-- GSI `token_hash-index`: PK `token_hash` (S) — for auth-time lookup
-- Attributes: `user_id`, `site_name`, `name`, `token_hash`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`
+#### Discord bot (optional)
 
-## 2. Cognito app clients
+- Create an application at [discord.com/developers](https://discord.com/developers/applications)
+- Create a bot user, enable the **Message Content** privileged intent, and copy the bot token (`DISCORD_BOT_TOKEN`)
+- Generate a 32-byte AES key for encrypting per-server API tokens: `python3 -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"` → set as `DISCORD_AES_KEY`
+- Set `YOLOSCRIBE_API_URL` to your backend's public URL
 
-Create **two** Cognito app clients on your User Pool:
+The bot is deployed as a standalone container from `discord-bot/Dockerfile`.
 
-| Client | Type | Used by |
+---
+
+### AWS infrastructure
+
+Copy `env.example` to `.env` and fill in values as you create each resource.
+
+#### S3 — wiki content
+
+Create one S3 bucket for wiki content. Enable **versioning** (provides page history). Set as `S3_BUCKET`.
+
+The bucket does not need to be public. The backend accesses it via IAM role; the frontend never talks to S3 directly.
+
+#### S3 Vectors — semantic search
+
+Create an **S3 Vectors bucket** and an index within it (1024 dimensions, cosine similarity, for use with `amazon.titan-embed-text-v2`). Set as `S3_VECTORS_BUCKET` and `S3_VECTORS_INDEX_NAME`.
+
+This is only required for semantic search. If you skip it, keyword search still works.
+
+#### SQS — async job queues
+
+Create two **standard SQS queues**:
+
+| Queue | Env var | Purpose |
 |---|---|---|
-| `yoloscribe-backend` | Confidential (has client secret) | Backend — MCP OAuth PKCE, token exchange |
-| `yoloscribe-frontend` | Public (no secret, PKCE only) | Browser — user sign-in via Hosted UI |
+| `yoloscribe-runner` | `SQS_QUEUE_URL` | Agent execution jobs |
+| `yoloscribe-indexing` | `SQS_INDEXING_QUEUE_URL` | Search indexing jobs |
 
-Register the following callback URLs on each client:
-- `https://<your-domain>/` — frontend redirect after sign-in
-- `https://<your-domain>/mcp/oauth/callback/*` — backend MCP OAuth (confidential client only)
+#### Bedrock — embeddings and models (optional)
 
-## 3. Deploy with Helm
+Enable model access in the Bedrock console for your region:
 
-The `infra/helm/yoloscribe-backend` chart supports `authProvider: cognito`. Create a values file for your environment (e.g. `backend.prod.values.yaml`):
+- **`amazon.titan-embed-text-v2:0`** — required for semantic search
+- **`anthropic.claude-*`** — only needed if you want to route agents through Bedrock instead of the Anthropic API directly (set `YOLOSCRIBE_MODEL=bedrock-sonnet` etc.)
+
+`us-west-2` has the broadest model availability.
+
+#### IAM — service roles
+
+Create three IAM roles with IRSA trust policies (trust the EKS OIDC provider for the appropriate Kubernetes namespace/ServiceAccount). Attach the policies from `infra/iam/`:
+
+| Role | Policy file | Used by |
+|---|---|---|
+| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
+| `yoloscribe-agent-runner` | `yoloscribe-agent-runner-policy.json` | Agent-runner pod — SQS poll, S3 read (agent/skill definitions only) |
+| `yoloscribe-indexer` | `yoloscribe-indexer-policy.json` | Indexer pod — SQS poll, S3 read, Bedrock, S3 Vectors |
+
+Per-user roles (`yoloscribe/yoloscribe-user-{user_id}`) are provisioned automatically at sign-up by the backend using the template in `infra/iam/yoloscribe-user-policy-template.json`. Each role is scoped to that user's S3 prefix and Secrets Manager namespace only.
+
+Set `EKS_OIDC_PROVIDER`, `AWS_ACCOUNT_ID`, `AWS_REGION`, and `K8S_NAMESPACE` so the backend can construct correct role ARNs and trust policies at provision time.
+
+#### EKS — container orchestration
+
+Create an EKS cluster with the **OIDC provider** enabled (required for IRSA). The backend, agent-runner, and indexer each run as a Deployment in the same namespace (default: `yoloscribe`).
+
+Annotate each Kubernetes ServiceAccount with its IAM role ARN:
 
 ```yaml
-image:
-  repository: ghcr.io/<your-org>/yoloscribe-backend
-  tag: latest
-
-config:
-  authProvider: cognito
-  awsRegion: us-east-1
-  s3Bucket: yoloscribe-prod
-  sqsQueueUrl: https://sqs.us-east-1.amazonaws.com/<account>/yoloscribe-prod-jobs
-  eksOidcProvider: oidc.eks.us-east-1.amazonaws.com/id/<cluster-id>
-  awsAccountId: "<account-id>"
-  k8sNamespace: yoloscribe
-  cloudfrontDomain: <your-cloudfront-domain>
-  mcpBaseUrl: https://<your-domain>
-  allowedOrigins: "https://<your-domain>"
-
-cognito:
-  userPoolId: us-east-1_XXXXXXXXX
-  clientId: <confidential-app-client-id>    # backend client
-  domain: https://your-pool.auth.us-east-1.amazoncognito.com
-
-ingress:
-  enabled: true
-  host: <your-domain>
-  certificateArn: arn:aws:acm:us-east-1:<account>:certificate/<cert-id>
-
-serviceAccount:
-  iamRoleArn: arn:aws:iam::<account>:role/yoloscribe-backend
+annotations:
+  eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role-name>
 ```
 
-Then deploy:
+The Helm charts in `infra/helm/` handle this automatically when you set `serviceAccount.iamRoleArn` in the values file.
+
+#### Secrets Manager
+
+No manual setup required. The backend creates per-user secret prefixes (`yoloscribe/{user_id}/`) automatically when users connect skills (GitHub, Linear, etc.). The backend IAM role needs `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` resources.
+
+#### DynamoDB (Cognito path only)
+
+Only required if using Cognito auth. Create two tables:
+
+| Table | Partition key | Purpose |
+|---|---|---|
+| `yoloscribe-user-site` | `user_id` (S) | Maps user UUID → site name |
+| `yoloscribe-api-tokens` | `token_id` (S) | Stores hashed API tokens |
+
+`yoloscribe-api-tokens` also needs two GSIs: `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`).
+
+Set `DYNAMODB_USER_SITE_TABLE` and `DYNAMODB_API_TOKENS_TABLE` if you use non-default names.
+
+#### CloudFront + S3 — frontend hosting
+
+Create an S3 bucket for the frontend build output and a CloudFront distribution pointing at it. Set `CLOUDFRONT_DOMAIN` and `FRONTEND_BUCKET`.
+
+For video/audio support, configure a separate CloudFront cache behaviour for `*/assets/*` with signed cookies and `CachingDisabled` policy. Run `infra/scripts/setup_cloudfront_media.sh` to create the signing key pair and store the private key in Secrets Manager. Set `CLOUDFRONT_SIGNING_KEY_ID` and `CLOUDFRONT_MEDIA_DOMAIN`.
+
+#### ACM — SSL certificates
+
+Issue certificates for your backend domain and CloudFront distribution. CloudFront requires the certificate to be in `us-east-1` regardless of your deployment region.
+
+---
+
+### Deployment
+
+Each service has a Dockerfile. Build and push images to GHCR or ECR, then deploy with the Helm charts in `infra/helm/`:
 
 ```bash
 helm upgrade --install yoloscribe-backend infra/helm/yoloscribe-backend \
-  -f backend.prod.values.yaml \
-  --set cognitoClientSecret=<confidential-client-secret> \
-  --set webhookSecret=<webhook-secret> \
-  --set anthropicApiKey=sk-ant-... \
-  --namespace yoloscribe --create-namespace
+  -f backend.prod.values.yaml --namespace yoloscribe --create-namespace
+
+helm upgrade --install yoloscribe-agent-runner infra/helm/yoloscribe-agent-runner \
+  -f agent-runner.prod.values.yaml --namespace yoloscribe
+
+helm upgrade --install yoloscribe-indexer infra/helm/yoloscribe-indexer \
+  -f indexer.prod.values.yaml --namespace yoloscribe
 ```
 
-**IAM permissions required by the backend service account (IRSA):**
-- `cognito-idp:AdminDeleteUser` on your User Pool
-- `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query` on both DynamoDB tables
-- `s3:GetObject`, `PutObject`, `DeleteObject`, `ListBucket` on your S3 bucket
-- `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` secrets
-- `iam:CreateRole`, `PutRolePolicy`, `GetRole` on `yoloscribe-user-*` roles
-- `sqs:SendMessage` on your SQS queues
-
-## 4. Set up CloudFront media delivery (optional)
-
-Skip this step if you do not need video or audio support. Images are always served through the backend and require no additional setup.
-
-Run the one-time setup script to create a CloudFront key pair, register it as a trusted signer on your distribution's `*/assets/*` cache behaviour, and store the private key in Secrets Manager:
-
-```bash
-AWS_PROFILE=myprofile AWS_REGION=us-east-1 \
-DISTRIBUTION_ID=E1EXAMPLE \
-./infra/scripts/setup_cloudfront_media.sh
-```
-
-The script prints the `cloudfrontSigningKeyId` value to add to your Helm values file. Then re-deploy with:
-
-```bash
-helm upgrade yoloscribe-backend infra/helm/yoloscribe-backend \
-  -f backend.prod.values.yaml \
-  --set config.cloudfrontSigningKeyId=<key-pair-id> \
-  --set config.cloudfrontMediaDomain=<your-cloudfront-domain> \
-  ...
-```
-
-The `*/assets/*` cache behaviour on your CloudFront distribution must have:
-- **Trusted key groups:** the group created by the script (`yoloscribe-media-group`)
-- **Cache policy:** `CachingDisabled` (signed cookies are per-user; caching would leak content across users)
-- **Viewer protocol policy:** HTTPS only
-
-## 5. Build and deploy the frontend
-
-Build the frontend with Cognito env vars:
+Build and deploy the frontend:
 
 ```bash
 cd frontend
-VITE_AUTH_PROVIDER=cognito \
-VITE_COGNITO_CLIENT_ID=<public-app-client-id> \
-VITE_COGNITO_DOMAIN=https://your-pool.auth.us-east-1.amazoncognito.com \
-VITE_API_BASE=https://<your-domain>/api \
-VITE_CLOUDFRONT_MEDIA_DOMAIN=<your-cloudfront-domain> \
-npm run build
+VITE_SUPABASE_URL=... VITE_SUPABASE_ANON_KEY=... VITE_API_BASE=https://your-domain npm run build
+aws s3 sync dist/ s3://$FRONTEND_BUCKET/ --delete
+aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths "/*"
 ```
-
-Omit `VITE_CLOUDFRONT_MEDIA_DOMAIN` if you skipped step 4 (no video/audio support). Images will still work.
-
-Upload `dist/` to your S3 bucket / CloudFront origin. The public Cognito app client handles browser sign-in via PKCE — no client secret required in the frontend bundle.
-
-## 5. Configure environment variables (non-Helm)
-
-If deploying without Helm (e.g. ECS, App Runner), set these on the backend container:
-
-```
-AUTH_PROVIDER=cognito
-
-COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
-COGNITO_CLIENT_ID=<confidential-app-client-id>
-COGNITO_CLIENT_SECRET=<confidential-app-client-secret>
-COGNITO_DOMAIN=https://your-pool.auth.us-east-1.amazoncognito.com
-AWS_REGION=us-east-1
-
-# Optional — only if you renamed the tables in step 1
-DYNAMODB_USER_SITE_TABLE=yoloscribe-user-site
-DYNAMODB_API_TOKENS_TABLE=yoloscribe-api-tokens
-```
-
-**IAM permissions required by the backend pod/task:**
-- `cognito-idp:AdminDeleteUser` on your User Pool
-- `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query` on both DynamoDB tables
-
-## 6. Post-confirmation Lambda trigger (user provisioning)
-
-With Supabase, a webhook fires after sign-up. With Cognito, the equivalent is a **post-confirmation Lambda trigger**.
-
-YoloScribe does not ship the Lambda function. Configure your own trigger pointing at the existing `/webhooks/user-created` endpoint:
-
-1. In the Cognito console, go to your User Pool → **User pool properties** → **Add Lambda trigger** → **Post confirmation**.
-2. Create a Lambda function that sends a POST to `https://<your-domain>/webhooks/user-created` with:
-   ```json
-   {
-     "user_id": "<cognito-sub>",
-     "email": "<user-email>"
-   }
-   ```
-   Include the `X-Webhook-Secret: <WEBHOOK_SECRET>` header matching your backend's `WEBHOOK_SECRET` env var.
-3. Grant the Lambda function internet access (via a VPC NAT gateway or a public subnet).
-
-This webhook triggers IAM/K8s infrastructure provisioning for the new user — the same path as Supabase.
-
-## 7. MCP server connection
-
-For Cognito operators, skip the MCP OAuth PKCE flow and connect Claude Code directly with a YoloScribe API token:
-
-1. Sign in to YoloScribe and generate an API token from **Settings → API Tokens**.
-2. Add the MCP server to Claude Code:
-
-```bash
-claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
-  --header "Authorization: Bearer as_<your-token>"
-```
-
-API tokens (`as_` prefix) are accepted by the MCP auth middleware and are fully scoped to your site. The OAuth PKCE flow (`/mcp/oauth/...`) is available for Supabase operators only.
