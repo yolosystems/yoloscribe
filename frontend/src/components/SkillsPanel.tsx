@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { X } from 'lucide-react'
 import MarkdownEditor from './MarkdownEditor'
 import ChatPanel from './ChatPanel'
 
@@ -103,6 +104,7 @@ export default function SkillsPanel({ apiBase, site, token }: Props) {
         site={site}
         filePath={filePath}
         token={token}
+        showAgents={false}
       />
       <div className="content-area">
         {selected === null ? (
@@ -114,7 +116,7 @@ export default function SkillsPanel({ apiBase, site, token }: Props) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
               <span style={{ fontWeight: 600 }}>{selected}</span>
               <span style={{ flex: 1 }} />
-              <button className="btn btn-danger" onClick={discard} disabled={!isDirty}>Discard</button>
+              <button className="btn btn-icon" title="Discard changes" onClick={discard} disabled={!isDirty}><X size={14} /></button>
               <button className="btn btn-primary" onClick={save} disabled={!isDirty || saving}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
