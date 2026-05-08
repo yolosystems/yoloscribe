@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
+import { Pencil, Plus, Save, Settings, X } from 'lucide-react'
 import { authClient, type AuthSession } from './auth'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
 import ChatPanel from './components/ChatPanel'
-import AgentsList from './components/AgentsList'
 import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
 import ToolsPanel from './components/ToolsPanel'
 import SkillsPanel from './components/SkillsPanel'
@@ -11,6 +11,7 @@ import LandingPage from './components/LandingPage'
 import OnboardingView from './components/OnboardingView'
 import DeleteAccountModal from './components/DeleteAccountModal'
 import CreatePageModal from './components/CreatePageModal'
+import CreateAgentModal from './components/CreateAgentModal'
 import ChildPagesList from './components/ChildPagesList'
 import PageSettingsPanel from './components/PageSettingsPanel'
 import AccessDeniedView from './components/AccessDeniedView'
@@ -185,6 +186,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [tokensOpen, setTokensOpen] = useState(false)
+  const [gearOpen, setGearOpen] = useState(false)
+  const [plusOpen, setPlusOpen] = useState(false)
+  const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
 
   // Subscribe to auth state changes (skipped in LOCAL_MODE).
@@ -283,17 +287,15 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handler)
   }, [])
 
-  // Fetch the agents list for the current page whenever we enter edit mode
-  // or navigate to a different page while already editing.
+  // Fetch the agents list for the current page whenever the page changes.
   useEffect(() => {
-    if (mode !== 'edit') return
     const pagePath = getPagePath(filePath)
     const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
     fetch(url)
       .then((res) => (res.ok ? res.json() : { agents: [] }))
       .then((data) => setAgents(data.agents ?? []))
       .catch(() => setAgents([]))
-  }, [mode, filePath])
+  }, [filePath])
 
   // Stable identity key: re-fetch when page changes or when user logs in/out,
   // but NOT on every token refresh (which changes access_token but not user.id).
@@ -423,21 +425,43 @@ export default function App() {
       <header className="topbar">
         <span className="topbar-title">Yolo Scribe</span>
         <div className="topbar-actions">
-          {isContentPage && mode !== 'tools' && !skillsOpen && (
-            <button className="btn" onClick={() => setCreatePageOpen(true)}>
-              + New Page
-            </button>
+          {isOwner && isContentPage && mode !== 'tools' && !skillsOpen && !tokensOpen && (
+            <div className="gear-menu-wrap">
+              <button
+                className="btn btn-icon"
+                title="New"
+                onClick={() => setPlusOpen((o) => !o)}
+              >
+                <Plus size={16} />
+              </button>
+              {plusOpen && (
+                <>
+                  <div className="auth-overlay" onClick={() => setPlusOpen(false)} />
+                  <div className="gear-menu">
+                    <button
+                      className="btn"
+                      onClick={() => { setCreatePageOpen(true); setPlusOpen(false) }}
+                    >
+                      Add Page
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={() => { setCreateAgentOpen(true); setPlusOpen(false) }}
+                    >
+                      Create Agent
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
-          {canEdit && mode === 'view' && !skillsOpen && (
-            <button className="btn" onClick={() => setMode('edit')}>
-              Edit
+          {canEdit && mode === 'view' && !skillsOpen && !tokensOpen && (
+            <button className="btn btn-icon" title="Edit" onClick={() => setMode('edit')}>
+              <Pencil size={16} />
             </button>
           )}
           {canEdit && mode === 'edit' && (
             <>
-              <button className="btn btn-danger" onClick={discard}>
-                Discard
-              </button>
               {saveConflict && (
                 <>
                   <span style={{ color: 'var(--danger, #e53e3e)', fontSize: '0.85em' }}>
@@ -453,48 +477,70 @@ export default function App() {
               )}
               {!saveConflict && (
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-icon btn-primary"
+                  title={saving ? 'Saving…' : 'Save'}
                   onClick={() => save()}
                   disabled={!isDirty || saving}
                 >
-                  {saving ? 'Saving…' : 'Save'}
+                  <Save size={16} />
                 </button>
               )}
-              <button className="btn" onClick={() => setMode('view')}>
-                View
+              <button className="btn btn-icon" title="Discard changes" onClick={discard}>
+                <X size={16} />
               </button>
             </>
           )}
-          {isOwner && (
-            <button
-              className={`btn${mode === 'tools' ? ' btn-primary' : ''}`}
-              onClick={() => { setMode(mode === 'tools' ? 'view' : 'tools'); setSkillsOpen(false); setTokensOpen(false) }}
-            >
-              Tools
-            </button>
+          {isOwner && mode !== 'tools' && !skillsOpen && !tokensOpen && (
+            <div className="gear-menu-wrap">
+              <button
+                className={`btn btn-icon${gearOpen || settingsOpen ? ' btn-primary' : ''}`}
+                title="Settings"
+                onClick={() => setGearOpen((o) => !o)}
+              >
+                <Settings size={16} />
+              </button>
+              {gearOpen && (
+                <>
+                  <div className="auth-overlay" onClick={() => setGearOpen(false)} />
+                  <div className="gear-menu">
+                    <button
+                      className="btn"
+                      onClick={() => { setMode('tools'); setSkillsOpen(false); setTokensOpen(false); setGearOpen(false) }}
+                    >
+                      Tools
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={() => { setSkillsOpen(true); setMode('view'); setTokensOpen(false); setGearOpen(false) }}
+                    >
+                      Skills
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={() => { setTokensOpen(true); setMode('view'); setSkillsOpen(false); setGearOpen(false) }}
+                    >
+                      API Tokens
+                    </button>
+                    {isContentPage && (
+                      <button
+                        className={`btn${settingsOpen ? ' btn-primary' : ''}`}
+                        onClick={() => { setSettingsOpen((o) => !o); setGearOpen(false) }}
+                      >
+                        Page Settings
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           )}
-          {isOwner && (
+          {isOwner && (mode === 'tools' || skillsOpen || tokensOpen) && (
             <button
-              className={`btn${skillsOpen ? ' btn-primary' : ''}`}
-              onClick={() => { setSkillsOpen((o) => !o); setMode('view'); setTokensOpen(false) }}
+              className="btn btn-icon"
+              title="Close"
+              onClick={() => { setMode('view'); setSkillsOpen(false); setTokensOpen(false) }}
             >
-              {skillsOpen ? 'Back' : 'Skills'}
-            </button>
-          )}
-          {isOwner && (
-            <button
-              className={`btn${tokensOpen ? ' btn-primary' : ''}`}
-              onClick={() => { setTokensOpen((o) => !o); setMode('view'); setSkillsOpen(false) }}
-            >
-              {tokensOpen ? 'Back' : 'API Tokens'}
-            </button>
-          )}
-          {isOwner && isContentPage && mode !== 'tools' && !skillsOpen && (
-            <button
-              className={`btn${settingsOpen ? ' btn-primary' : ''}`}
-              onClick={() => setSettingsOpen((o) => !o)}
-            >
-              Settings
+              <X size={16} />
             </button>
           )}
           {isOwner && (
@@ -581,6 +627,20 @@ export default function App() {
           onClose={() => setCreatePageOpen(false)}
         />
       )}
+      {createAgentOpen && session && (
+        <CreateAgentModal
+          apiBase={API_BASE}
+          site={SITE}
+          token={session.access_token}
+          pagePath={getPagePath(filePath)}
+          onSuccess={(agentName) => {
+            setCreateAgentOpen(false)
+            const pagePath = getPagePath(filePath)
+            navigate(pagePath ? `${pagePath}/.agents/${agentName}/agent.md` : `.agents/${agentName}/agent.md`)
+          }}
+          onClose={() => setCreateAgentOpen(false)}
+        />
+      )}
 
       <Breadcrumb segments={getBreadcrumbs(filePath)} onNavigate={navigate} />
 
@@ -621,25 +681,22 @@ export default function App() {
           </div>
         ) : (
           <>
-            {canRunAgents && mode === 'edit' && content !== null && (
+            {canRunAgents && content !== null && (
               <ChatPanel
                 content={content}
                 onContentUpdate={setContent}
+                onApplyProposedContent={(newContent) => {
+                  setContent(newContent)
+                  setMode('edit')
+                }}
                 apiBase={API_BASE}
                 site={SITE}
                 filePath={filePath}
                 token={session!.access_token}
-              />
-            )}
-
-            {canRunAgents && mode === 'edit' && (
-              <AgentsList
+                showAgents
                 agents={agents}
                 activeFilePath={filePath}
                 pagePath={getPagePath(filePath)}
-                apiBase={API_BASE}
-                site={SITE}
-                token={session!.access_token}
                 onAgentsChanged={() => {
                   const pagePath = getPagePath(filePath)
                   const url = `${API_BASE}/agents?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`
