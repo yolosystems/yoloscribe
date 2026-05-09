@@ -18,7 +18,6 @@ import datetime
 import json
 import logging
 import re
-import uuid
 from typing import Any
 
 from fastapi import HTTPException
@@ -28,6 +27,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from agent_md import (
+    AGENT_NAME_RE,
+    AgentDefinition,
+    AgentDefinitionError,
+    build_agent_md,
+    parse_agent_md,
+)
 from agents.base import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
@@ -580,173 +586,277 @@ def create_mcp_app(
         return {"results": results}
 
     # ── Agent management ──────────────────────────────────────────────────────
-    # Agent sessions are stored at {site}/.mcp/agents/{agent_id}/meta.json
-    # and {site}/.mcp/agents/{agent_id}/context.json.
-    # These are distinct from agent.md definitions used by the YoloScribe runner.
+    # Agent definitions are stored as agent.md files in S3:
+    #   {site}/{page_path}/.agents/{agent_name}/agent.md   (page-scoped)
+    #   {site}/.agents/{agent_name}/agent.md               (root page)
+
+    def _agent_key(site: str, page_path: str, agent_name: str) -> str:
+        if page_path:
+            return f"{site}/{page_path}/.agents/{agent_name}/agent.md"
+        return f"{site}/.agents/{agent_name}/agent.md"
+
+    def _agents_prefix(site: str, page_path: str) -> str:
+        if page_path:
+            return f"{site}/{page_path}/.agents/"
+        return f"{site}/.agents/"
+
+    def _defn_to_dict(defn: AgentDefinition, page_path: str) -> dict:
+        return {
+            "name": defn.name,
+            "page_path": page_path,
+            "trigger": defn.trigger,
+            "description": defn.description,
+            "skills": defn.skills,
+            "scope": defn.scope,
+            "schedule": defn.schedule,
+            "timezone": defn.timezone,
+            "model": defn.model,
+            "ref": defn.ref,
+        }
 
     @mcp.tool()
     async def agent_create(
         agent_name: str,
-        description: str = "",
-        config: dict = None,
+        description: str,
+        skills: list[str],
+        page_path: str = "",
+        trigger: str = "manual",
+        scope: list[str] | None = None,
+        schedule: str = "",
+        timezone: str = "",
+        model: str = "",
+        overwrite: bool = False,
         ctx: Context = None,
     ) -> dict:
-        """Register a new agent session.
+        """Create an agent.md definition on a wiki page.
 
         Args:
-            agent_name: Human-readable name for the agent session.
-            description: Purpose and capabilities of this agent.
-            config: Optional JSON configuration object.
+            agent_name: Agent name (lowercase letters, digits, hyphens, underscores).
+            description: Agent purpose / system prompt instructions.
+            skills: List of skill names the agent should use.
+            page_path: Page to attach the agent to; empty string for the root page.
+            trigger: When the agent runs — "manual", "schedule", or "on_write".
+            scope: Glob patterns for cross-page agents (e.g. ["**"] for all descendants).
+            schedule: Cron expression — required when trigger is "schedule".
+            timezone: Timezone for scheduled agents (e.g. "America/New_York").
+            model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
+            overwrite: Set True to replace an existing agent with the same name.
         """
         user = _user(ctx)
-        agent_id = str(uuid.uuid4())
-        now = _now_iso()
-        meta = {
-            "agent_id": agent_id,
-            "name": agent_name,
-            "description": description,
-            "config": config or {},
-            "status": "active",
-            "created_at": now,
-            "last_activity": now,
-        }
-        key = f"{user.site}/.mcp/agents/{agent_id}/meta.json"
+        if page_path:
+            _validate_page_path(page_path)
+        if not AGENT_NAME_RE.match(agent_name):
+            raise ValueError(
+                f"Invalid agent name '{agent_name}'. "
+                "Use lowercase letters, digits, hyphens, underscores."
+            )
+
+        defn = AgentDefinition(
+            name=agent_name,
+            description=description,
+            skills=skills or [],
+            trigger=trigger,
+            scope=scope or [],
+            schedule=schedule,
+            timezone=timezone,
+            model=model,
+        )
+        try:
+            build_agent_md(defn)  # validates before writing
+        except AgentDefinitionError as exc:
+            raise ValueError(str(exc)) from exc
+
+        key = _agent_key(user.site, page_path, agent_name)
+        if not overwrite:
+            existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+            if existing.get("KeyCount", 0) > 0:
+                raise ValueError(
+                    f"Agent '{agent_name}' already exists on page '{page_path or '(root)'}'. "
+                    "Pass overwrite=True to replace it."
+                )
+
+        content = build_agent_md(defn)
         s3_client.put_object(
             Bucket=bucket,
             Key=key,
-            Body=json.dumps(meta).encode(),
-            ContentType="application/json",
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
         )
-        return {"agent_id": agent_id, "created_at": now, "status": "active"}
+        return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
-    async def agent_get_status(agent_id: str, ctx: Context = None) -> dict:
-        """Retrieve the status and metadata of an agent session.
+    async def agent_read(
+        agent_name: str,
+        page_path: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Read an agent definition from a wiki page.
 
         Args:
-            agent_id: Agent identifier returned by agent_create.
+            agent_name: Name of the agent to read.
+            page_path: Page the agent is attached to; empty string for the root page.
         """
         user = _user(ctx)
-        key = f"{user.site}/.mcp/agents/{agent_id}/meta.json"
+        key = _agent_key(user.site, page_path, agent_name)
         try:
             resp = s3_client.get_object(Bucket=bucket, Key=key)
-            return json.loads(resp["Body"].read())
+            text = resp["Body"].read().decode("utf-8")
         except Exception:
-            raise ValueError(f"Agent not found: '{agent_id}'")
+            raise ValueError(
+                f"Agent '{agent_name}' not found on page '{page_path or '(root)'}'."
+            )
+        try:
+            defn = parse_agent_md(text)
+        except AgentDefinitionError as exc:
+            raise ValueError(f"agent.md is invalid: {exc}") from exc
+        return _defn_to_dict(defn, page_path)
 
     @mcp.tool()
-    async def agent_update_context(
-        agent_id: str,
-        context: dict,
-        ttl: int = 0,
+    async def agent_update(
+        agent_name: str,
+        page_path: str = "",
+        description: str | None = None,
+        skills: list[str] | None = None,
+        trigger: str | None = None,
+        scope: list[str] | None = None,
+        schedule: str | None = None,
+        timezone: str | None = None,
+        model: str | None = None,
         ctx: Context = None,
     ) -> dict:
-        """Store state/context for an agent session.
+        """Update fields of an existing agent definition.
+
+        Only the fields you supply are changed; omitted fields keep their current values.
 
         Args:
-            agent_id: Agent identifier.
-            context: Arbitrary JSON state to persist (replaces previous context).
-            ttl: Time-to-live in seconds. 0 means no expiry.
+            agent_name: Name of the agent to update.
+            page_path: Page the agent is attached to; empty string for the root page.
+            description: New agent description / system prompt.
+            skills: Replacement skills list.
+            trigger: New trigger type — "manual", "schedule", or "on_write".
+            scope: Replacement scope patterns.
+            schedule: New cron expression (required if changing trigger to "schedule").
+            timezone: New timezone.
+            model: New model key. Pass empty string to clear.
         """
         user = _user(ctx)
-        context_id = str(uuid.uuid4())
-        now = _now_iso()
-        ctx_data = {
-            "context_id": context_id,
-            "data": context,
-            "created_at": now,
-            "expires_at": (time.time() + ttl) if ttl > 0 else None,
-        }
-        ctx_key = f"{user.site}/.mcp/agents/{agent_id}/context.json"
+        key = _agent_key(user.site, page_path, agent_name)
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=key)
+            text = resp["Body"].read().decode("utf-8")
+        except Exception:
+            raise ValueError(
+                f"Agent '{agent_name}' not found on page '{page_path or '(root)'}'."
+            )
+        try:
+            defn = parse_agent_md(text)
+        except AgentDefinitionError as exc:
+            raise ValueError(f"Existing agent.md is invalid: {exc}") from exc
+
+        updated = AgentDefinition(
+            name=defn.name,
+            description=description if description is not None else defn.description,
+            skills=skills if skills is not None else defn.skills,
+            trigger=trigger if trigger is not None else defn.trigger,
+            scope=scope if scope is not None else defn.scope,
+            schedule=schedule if schedule is not None else defn.schedule,
+            timezone=timezone if timezone is not None else defn.timezone,
+            model=model if model is not None else defn.model,
+            ref=defn.ref,
+        )
+        try:
+            content = build_agent_md(updated)
+        except AgentDefinitionError as exc:
+            raise ValueError(str(exc)) from exc
+
         s3_client.put_object(
             Bucket=bucket,
-            Key=ctx_key,
-            Body=json.dumps(ctx_data).encode(),
-            ContentType="application/json",
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
         )
-        # Update last_activity in meta
-        meta_key = f"{user.site}/.mcp/agents/{agent_id}/meta.json"
-        try:
-            meta_resp = s3_client.get_object(Bucket=bucket, Key=meta_key)
-            meta = json.loads(meta_resp["Body"].read())
-            meta["last_activity"] = now
-            s3_client.put_object(
-                Bucket=bucket,
-                Key=meta_key,
-                Body=json.dumps(meta).encode(),
-                ContentType="application/json",
-            )
-        except Exception:
-            pass
-        return {"agent_id": agent_id, "context_id": context_id, "updated_at": now}
+        return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
     @mcp.tool()
-    async def agent_get_context(
-        agent_id: str,
-        context_id: str = "",
+    async def agent_delete(
+        agent_name: str,
+        page_path: str = "",
         ctx: Context = None,
     ) -> dict:
-        """Retrieve stored context for an agent session.
+        """Delete an agent definition from a wiki page.
 
         Args:
-            agent_id: Agent identifier.
-            context_id: Specific context ID to retrieve. If omitted, returns the latest.
+            agent_name: Name of the agent to delete.
+            page_path: Page the agent is attached to; empty string for the root page.
         """
         user = _user(ctx)
-        ctx_key = f"{user.site}/.mcp/agents/{agent_id}/context.json"
-        try:
-            resp = s3_client.get_object(Bucket=bucket, Key=ctx_key)
-            ctx_data = json.loads(resp["Body"].read())
-        except Exception:
-            raise ValueError(f"No context found for agent '{agent_id}'")
-
-        expires_at = ctx_data.get("expires_at")
-        if expires_at and time.time() > expires_at:
-            raise ValueError(f"Context for agent '{agent_id}' has expired")
-
-        return {
-            "context": ctx_data.get("data", {}),
-            "context_id": ctx_data.get("context_id", ""),
-            "retrieved_at": _now_iso(),
-        }
+        prefix = f"{_agents_prefix(user.site, page_path)}{agent_name}/"
+        paginator = s3_client.get_paginator("list_objects_v2")
+        keys_deleted = 0
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            objects = [{"Key": obj["Key"]} for obj in s3_page.get("Contents", [])]
+            if objects:
+                s3_client.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+                keys_deleted += len(objects)
+        if keys_deleted == 0:
+            raise ValueError(
+                f"Agent '{agent_name}' not found on page '{page_path or '(root)'}'."
+            )
+        return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
     @mcp.tool()
-    async def agent_list(limit: int = 50, ctx: Context = None) -> dict:
-        """List active agent sessions for the current user.
+    async def agent_list(
+        page_path: str = "",
+        site_wide: bool = False,
+        ctx: Context = None,
+    ) -> dict:
+        """List agent definitions on a page, or across the whole site.
 
         Args:
-            limit: Maximum results (default 50).
+            page_path: Page to list agents for; empty string for the root page.
+                       Ignored when site_wide is True.
+            site_wide: When True, returns all agents across all pages in the site.
         """
         user = _user(ctx)
-        limit = min(max(1, limit), 200)
-        prefix = f"{user.site}/.mcp/agents/"
         agents: list[dict] = []
-        paginator = s3_client.get_paginator("list_objects_v2")
-        for s3_page in paginator.paginate(
-            Bucket=bucket,
-            Prefix=prefix,
-            Delimiter="/",
-            PaginationConfig={"MaxItems": limit * 2},
-        ):
-            for cp in s3_page.get("CommonPrefixes", []):
-                meta_key = f"{cp['Prefix']}meta.json"
-                try:
-                    meta_resp = s3_client.get_object(Bucket=bucket, Key=meta_key)
-                    meta = json.loads(meta_resp["Body"].read())
-                    agents.append(
-                        {
-                            "agent_id": meta["agent_id"],
-                            "name": meta["name"],
-                            "status": meta["status"],
-                            "last_activity": meta["last_activity"],
-                        }
-                    )
-                except Exception:
-                    pass
-                if len(agents) >= limit:
-                    break
-            if len(agents) >= limit:
-                break
+
+        if site_wide:
+            # Walk all objects under {site}/ looking for /.agents/*/agent.md
+            paginator = s3_client.get_paginator("list_objects_v2")
+            site_prefix = f"{user.site}/"
+            for s3_page in paginator.paginate(Bucket=bucket, Prefix=site_prefix):
+                for obj in s3_page.get("Contents", []):
+                    key: str = obj["Key"]
+                    if not key.endswith("/agent.md"):
+                        continue
+                    # Key shape: {site}/{page_path}/.agents/{name}/agent.md
+                    #        or: {site}/.agents/{name}/agent.md
+                    rel = key[len(site_prefix):]
+                    if "/.agents/" not in rel and not rel.startswith(".agents/"):
+                        continue
+                    try:
+                        text = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+                        defn = parse_agent_md(text)
+                        # Derive page_path from key
+                        if rel.startswith(".agents/"):
+                            pg = ""
+                        else:
+                            pg = rel.split("/.agents/")[0]
+                        agents.append(_defn_to_dict(defn, pg))
+                    except Exception:
+                        pass
+        else:
+            prefix = _agents_prefix(user.site, page_path)
+            paginator = s3_client.get_paginator("list_objects_v2")
+            for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+                for cp in s3_page.get("CommonPrefixes", []):
+                    agent_key = f"{cp['Prefix']}agent.md"
+                    try:
+                        text = s3_client.get_object(Bucket=bucket, Key=agent_key)["Body"].read().decode()
+                        defn = parse_agent_md(text)
+                        agents.append(_defn_to_dict(defn, page_path))
+                    except Exception:
+                        pass
 
         return {"agents": agents}
 
