@@ -45,8 +45,6 @@ Every "site" is an S3 prefix. The bucket layout is:
   .skills/{name}/skill.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
   .user/notifications.md              # owner notification inbox (access requests)
-  .mcp/agents/{uuid}/meta.json        # remote MCP agent session metadata
-  .mcp/agents/{uuid}/context.json     # remote MCP agent session context
   .archive/{page}/content.md          # soft-deleted page archive
 ```
 
@@ -101,7 +99,18 @@ ChatAgent (orchestrator)
 **`S3Tools`** (`backend/agents/base.py`) is a class-based strands tool container. Its methods are passed directly as tools to agent constructors.
 
 ### `agent.md` format
+
+Full format (definition agents):
 ```markdown
+---
+trigger: manual|schedule|on_write
+schedule: 0 9 * * *   # required when trigger: schedule
+timezone: America/New_York  # optional; defaults to UTC
+scope:                 # optional; glob patterns for cross-page agents
+  - "**"
+model: sonnet          # optional; overrides server default
+---
+
 # Agent: {name}
 
 ## Description
@@ -111,21 +120,37 @@ ChatAgent (orchestrator)
 ## Skills
 
 - {skill-name}
+
+## Model
+
+sonnet   # optional; overridden by frontmatter 'model' if both present
 ```
 
-Parsed at runtime by the async worker (not the web process).
+Pointer agents (on_write subscriptions) use frontmatter only — no body:
+```markdown
+---
+trigger: on_write
+ref: {page_path}/.agents/{agent_name}/agent.md
+---
+```
+
+The schema is defined in `backend/agent_md.py` (MCP server) and `agent-runner/agent_runner/parse.py` (runner). Both must stay in sync — neither can import the other (separate packages). Parsed at runtime by both the MCP server and the async worker.
 
 ### `mcp.json` format
 Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn MCP subprocesses. Environment variable placeholders `${VAR}` are substituted at load time.
 
 ### Remote MCP Server (`backend/mcp_server.py`)
-Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, and agent session management for Claude Code and other MCP-compatible AI agents.
+Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, and agent definition management for Claude Code and other MCP-compatible AI agents.
 
 **Auth:** Every request must carry a Supabase JWT as `Authorization: Bearer <token>`. The JWT is validated against the Supabase JWKS endpoint; the user's site is resolved from the `user_site` table (5-minute in-memory cache).
 
-**Tools:** `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`, `search_wiki`, `search_semantic`, `agent_create`, `agent_get_status`, `agent_update_context`, `agent_get_context`, `agent_list`.
+**Tools:**
+- Wiki: `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`
+- Search: `search_wiki`, `search_semantic`
+- Agents: `agent_create`, `agent_read`, `agent_update`, `agent_delete`, `agent_list`
+- Skills: `skill_list`, `skill_create`, `skill_update`
 
-All operations are scoped to the authenticated user's site. Agent sessions (`.mcp/agents/{uuid}/`) are distinct from agent.md runner definitions.
+All operations are scoped to the authenticated user's site. Agent tools manage `agent.md` definition files on wiki pages (not session state). `agent_list` accepts a `page_path` for page-scoped listing, or `site_wide=True` to list all agents across the site.
 
 **Connect with Claude Code:**
 ```bash
