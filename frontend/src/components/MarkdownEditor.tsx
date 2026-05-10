@@ -57,9 +57,11 @@ export default function MarkdownEditor({
         .replace(/\s+/g, '-')
         .replace(/[^a-z0-9._-]/g, '')
 
+      const isMediaFile = file.type.startsWith('video/') || file.type.startsWith('audio/')
+      const subdir = isMediaFile ? 'media' : 'assets'
       const assetPath = pagePath
-        ? `${pagePath}/assets/${safeName}`
-        : `assets/${safeName}`
+        ? `${pagePath}/${subdir}/${safeName}`
+        : `${subdir}/${safeName}`
 
       // 1. Get pre-signed PUT URL from the backend.
       const uploadRes = await fetch(
