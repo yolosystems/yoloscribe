@@ -377,6 +377,7 @@ export default function App() {
       if (!res.ok) throw new Error(`Save failed: ${res.status}`)
       setSavedContent(content)
       setEtag(null) // backend doesn't return ETag on PUT; clear so next save is unconditional
+      setMode('view')
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Save failed')
     } finally {
