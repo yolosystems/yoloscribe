@@ -30,6 +30,8 @@ config:
   supabaseUrl: "https://logpcqkicxkeqoseajzd.supabase.co"
   mcpBaseUrl: "https://api-dev.yoloscribe.com"
   cloudfrontDomain: "app-dev.yoloscribe.com"
+  cloudfrontMediaDomain: "media-dev.yoloscribe.com"
+  cloudfrontSigningKeyId: "K1NAJG6AGF8IZS"
   s3Bucket: "yoloscribe-dev"
   s3VectorsBucket: "yoloscribe-dev-vectors"
   allowedOrigins: "https://app-dev.yoloscribe.com"
