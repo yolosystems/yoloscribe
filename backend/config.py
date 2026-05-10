@@ -19,6 +19,20 @@ CLOUDFRONT_SIGNING_KEY_ID = os.environ.get("CLOUDFRONT_SIGNING_KEY_ID", "")
 # Separate CloudFront domain for media assets, if different from the main domain.
 # Falls back to CLOUDFRONT_DOMAIN when unset.
 CLOUDFRONT_MEDIA_DOMAIN = os.environ.get("CLOUDFRONT_MEDIA_DOMAIN", "") or CLOUDFRONT_DOMAIN
+
+# Cookie domain for CloudFront signed cookies. Must be a parent domain shared by
+# both the API and media CloudFront origins (e.g. .yoloscribe.com) — browsers
+# reject Set-Cookie for sibling subdomains (RFC 6265). Defaults to deriving the
+# apex from CLOUDFRONT_MEDIA_DOMAIN (media-dev.yoloscribe.com → .yoloscribe.com).
+# Override with CLOUDFRONT_COOKIE_DOMAIN if the default derivation is wrong.
+def _derive_cookie_domain(media_domain: str) -> str:
+    parts = media_domain.split(".")
+    return "." + ".".join(parts[-2:]) if len(parts) >= 2 else media_domain
+
+CLOUDFRONT_COOKIE_DOMAIN = (
+    os.environ.get("CLOUDFRONT_COOKIE_DOMAIN", "")
+    or (_derive_cookie_domain(CLOUDFRONT_MEDIA_DOMAIN) if CLOUDFRONT_MEDIA_DOMAIN else "")
+)
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
 FRONTEND_URL = (

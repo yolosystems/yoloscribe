@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 import cloudfront_signing
 from auth import decode_jwt, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import (
+    CLOUDFRONT_COOKIE_DOMAIN,
     CLOUDFRONT_MEDIA_DOMAIN,
     CLOUDFRONT_SIGNING_KEY_ID,
     LOCAL_MODE,
@@ -249,7 +250,7 @@ async def media_auth(
     # to CloudFront requests.  SameSite=None; Secure is required for cross-origin
     # cookie delivery (the API is on a different origin from CloudFront).
     cookie_opts = {
-        "domain": CLOUDFRONT_MEDIA_DOMAIN,
+        "domain": CLOUDFRONT_COOKIE_DOMAIN,
         "max_age": _COOKIE_TTL,
         "httponly": True,
         "secure": True,
