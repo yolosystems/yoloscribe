@@ -957,24 +957,35 @@ def create_mcp_app(
     # ── Introspection ─────────────────────────────────────────────────────────
 
     @mcp.tool()
-    async def list_tools(ctx: Context = None) -> dict:
-        """List all tools available on this MCP server.
+    async def list_skill_tools(ctx: Context = None) -> dict:
+        """List all tools available to agents running on this site.
 
-        Returns each tool's name, description, and input schema. Useful for
-        programmatic introspection of server capabilities from within an agent
-        session, without relying on the MCP protocol's built-in tool discovery.
+        Reads the tool declarations from each installed skill and returns a
+        consolidated list of every tool agents can call, grouped by the skill
+        that provides it. Useful for discovering whether a particular tool
+        (e.g. a Linear or GitHub tool) is already available before asking the
+        user to create a new skill.
         """
-        tools = await mcp.list_tools()
-        return {
-            "tools": [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "input_schema": t.parameters,
-                }
-                for t in tools
-            ]
-        }
+        user = _user(ctx)
+        prefix = f"{user.site}/.skills/"
+        tools: list[dict] = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+            for cp in s3_page.get("CommonPrefixes", []):
+                skill_name = cp["Prefix"][len(prefix):].rstrip("/")
+                key = f"{cp['Prefix']}SKILL.md"
+                try:
+                    resp = s3_client.get_object(Bucket=bucket, Key=key)
+                    text = resp["Body"].read().decode("utf-8")
+                    fm, _ = _parse_frontmatter(text)
+                    tools_list = fm.get("tools", [])
+                    if isinstance(tools_list, str):
+                        tools_list = [tools_list]
+                    for tool_name in tools_list:
+                        tools.append({"name": tool_name, "skill": skill_name})
+                except Exception:
+                    pass
+        return {"tools": tools}
 
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
