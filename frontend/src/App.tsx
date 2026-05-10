@@ -205,11 +205,15 @@ export default function App() {
 
   // Fetch CloudFront signed cookies on session establish and refresh at 55 min
   // so video/audio assets remain accessible without interruption (YOL-129).
+  // page_path is passed so the backend can grant cookies to unauthenticated
+  // visitors on public child pages even when the site root is private.
   // In LOCAL_MODE the backend returns 200 with no cookies — the call is harmless
   // and keeps the code path exercised locally.
   useEffect(() => {
+    const pagePath = getPagePath(filePath)
     function fetchMediaAuth() {
-      const url = `${API_BASE}/media-auth?site=${encodeURIComponent(SITE)}`
+      let url = `${API_BASE}/media-auth?site=${encodeURIComponent(SITE)}`
+      if (pagePath) url += `&page_path=${encodeURIComponent(pagePath)}`
       const headers: Record<string, string> = {}
       if (session) headers['Authorization'] = `Bearer ${session.access_token}`
       fetch(url, { credentials: 'include', headers }).catch(() => {/* best-effort */})
@@ -219,7 +223,7 @@ export default function App() {
     // Re-fetch 5 minutes before the 1-hour cookie TTL expires.
     const id = setInterval(fetchMediaAuth, 55 * 60 * 1000)
     return () => clearInterval(id)
-  }, [session?.user.id])  // re-run when identity changes (null → user or user → null)
+  }, [session?.user.id, filePath])  // re-run when identity or page changes
 
   // Load site theme from config.json (user sites only)
   useEffect(() => {

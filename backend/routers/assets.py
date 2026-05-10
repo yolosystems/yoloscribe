@@ -212,6 +212,7 @@ async def list_assets(
 )
 async def media_auth(
     site: str | None = Query(None),
+    page_path: str | None = Query(None),
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> Response:
     # In local dev there is no CloudFront — return 200 so the frontend doesn't
@@ -237,10 +238,12 @@ async def media_auth(
         if not user_site:
             raise HTTPException(status_code=403, detail="No site associated with this account")
     else:
-        # Unauthenticated: site must be provided; issue cookies only for public sites.
+        # Unauthenticated: site must be provided; issue cookies only if the
+        # requested page (or root when page_path is absent) is public.
         if not site:
             raise HTTPException(status_code=401, detail="Authentication required")
-        settings = get_page_settings(site, "")
+        check_path = page_path or ""
+        settings = get_page_settings(site, check_path)
         if settings.get("visibility") != "public":
             raise HTTPException(status_code=401, detail="Authentication required")
         user_site = site
