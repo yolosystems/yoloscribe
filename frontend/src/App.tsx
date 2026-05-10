@@ -208,20 +208,18 @@ export default function App() {
   // In LOCAL_MODE the backend returns 200 with no cookies — the call is harmless
   // and keeps the code path exercised locally.
   useEffect(() => {
-    if (!session) return
-
     function fetchMediaAuth() {
-      fetch(`${API_BASE}/media-auth`, {
-        credentials: 'include',   // cookies must be sent cross-origin to CloudFront domain
-        headers: { Authorization: `Bearer ${session!.access_token}` },
-      }).catch(() => {/* best-effort; never block rendering */})
+      const url = `${API_BASE}/media-auth?site=${encodeURIComponent(SITE)}`
+      const headers: Record<string, string> = {}
+      if (session) headers['Authorization'] = `Bearer ${session.access_token}`
+      fetch(url, { credentials: 'include', headers }).catch(() => {/* best-effort */})
     }
 
     fetchMediaAuth()
     // Re-fetch 5 minutes before the 1-hour cookie TTL expires.
     const id = setInterval(fetchMediaAuth, 55 * 60 * 1000)
     return () => clearInterval(id)
-  }, [session?.user.id])  // re-run only when the user identity changes, not on token refresh
+  }, [session?.user.id])  // re-run when identity changes (null → user or user → null)
 
   // Load site theme from config.json (user sites only)
   useEffect(() => {

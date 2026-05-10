@@ -10,7 +10,7 @@ GET  /media-auth  — issues CloudFront signed cookies for video/audio playback;
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Security
+from fastapi import APIRouter, HTTPException, Query, Security
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -211,6 +211,7 @@ async def list_assets(
     ),
 )
 async def media_auth(
+    site: str | None = Query(None),
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> Response:
     # In local dev there is no CloudFront — return 200 so the frontend doesn't
@@ -230,9 +231,19 @@ async def media_auth(
             detail="CloudFront signing key is not available",
         )
 
-    user_id, user_site = get_user_context(credentials)
-    if not user_site:
-        raise HTTPException(status_code=403, detail="No site associated with this account")
+    if credentials:
+        # Authenticated: derive site from JWT.
+        _, user_site = get_user_context(credentials)
+        if not user_site:
+            raise HTTPException(status_code=403, detail="No site associated with this account")
+    else:
+        # Unauthenticated: site must be provided; issue cookies only for public sites.
+        if not site:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        settings = get_page_settings(site, "")
+        if settings.get("visibility") != "public":
+            raise HTTPException(status_code=401, detail="Authentication required")
+        user_site = site
 
     try:
         cookies = cloudfront_signing.sign_media_cookies(
