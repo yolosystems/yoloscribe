@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "aws-iac": {
-      "url": "http://aws-iac.yolo.svc.cluster.local:8080/mcp",
-      "transport": "streamable-http",
-      "auth": "aws-sso"
-    }
-  }
-}

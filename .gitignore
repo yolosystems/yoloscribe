@@ -18,3 +18,8 @@ dist/
 .cache/
 
 .DS_Store
+
+# Environment-specific Helm values (account/deployment details — store in yoloscribe-ops)
+infra/helm/*.dev.*.values.yaml
+infra/helm/*.prod.*.values.yaml
+infra/helm/*.staging.*.values.yaml
