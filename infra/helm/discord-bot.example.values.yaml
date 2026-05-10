@@ -1,0 +1,11 @@
+image:
+  repository: ghcr.io/<ghcr-user>/yoloscribe-discord-bot
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: <ghcr-user>
+
+config:
+  yoloscribeApiUrl: "https://api.<your-domain>"
+  supabaseUrl: "https://<supabase-project>.supabase.co"

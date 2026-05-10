@@ -1,0 +1,29 @@
+image:
+  repository: ghcr.io/<ghcr-user>/yoloscribe-backend
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: <ghcr-user>
+
+serviceAccount:
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-backend"  # set after running infra/iam/create_backend_role.sh
+
+ingress:
+  host: api.<your-domain>
+
+config:
+  supabaseUrl: "https://<supabase-project>.supabase.co"
+  mcpBaseUrl: "https://api.<your-domain>"
+  cloudfrontDomain: "app.<your-domain>"
+  cloudfrontMediaDomain: "media.<your-domain>"
+  cloudfrontSigningKeyId: "<cloudfront-key-pair-id>"
+  s3Bucket: "<s3-bucket>"
+  s3VectorsBucket: "<s3-vectors-bucket>"
+  allowedOrigins: "https://app.<your-domain>"
+  sqsQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-jobs"
+  sqsIndexingQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-indexing"
+  eksOidcProvider: "oidc.eks.<region>.amazonaws.com/id/<oidc-id>"
+  awsAccountId: "<aws-account-id>"
+  awsRegion: "<region>"
+  k8sNamespace: "<k8s-namespace>"

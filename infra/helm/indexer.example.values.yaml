@@ -1,0 +1,20 @@
+image:
+  repository: ghcr.io/<ghcr-user>/yoloscribe-indexer
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: <ghcr-user>
+
+serviceAccount:
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-indexer"  # set after running infra/iam/create_indexer_role.sh
+
+config:
+  sqsIndexingQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-indexing"
+  s3VectorsBucket: "<s3-vectors-bucket>"
+  s3VectorsIndexName: "<vectors-index-name>"
+  awsRegion: "<region>"
+  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
+  k8sNamespace: "<k8s-namespace>"
+  indexerServiceAccount: "yoloscribe-indexer"
+  supabaseUrl: "https://<supabase-project>.supabase.co"

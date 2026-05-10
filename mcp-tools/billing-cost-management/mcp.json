@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "billing-cost-management": {
-      "url": "http://billing-cost-management.yolo.svc.cluster.local:8080/mcp",
-      "transport": "streamable-http",
-      "auth": "aws-sso"
-    }
-  }
-}

@@ -1,0 +1,17 @@
+image:
+  repository: ghcr.io/<ghcr-user>/yoloscribe-agent-runner
+  tag: latest
+  pullPolicy: Always
+
+ghcr:
+  username: <ghcr-user>
+
+serviceAccount:
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-agent-runner"  # set after running infra/iam/create_agent_runner_role.sh
+
+config:
+  sqsQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-jobs"
+  sqsIndexingQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-indexing"
+  awsRegion: "<region>"
+  k8sNamespace: "<k8s-namespace>"
+  anthropicSecretName: "<secrets-manager-secret-name>"
