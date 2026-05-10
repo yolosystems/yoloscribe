@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Trash2 } from 'lucide-react'
 
 interface SharedUser {
   email: string
@@ -57,6 +58,7 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
   const [newAccess, setNewAccess] = useState<'view' | 'write'>('view')
   const [assets, setAssets] = useState<AssetItem[]>([])
   const [assetsLoading, setAssetsLoading] = useState(true)
+  const [deletingPath, setDeletingPath] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -125,6 +127,22 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
       ...s,
       shared_with: s.shared_with.map((u) => (u.email === email ? { ...u, access } : u)),
     }))
+  }
+
+  async function deleteAsset(path: string) {
+    setDeletingPath(path)
+    try {
+      const res = await fetch(
+        `${apiBase}/asset?site=${encodeURIComponent(site)}&path=${encodeURIComponent(path)}`,
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      )
+      if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
+      setAssets((prev) => prev.filter((a) => a.path !== path))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeletingPath(null)
+    }
   }
 
   if (loading) return <div className="state-center">Loading settings…</div>
@@ -283,6 +301,7 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
                 <th style={{ textAlign: 'left', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Type</th>
                 <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Size</th>
                 <th style={{ textAlign: 'right', padding: '0.25rem 0.5rem', fontWeight: 500 }}>Uploaded</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -299,6 +318,17 @@ export default function PageSettingsPanel({ apiBase, site, filePath, token, onCl
                     </td>
                     <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: 'var(--text-muted)' }}>
                       {formatDate(a.last_modified)}
+                    </td>
+                    <td style={{ padding: '0.4rem 0.25rem', textAlign: 'right' }}>
+                      <button
+                        className="btn btn-icon"
+                        title="Delete asset"
+                        disabled={deletingPath === a.path}
+                        onClick={() => deleteAsset(a.path)}
+                        style={{ color: 'var(--danger, #e53e3e)', opacity: deletingPath === a.path ? 0.5 : 1 }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </td>
                   </tr>
                 )

@@ -26,9 +26,17 @@ if [[ -z "${VITE_API_BASE:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${VITE_CLOUDFRONT_MEDIA_DOMAIN:-}" ]]; then
+  echo "Error: VITE_CLOUDFRONT_MEDIA_DOMAIN is not set (e.g. media.yoloscribe.com)" >&2
+  exit 1
+fi
+
 for THEME in light dark yolo; do
   echo "Building theme: $THEME"
-  VITE_THEME="$THEME" VITE_API_BASE="$VITE_API_BASE" npm run build --prefix "$FRONTEND_DIR"
+  VITE_THEME="$THEME" \
+    VITE_API_BASE="$VITE_API_BASE" \
+    VITE_CLOUDFRONT_MEDIA_DOMAIN="$VITE_CLOUDFRONT_MEDIA_DOMAIN" \
+    npm run build --prefix "$FRONTEND_DIR"
   echo "Uploading $THEME to s3://$S3_BUCKET/_themes/$THEME/"
   aws s3 sync "$FRONTEND_DIR/dist/" "s3://$S3_BUCKET/_themes/$THEME/" --delete --profile ${AWS_PROFILE}
   echo "Done: $THEME"

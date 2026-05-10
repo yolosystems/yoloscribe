@@ -6,12 +6,13 @@ interface Props {
   content: string
   site: string
   apiBase: string
+  pagePath?: string
 }
 
 const VIDEO_RE = /\.(mp4|m4v)$/i
 const AUDIO_RE = /\.m4a$/i
 
-export default function MarkdownViewer({ content, site, apiBase }: Props) {
+export default function MarkdownViewer({ content, site, apiBase, pagePath = '' }: Props) {
   return (
     <div className="markdown-viewer">
       <ReactMarkdown
@@ -19,7 +20,7 @@ export default function MarkdownViewer({ content, site, apiBase }: Props) {
         components={{
           img({ src, alt }) {
             if (!src) return null
-            const url = resolveAssetUrl(src, site, apiBase)
+            const url = resolveAssetUrl(src, site, apiBase, pagePath)
             if (VIDEO_RE.test(src)) {
               return (
                 <video

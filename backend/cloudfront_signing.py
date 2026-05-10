@@ -82,7 +82,7 @@ def sign_media_cookies(
         raise RuntimeError("CloudFront signing key is not loaded")
 
     expires_at = int(time.time()) + ttl
-    resource = f"https://{cloudfront_domain}/{site}/assets/*"
+    resource = f"https://{cloudfront_domain}/{site}/*"
 
     policy = json.dumps(
         {

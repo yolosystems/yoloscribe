@@ -111,11 +111,15 @@ class _RequestSizeMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(_RequestSizeMiddleware)
 app.add_middleware(SlowAPIMiddleware)
+_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+_wildcard = "*" in _origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
+    allow_origins=[] if _wildcard else _origins,
+    allow_origin_regex=".*" if _wildcard else None,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
     expose_headers=["X-Page-Access", "ETag", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
 )
 

@@ -30,10 +30,10 @@ SAFE_PATH = re.compile(
     r")$"
 )
 
-# Asset paths: site-level (assets/foo.png) or page-level (page/assets/foo.mp4).
+# Asset paths: site-level or page-level, under assets/ (images) or media/ (video/audio).
 # Filenames may contain letters, digits, dots, hyphens, and underscores only —
-# no path separators, preventing traversal within the assets directory.
-ASSET_PATH_RE = re.compile(rf"^({_PAGE_SEG}/)?assets/{_ASSET_FILE}$")
+# no path separators, preventing traversal within the directory.
+ASSET_PATH_RE = re.compile(rf"^({_PAGE_SEG}/)?(assets|media)/{_ASSET_FILE}$")
 
 # Allowed media extensions mapped to their canonical MIME types.
 ASSET_ALLOWED_EXTENSIONS: dict[str, str] = {
@@ -77,9 +77,14 @@ def asset_page_path(asset_path: str) -> str:
     "assets/foo.png"          → ""          (root page)
     "intro/assets/foo.mp4"    → "intro"
     "a/b/assets/foo.jpg"      → "a/b"
+    "intro/media/video.mp4"   → "intro"
+    "a/b/media/video.mp4"     → "a/b"
     """
-    idx = asset_path.find("/assets/")
-    return asset_path[:idx] if idx != -1 else ""
+    for sep in ("/assets/", "/media/"):
+        idx = asset_path.find(sep)
+        if idx != -1:
+            return asset_path[:idx]
+    return ""
 
 
 def asset_mime_type(path: str) -> str:

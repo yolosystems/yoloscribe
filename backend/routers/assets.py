@@ -1,26 +1,30 @@
 """Asset upload, serving, and media-auth endpoints for YoloScribe.
 
-POST /upload      — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
-GET  /asset       — serves image assets (and video/audio in LOCAL_MODE) from S3 with
-                    page visibility access control.
-GET  /assets      — lists asset keys with metadata under a given page path; owner-only.
-GET  /media-auth  — issues CloudFront signed cookies for video/audio playback; no-op in
-                    LOCAL_MODE (all assets served through /asset instead).
+POST   /upload      — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
+GET    /asset       — serves image assets (and video/audio in LOCAL_MODE) from S3 with
+                      page visibility access control.
+DELETE /asset       — owner-only; permanently deletes an asset from S3.
+GET    /assets      — lists asset keys with metadata under a given page path; owner-only.
+GET    /media-auth  — issues CloudFront signed cookies for video/audio playback; no-op in
+                      LOCAL_MODE (all assets served through /asset instead).
 """
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Security
+from fastapi import APIRouter, HTTPException, Query, Security
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 import cloudfront_signing
 from auth import decode_jwt, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import (
+    CLOUDFRONT_COOKIE_DOMAIN,
+    CLOUDFRONT_MEDIA_DISTRIBUTION_ID,
     CLOUDFRONT_MEDIA_DOMAIN,
     CLOUDFRONT_SIGNING_KEY_ID,
     LOCAL_MODE,
     S3_BUCKET,
+    cloudfront,
     s3,
 )
 from s3_helpers import (
@@ -157,6 +161,48 @@ async def get_asset(
     return Response(content=body, media_type=mime)
 
 
+@router.delete(
+    "/asset",
+    tags=["assets"],
+    summary="Delete an asset from S3",
+    description="Owner-only. Permanently deletes the asset at the given path.",
+    status_code=204,
+)
+async def delete_asset(
+    site: str,
+    path: str,
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> Response:
+    if not is_safe_asset_path(path):
+        raise HTTPException(status_code=400, detail="Invalid asset path or extension")
+
+    claims = decode_jwt(credentials)
+    user_site = get_site_for_user(claims.user_id)
+    require_site_owner(site, user_site)
+
+    s3_key = f"{site}/{path}"
+    try:
+        s3.delete_object(Bucket=S3_BUCKET, Key=s3_key)
+    except Exception as exc:
+        log.error("Failed to delete asset %s: %s", s3_key, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete asset")
+
+    if cloudfront and CLOUDFRONT_MEDIA_DISTRIBUTION_ID:
+        try:
+            cloudfront.create_invalidation(
+                DistributionId=CLOUDFRONT_MEDIA_DISTRIBUTION_ID,
+                InvalidationBatch={
+                    "Paths": {"Quantity": 1, "Items": [f"/{s3_key}"]},
+                    "CallerReference": s3_key,
+                },
+            )
+            log.info("Invalidated CloudFront path /%s", s3_key)
+        except Exception as exc:
+            log.error("CloudFront invalidation failed for /%s: %s", s3_key, exc)
+
+    return Response(status_code=204)
+
+
 @router.get(
     "/assets",
     tags=["assets"],
@@ -175,22 +221,24 @@ async def list_assets(
     user_site = get_site_for_user(claims.user_id)
     require_site_owner(site, user_site)
 
-    prefix = f"{site}/{page_path + '/' if page_path else ''}assets/"
+    page_prefix = f"{site}/{page_path + '/' if page_path else ''}"
+    prefixes = [f"{page_prefix}assets/", f"{page_prefix}media/"]
     paginator = s3.get_paginator("list_objects_v2")
 
     assets: list[dict] = []
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            rel_path = obj["Key"].removeprefix(f"{site}/")
-            mime = asset_mime_type(rel_path)
-            assets.append(
-                {
-                    "path": rel_path,
-                    "size": obj.get("Size", 0),
-                    "content_type": mime,
-                    "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
-                }
-            )
+    for prefix in prefixes:
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                rel_path = obj["Key"].removeprefix(f"{site}/")
+                mime = asset_mime_type(rel_path)
+                assets.append(
+                    {
+                        "path": rel_path,
+                        "size": obj.get("Size", 0),
+                        "content_type": mime,
+                        "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+                    }
+                )
 
     return {"assets": assets}
 
@@ -210,6 +258,8 @@ async def list_assets(
     ),
 )
 async def media_auth(
+    site: str | None = Query(None),
+    page_path: str | None = Query(None),
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> Response:
     # In local dev there is no CloudFront — return 200 so the frontend doesn't
@@ -229,9 +279,21 @@ async def media_auth(
             detail="CloudFront signing key is not available",
         )
 
-    user_id, user_site = get_user_context(credentials)
-    if not user_site:
-        raise HTTPException(status_code=403, detail="No site associated with this account")
+    if credentials:
+        # Authenticated: derive site from JWT.
+        _, user_site = get_user_context(credentials)
+        if not user_site:
+            raise HTTPException(status_code=403, detail="No site associated with this account")
+    else:
+        # Unauthenticated: site must be provided; issue cookies only if the
+        # requested page (or root when page_path is absent) is public.
+        if not site:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        check_path = page_path or ""
+        settings = get_page_settings(site, check_path)
+        if settings.get("visibility") != "public":
+            raise HTTPException(status_code=401, detail="Authentication required")
+        user_site = site
 
     try:
         cookies = cloudfront_signing.sign_media_cookies(
@@ -249,12 +311,12 @@ async def media_auth(
     # to CloudFront requests.  SameSite=None; Secure is required for cross-origin
     # cookie delivery (the API is on a different origin from CloudFront).
     cookie_opts = {
-        "domain": CLOUDFRONT_MEDIA_DOMAIN,
+        "domain": CLOUDFRONT_COOKIE_DOMAIN,
         "max_age": _COOKIE_TTL,
         "httponly": True,
         "secure": True,
         "samesite": "none",
-        "path": f"/{user_site}/assets",
+        "path": f"/{user_site}/",
     }
 
     for name, value in cookies.items():
