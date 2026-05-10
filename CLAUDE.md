@@ -149,6 +149,7 @@ Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, an
 - Search: `search_wiki`, `search_semantic`
 - Agents: `agent_create`, `agent_read`, `agent_update`, `agent_delete`, `agent_list`
 - Skills: `skill_list`, `skill_create`, `skill_update`
+- Introspection: `list_skill_tools` — returns all tools available to agents on this site, derived from each skill's `tools:` frontmatter declaration; result is a flat list of `{name, skill}` pairs, useful for discovering whether a particular tool (e.g. a Linear or GitHub tool) is already installed before asking the user to create a new skill
 
 All operations are scoped to the authenticated user's site. Agent tools manage `agent.md` definition files on wiki pages (not session state). `agent_list` accepts a `page_path` for page-scoped listing, or `site_wide=True` to list all agents across the site.
 
