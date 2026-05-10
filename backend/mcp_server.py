@@ -954,6 +954,28 @@ def create_mcp_app(
         )
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
+    # ── Introspection ─────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    async def list_tools(ctx: Context = None) -> dict:
+        """List all tools available on this MCP server.
+
+        Returns each tool's name, description, and input schema. Useful for
+        programmatic introspection of server capabilities from within an agent
+        session, without relying on the MCP protocol's built-in tool discovery.
+        """
+        tools = await mcp.list_tools()
+        return {
+            "tools": [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.parameters,
+                }
+                for t in tools
+            ]
+        }
+
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
     return mcp.http_app(
