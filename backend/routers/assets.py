@@ -255,7 +255,7 @@ async def media_auth(
         "httponly": True,
         "secure": True,
         "samesite": "none",
-        "path": f"/{user_site}/media",
+        "path": f"/{user_site}/",
     }
 
     for name, value in cookies.items():
