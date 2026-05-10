@@ -176,22 +176,24 @@ async def list_assets(
     user_site = get_site_for_user(claims.user_id)
     require_site_owner(site, user_site)
 
-    prefix = f"{site}/{page_path + '/' if page_path else ''}assets/"
+    page_prefix = f"{site}/{page_path + '/' if page_path else ''}"
+    prefixes = [f"{page_prefix}assets/", f"{page_prefix}media/"]
     paginator = s3.get_paginator("list_objects_v2")
 
     assets: list[dict] = []
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            rel_path = obj["Key"].removeprefix(f"{site}/")
-            mime = asset_mime_type(rel_path)
-            assets.append(
-                {
-                    "path": rel_path,
-                    "size": obj.get("Size", 0),
-                    "content_type": mime,
-                    "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
-                }
-            )
+    for prefix in prefixes:
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                rel_path = obj["Key"].removeprefix(f"{site}/")
+                mime = asset_mime_type(rel_path)
+                assets.append(
+                    {
+                        "path": rel_path,
+                        "size": obj.get("Size", 0),
+                        "content_type": mime,
+                        "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+                    }
+                )
 
     return {"assets": assets}
 
