@@ -716,7 +716,7 @@ export default function App() {
                 <div className="state-center">Loading…</div>
               ) : mode === 'view' ? (
                 <div className="view-scroll">
-                  <MarkdownViewer content={content} site={SITE} apiBase={API_BASE} />
+                  <MarkdownViewer content={content} site={SITE} apiBase={API_BASE} pagePath={getPagePath(filePath)} />
                   {isContentPage && (
                     <ChildPagesList
                       apiBase={API_BASE}

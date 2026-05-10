@@ -25,32 +25,34 @@ function isMediaAsset(src: string): boolean {
 /**
  * Resolve a markdown image `src` to a full URL for use in the browser.
  *
- * @param src      - The raw src from the markdown (e.g. "assets/demo.mp4")
- * @param site     - The current site name (e.g. "knuth-home")
+ * @param src      - The raw src from the markdown (e.g. "media/demo.mp4")
+ * @param site     - The current site name (e.g. "knuth")
  * @param apiBase  - The API base URL (e.g. "/api" or "https://api.example.com/api")
+ * @param pagePath - The current page path (e.g. "intro" or "intro/sub"); used to
+ *                   resolve relative asset paths to their full S3 key.
  */
-export function resolveAssetUrl(src: string, site: string, apiBase: string): string {
+export function resolveAssetUrl(src: string, site: string, apiBase: string, pagePath = ''): string {
   if (!src) return src
 
   // Pass through absolute http(s) URLs unchanged — these are external images.
   if (/^https?:\/\//i.test(src)) return src
 
+  // Resolve relative paths against the current page.
+  // e.g. src="media/foo.mp4", pagePath="intro/sub" → fullPath="intro/sub/media/foo.mp4"
+  const fullPath = src.startsWith('/')
+    ? src.slice(1)
+    : pagePath ? `${pagePath}/${src}` : src
+
   // In LOCAL_MODE all assets (including video/audio) go through the backend.
   if (LOCAL_MODE) {
-    const path = src.startsWith('/') ? src.slice(1) : src
-    return `${apiBase}/asset?site=${encodeURIComponent(site)}&path=${encodeURIComponent(path)}`
+    return `${apiBase}/asset?site=${encodeURIComponent(site)}&path=${encodeURIComponent(fullPath)}`
   }
 
   // Production: video/audio go to CloudFront when the domain is configured.
   if (isMediaAsset(src) && CLOUDFRONT_MEDIA_DOMAIN) {
-    if (src.startsWith('/')) {
-      // Absolute asset path — prepend site prefix.
-      return `https://${CLOUDFRONT_MEDIA_DOMAIN}/${site}${src}`
-    }
-    return `https://${CLOUDFRONT_MEDIA_DOMAIN}/${site}/${src}`
+    return `https://${CLOUDFRONT_MEDIA_DOMAIN}/${site}/${fullPath}`
   }
 
   // Images (and video/audio when CloudFront is not configured) go through the backend.
-  const path = src.startsWith('/') ? src.slice(1) : src
-  return `${apiBase}/asset?site=${encodeURIComponent(site)}&path=${encodeURIComponent(path)}`
+  return `${apiBase}/asset?site=${encodeURIComponent(site)}&path=${encodeURIComponent(fullPath)}`
 }
