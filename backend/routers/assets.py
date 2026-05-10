@@ -1,11 +1,12 @@
 """Asset upload, serving, and media-auth endpoints for YoloScribe.
 
-POST /upload      — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
-GET  /asset       — serves image assets (and video/audio in LOCAL_MODE) from S3 with
-                    page visibility access control.
-GET  /assets      — lists asset keys with metadata under a given page path; owner-only.
-GET  /media-auth  — issues CloudFront signed cookies for video/audio playback; no-op in
-                    LOCAL_MODE (all assets served through /asset instead).
+POST   /upload      — owner-only; returns a pre-signed S3 PUT URL for direct browser upload.
+GET    /asset       — serves image assets (and video/audio in LOCAL_MODE) from S3 with
+                      page visibility access control.
+DELETE /asset       — owner-only; permanently deletes an asset from S3.
+GET    /assets      — lists asset keys with metadata under a given page path; owner-only.
+GET    /media-auth  — issues CloudFront signed cookies for video/audio playback; no-op in
+                      LOCAL_MODE (all assets served through /asset instead).
 """
 
 import logging
@@ -156,6 +157,35 @@ async def get_asset(
 
     body = obj["Body"].read()
     return Response(content=body, media_type=mime)
+
+
+@router.delete(
+    "/asset",
+    tags=["assets"],
+    summary="Delete an asset from S3",
+    description="Owner-only. Permanently deletes the asset at the given path.",
+    status_code=204,
+)
+async def delete_asset(
+    site: str,
+    path: str,
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> Response:
+    if not is_safe_asset_path(path):
+        raise HTTPException(status_code=400, detail="Invalid asset path or extension")
+
+    claims = decode_jwt(credentials)
+    user_site = get_site_for_user(claims.user_id)
+    require_site_owner(site, user_site)
+
+    s3_key = f"{site}/{path}"
+    try:
+        s3.delete_object(Bucket=S3_BUCKET, Key=s3_key)
+    except Exception as exc:
+        log.error("Failed to delete asset %s: %s", s3_key, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete asset")
+
+    return Response(status_code=204)
 
 
 @router.get(
