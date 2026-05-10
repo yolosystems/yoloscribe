@@ -19,10 +19,12 @@ import cloudfront_signing
 from auth import decode_jwt, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import (
     CLOUDFRONT_COOKIE_DOMAIN,
+    CLOUDFRONT_MEDIA_DISTRIBUTION_ID,
     CLOUDFRONT_MEDIA_DOMAIN,
     CLOUDFRONT_SIGNING_KEY_ID,
     LOCAL_MODE,
     S3_BUCKET,
+    cloudfront,
     s3,
 )
 from s3_helpers import (
@@ -184,6 +186,19 @@ async def delete_asset(
     except Exception as exc:
         log.error("Failed to delete asset %s: %s", s3_key, exc)
         raise HTTPException(status_code=500, detail="Failed to delete asset")
+
+    if cloudfront and CLOUDFRONT_MEDIA_DISTRIBUTION_ID:
+        try:
+            cloudfront.create_invalidation(
+                DistributionId=CLOUDFRONT_MEDIA_DISTRIBUTION_ID,
+                InvalidationBatch={
+                    "Paths": {"Quantity": 1, "Items": [f"/{s3_key}"]},
+                    "CallerReference": s3_key,
+                },
+            )
+            log.info("Invalidated CloudFront path /%s", s3_key)
+        except Exception as exc:
+            log.error("CloudFront invalidation failed for /%s: %s", s3_key, exc)
 
     return Response(status_code=204)
 

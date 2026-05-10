@@ -33,6 +33,9 @@ CLOUDFRONT_COOKIE_DOMAIN = (
     os.environ.get("CLOUDFRONT_COOKIE_DOMAIN", "")
     or (_derive_cookie_domain(CLOUDFRONT_MEDIA_DOMAIN) if CLOUDFRONT_MEDIA_DOMAIN else "")
 )
+# Distribution ID for the media CloudFront distribution (e.g. "E1EXAMPLE123").
+# Required for cache invalidation on asset deletion. No-op when absent.
+CLOUDFRONT_MEDIA_DISTRIBUTION_ID = os.environ.get("CLOUDFRONT_MEDIA_DISTRIBUTION_ID", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
 FRONTEND_URL = (
@@ -109,6 +112,12 @@ s3 = boto_session.client("s3", **_s3_kwargs)
 sqs = boto_session.client("sqs", **_sqs_kwargs) if SQS_QUEUE_URL else None
 sqs_indexing = boto_session.client("sqs", **_sqs_kwargs) if SQS_INDEXING_QUEUE_URL else None
 s3vectors = boto_session.client("s3vectors", region_name=AWS_REGION) if S3_VECTORS_BUCKET else None
+# CloudFront is a global service — its API endpoint is always us-east-1.
+cloudfront = (
+    boto_session.client("cloudfront", region_name="us-east-1")
+    if not LOCAL_MODE and CLOUDFRONT_MEDIA_DISTRIBUTION_ID
+    else None
+)
 
 _sm = None if LOCAL_MODE else boto_session.client("secretsmanager", region_name=AWS_REGION)
 
