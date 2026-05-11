@@ -35,6 +35,7 @@ from agent_md import (
     parse_agent_md,
 )
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
+from s3_helpers import enqueue_on_write_agents
 from agents.base import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
@@ -278,6 +279,7 @@ def create_mcp_app(
                 ContentType="application/json",
             )
         _maybe_enqueue_index(key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        enqueue_on_write_agents(user.site, key, user.user_id)
         return {
             "page_path": page_path,
             "url": f"/{user.site}/{page_path}" if page_path else f"/{user.site}/",
@@ -338,6 +340,7 @@ def create_mcp_app(
             ContentType="text/markdown; charset=utf-8",
         )
         _maybe_enqueue_index(key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        enqueue_on_write_agents(user.site, key, user.user_id)
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),
