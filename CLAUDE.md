@@ -100,15 +100,35 @@ ChatAgent (orchestrator)
 
 ### `agent.md` format
 
-Full format (definition agents):
+Full format (definition agents) — all metadata in YAML frontmatter, free-form description in the body:
 ```markdown
 ---
 trigger: manual|schedule|on_write
+name: {name}
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
 scope:                 # optional; glob patterns for cross-page agents
   - "**"
+skills:
+  - {skill-name}
 model: sonnet          # optional; overrides server default
+---
+
+{description}
+```
+
+Pointer agents (on_write subscriptions) use frontmatter only — no body:
+```markdown
+---
+trigger: on_write
+ref: {page_path}/.agents/{agent_name}/agent.md
+---
+```
+
+**Backward-compatible old format** (still parseable but no longer generated):
+```markdown
+---
+trigger: manual|schedule|on_write
 ---
 
 # Agent: {name}
@@ -123,15 +143,7 @@ model: sonnet          # optional; overrides server default
 
 ## Model
 
-sonnet   # optional; overridden by frontmatter 'model' if both present
-```
-
-Pointer agents (on_write subscriptions) use frontmatter only — no body:
-```markdown
----
-trigger: on_write
-ref: {page_path}/.agents/{agent_name}/agent.md
----
+sonnet
 ```
 
 The schema is defined in `backend/agent_md.py` (MCP server) and `agent-runner/agent_runner/parse.py` (runner). Both must stay in sync — neither can import the other (separate packages). Parsed at runtime by both the MCP server and the async worker.
@@ -190,7 +202,7 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 
 ### Model registry keys
 
-Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `## Model` section in `agent.md`:
+Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `model:` frontmatter field in `agent.md`:
 
 | Key | Provider | Model |
 |---|---|---|
