@@ -3,9 +3,11 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_md import AgentDefinitionError, parse_agent_md
 from agents.base import AGENT_NAME_RE, agents_prefix, skills_prefix
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, s3
+from k8s_agent import delete_agent_cronjob
 from models import CreateAgentRequest, CreatePageRequest
 from s3_helpers import PAGE_PATH_RE, default_child_page_md, enqueue_index_job
 
@@ -101,13 +103,33 @@ async def delete_agent(
         raise HTTPException(status_code=400, detail="Invalid agent name")
 
     prefix = agents_prefix(site, page_path)
-    key = f"{prefix}/{agent_name}/agent.md"
+    agent_prefix = f"{prefix}/{agent_name}/"
 
-    check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=key, MaxKeys=1)
-    if check.get("KeyCount", 0) == 0:
+    # Read trigger before deleting so we know whether to clean up a CronJob.
+    was_scheduled = False
+    agent_md_key = f"{prefix}/{agent_name}/agent.md"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=agent_md_key)
+        text = obj["Body"].read().decode("utf-8")
+        defn = parse_agent_md(text)
+        was_scheduled = defn.trigger == "schedule"
+    except Exception:
+        pass  # best-effort; proceed with delete regardless
+
+    paginator = s3.get_paginator("list_objects_v2")
+    keys_to_delete: list[dict] = []
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=agent_prefix):
+        for obj in page.get("Contents", []):
+            keys_to_delete.append({"Key": obj["Key"]})
+
+    if not keys_to_delete:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    s3.delete_object(Bucket=S3_BUCKET, Key=key)
+    s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": keys_to_delete})
+
+    if was_scheduled:
+        delete_agent_cronjob(site, agent_name, user_id)
+
     return {"deleted": agent_name}
 
 

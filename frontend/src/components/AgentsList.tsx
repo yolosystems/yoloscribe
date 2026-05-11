@@ -46,10 +46,15 @@ export default function AgentsList({ agents, activeFilePath, pagePath, apiBase, 
     if (!window.confirm(`Delete agent "${name}"? This cannot be undone.`)) return
     const params = new URLSearchParams({ site, agent_name: name })
     if (pagePath) params.set('page_path', pagePath)
-    await fetch(`${apiBase}/agents?${params}`, {
+    const res = await fetch(`${apiBase}/agents?${params}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert(`Failed to delete agent: ${body.detail ?? res.status}`)
+      return
+    }
     onAgentsChanged()
   }
 

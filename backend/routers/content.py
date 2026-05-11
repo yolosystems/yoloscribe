@@ -7,8 +7,10 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 import sse_broadcaster
+from agent_md import AgentDefinitionError, parse_agent_md
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
+from k8s_agent import enqueue_schedule_bootstrap
 from rate_limit import limiter
 from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job, enqueue_on_write_agents
 from settings_cache import get_page_settings, page_path_from_file_path
@@ -132,6 +134,15 @@ async def get_content_route(
     raise HTTPException(status_code=403, detail="Access denied")
 
 
+def _maybe_bootstrap_schedule(site: str, path: str, text: str, user_id: str) -> None:
+    try:
+        defn = parse_agent_md(text)
+    except AgentDefinitionError:
+        return
+    if defn.trigger == "schedule":
+        enqueue_schedule_bootstrap(f"{site}/{path}", user_id)
+
+
 @router.put(
     "/content",
     tags=["content"],
@@ -215,4 +226,6 @@ async def put_content_route(
             enqueue_on_write_agents(site, content_key, claims.user_id)
         page_path = page_path_from_file_path(path)
         sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "web"})
+    elif ".agents/" in path and path.endswith("agent.md") and not is_shared_write:
+        _maybe_bootstrap_schedule(site, path, text, claims.user_id)
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
