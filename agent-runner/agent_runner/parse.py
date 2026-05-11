@@ -114,41 +114,60 @@ def parse_agent_md(text: str) -> AgentDefinition:
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
 
+    # name and skills may come from frontmatter (new format) or body sections (old format)
+    name = fm.get("name", "")
+    fm_skills_raw = fm.get("skills", [])
+    fm_skills: list[str] = [fm_skills_raw] if isinstance(fm_skills_raw, str) else list(fm_skills_raw)
+
     if trigger == "schedule" and not schedule:
         raise AgentDefinitionError(
             "trigger: schedule requires a 'schedule' field (cron expression)."
         )
 
-    # Parse markdown body for name, description, skills, and fallback model
+    # Parse body: supports both new format (free-form text) and old format (## sections)
     sections: dict[str, list[str]] = {}
     current_section: str | None = None
-    name = ""
+    free_body_lines: list[str] = []
 
     for line in body.splitlines():
         if line.startswith("# Agent:"):
-            name = line[len("# Agent:"):].strip()
+            if not name:
+                name = line[len("# Agent:"):].strip()
+            # skip the heading line — not part of the description
         elif line.startswith("## "):
             current_section = line[3:].strip()
             sections.setdefault(current_section, [])
         elif current_section is not None:
             sections[current_section].append(line)
+        else:
+            free_body_lines.append(line)
 
     def _section_text(key: str) -> str:
         return "\n".join(sections.get(key, [])).strip()
 
-    description = _section_text("Description")
+    # Description: ## Description section (old format) or free-form body (new format)
+    if "Description" in sections:
+        description = _section_text("Description")
+    else:
+        description = "\n".join(free_body_lines).strip()
+
+    # Skills: frontmatter takes priority over ## Skills body section
+    if fm_skills:
+        skills = fm_skills
+    else:
+        skills = [
+            line[2:].strip()
+            for line in sections.get("Skills", [])
+            if line.startswith("- ")
+        ]
+
+    # Model: frontmatter takes priority over ## Model body section
     if not model:
         model = _section_text("Model")
 
-    skills = [
-        line[2:].strip()
-        for line in sections.get("Skills", [])
-        if line.startswith("- ")
-    ]
-
     if not ref and not name:
         raise AgentDefinitionError(
-            "agent.md must have a '# Agent: {name}' heading, "
+            "agent.md must have a 'name' frontmatter field or a '# Agent: {name}' heading, "
             "or a 'ref' frontmatter field for pointer agents."
         )
 

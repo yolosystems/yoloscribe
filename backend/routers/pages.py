@@ -75,10 +75,8 @@ async def create_agent(
         raise HTTPException(status_code=409, detail="Agent already exists")
 
     skeleton = (
-        f"---\ntrigger: manual\n---\n\n"
-        f"# Agent: {req.agent_name}\n\n"
-        f"## Description\n\nDescribe what this agent does.\n\n"
-        f"## Skills\n\n- (none)\n"
+        f"---\ntrigger: manual\nname: {req.agent_name}\nskills:\n---\n\n"
+        f"Describe what this agent does.\n"
     )
     s3.put_object(
         Bucket=S3_BUCKET,
