@@ -34,6 +34,7 @@ from agent_md import (
     build_agent_md,
     parse_agent_md,
 )
+from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
 from agents.base import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
@@ -682,6 +683,8 @@ def create_mcp_app(
             Body=content.encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
+        if defn.trigger == "schedule":
+            enqueue_schedule_bootstrap(key, user.user_id)
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -775,6 +778,10 @@ def create_mcp_app(
             Body=content.encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
+        if updated.trigger == "schedule":
+            enqueue_schedule_bootstrap(key, user.user_id)
+        elif defn.trigger == "schedule" and updated.trigger != "schedule":
+            delete_agent_cronjob(user.site, agent_name, user.user_id)
         return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
     @mcp.tool()
@@ -790,6 +797,17 @@ def create_mcp_app(
             page_path: Page the agent is attached to; empty string for the root page.
         """
         user = _user(ctx)
+
+        # Read trigger before deleting so we know whether to clean up a CronJob.
+        was_scheduled = False
+        agent_key = _agent_key(user.site, page_path, agent_name)
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=agent_key)
+            text = resp["Body"].read().decode("utf-8")
+            was_scheduled = parse_agent_md(text).trigger == "schedule"
+        except Exception:
+            pass  # best-effort; proceed with delete regardless
+
         prefix = f"{_agents_prefix(user.site, page_path)}{agent_name}/"
         paginator = s3_client.get_paginator("list_objects_v2")
         keys_deleted = 0
@@ -802,6 +820,10 @@ def create_mcp_app(
             raise ValueError(
                 f"Agent '{agent_name}' not found on page '{page_path or '(root)'}'."
             )
+
+        if was_scheduled:
+            delete_agent_cronjob(user.site, agent_name, user.user_id)
+
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
     @mcp.tool()
