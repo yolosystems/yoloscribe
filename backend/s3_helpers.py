@@ -26,7 +26,6 @@ SAFE_PATH = re.compile(
     rf"|{_PAGE_SEG}/\.agents/{_AGENT_NAME_SEG}/run_log\.md"
     rf"|\.skills/{_AGENT_NAME_SEG}/SKILL\.md"
     r"|\.user/search\.md"
-    r"|\.user/notifications\.md"
     r")$"
 )
 
