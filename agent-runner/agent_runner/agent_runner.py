@@ -591,22 +591,29 @@ def _write_run_log(
         log.warning("Failed to write run_log %s: %s", run_log_key, exc)
 
 
-def _write_notification(s3, site: str, message: str) -> None:
-    """Prepend a notification entry to {site}/.user/notifications.md."""
+def _write_notification(s3, site: str, event_type: str, payload: dict) -> None:
+    """Append a canonical notification entry to {site}/.user/notifications.md.
+
+    agent_success and agent_failure are intentionally never dispatched to
+    on_notify agents — this function only writes to S3.
+    """
     import datetime
     key = f"{site}/.user/notifications.md"
-    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"## {ts} — {event_type}", ""]
+    for k, v in payload.items():
+        lines.append(f"{k}: {v}")
+    lines.append("")
+    entry = "\n".join(lines) + "\n"
     try:
         existing = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
     except Exception:
         existing = ""
-    combined = entry + existing
     try:
         s3.put_object(
             Bucket=BUCKET,
             Key=key,
-            Body=combined.encode("utf-8"),
+            Body=(existing + entry).encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
     except Exception as exc:
@@ -679,8 +686,8 @@ def main() -> None:
         except AgentDefinitionError as exc:
             log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
             _write_notification(
-                s3, _site,
-                f"**Invalid agent definition** (`{AGENT_MD_KEY}`):\n\n{exc}",
+                s3, _site, "agent_failure",
+                {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"},
             )
             return
 
@@ -789,10 +796,11 @@ def main() -> None:
                         f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
                     )
                     _write_notification(
-                        s3, _site,
-                        f"**Agent write conflict** (`{AGENT_MD_KEY}`):\n\n"
-                        f"Could not save `{CONTENT_KEY}` — page modified by another writer "
-                        f"on every attempt.",
+                        s3, _site, "agent_failure",
+                        {
+                            "agent": AGENT_MD_KEY,
+                            "reason": f"Write conflict: could not save {CONTENT_KEY} after {_MAX_WRITE_RETRIES} attempts",
+                        },
                     )
                     return
 
@@ -816,8 +824,8 @@ def main() -> None:
             f"Error: {exc}",
         )
         _write_notification(
-            s3, _site,
-            f"**Agent execution failed** (`{AGENT_MD_KEY}`):\n\n{exc}",
+            s3, _site, "agent_failure",
+            {"agent": AGENT_MD_KEY, "reason": str(exc)},
         )
         return
 
@@ -825,6 +833,10 @@ def main() -> None:
     _write_run_log(
         s3, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
+    )
+    _write_notification(
+        s3, _site, "agent_success",
+        {"agent": AGENT_MD_KEY},
     )
     _enqueue_index_job(CONTENT_KEY)
 
