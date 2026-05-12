@@ -178,7 +178,7 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, store) -> dict:
         refresh_token = token_data.get("refresh_token")
         if not refresh_token:
             raise OAuthTokenError(
-                skill_name,
+                tool_name,
                 "Token has expired and no refresh token is available. Please re-authenticate in the Credentials panel.",
             )
 
