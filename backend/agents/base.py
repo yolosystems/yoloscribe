@@ -446,7 +446,7 @@ class S3Tools:
             description: Agent purpose / system prompt.
             skills: List of skill names the agent should use.
             page_path: Relative page path; empty for root.
-            trigger: When the agent runs — "manual", "schedule", or "on_write".
+            trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
             scope: Glob patterns (relative to agent's page) for cross-page agents.
                    e.g. ["**"] to match all descendants. Leave empty for own-page only.
             schedule: Cron expression — required when trigger is "schedule".
@@ -467,11 +467,16 @@ class S3Tools:
         if err := _check_injection(description, "description"):
             return err
 
-        valid_triggers = {"manual", "schedule", "on_write"}
+        valid_triggers = {"manual", "schedule", "on_write", "on_notify"}
         if trigger not in valid_triggers:
-            return f"Error: invalid trigger '{trigger}'. Use one of: manual, schedule, on_write."
+            return f"Error: invalid trigger '{trigger}'. Use one of: manual, schedule, on_write, on_notify."
         if trigger == "schedule" and not schedule:
             return "Error: trigger 'schedule' requires a 'schedule' cron expression."
+
+        # on_notify agents must always live at the site root — the runner only
+        # searches {site}/.agents/ regardless of which page context triggered creation.
+        if trigger == "on_notify":
+            page_path = ""
 
         prefix = agents_prefix(site, page_path)
         key = f"{prefix}/{agent_name}/agent.md"

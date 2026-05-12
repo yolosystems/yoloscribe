@@ -161,6 +161,8 @@ async def put_content_route(
 ) -> Response:
     if not is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid path")
+    if path == ".user/notifications.md":
+        raise HTTPException(status_code=403, detail="notifications.md is platform-controlled and cannot be written directly")
 
     claims = decode_jwt(credentials)
     user_site = get_site_for_user(claims.user_id)
