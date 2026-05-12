@@ -639,7 +639,7 @@ def create_mcp_app(
             description: Agent purpose / system prompt instructions.
             skills: List of skill names the agent should use.
             page_path: Page to attach the agent to; empty string for the root page.
-            trigger: When the agent runs — "manual", "schedule", or "on_write".
+            trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
             scope: Glob patterns for cross-page agents (e.g. ["**"] for all descendants).
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for scheduled agents (e.g. "America/New_York").
@@ -654,6 +654,11 @@ def create_mcp_app(
                 f"Invalid agent name '{agent_name}'. "
                 "Use lowercase letters, digits, hyphens, underscores."
             )
+
+        # on_notify agents must always live at site root — enqueue_on_notify_agents
+        # only searches {site}/.agents/ regardless of which page triggered creation.
+        if trigger == "on_notify":
+            page_path = ""
 
         defn = AgentDefinition(
             name=agent_name,
