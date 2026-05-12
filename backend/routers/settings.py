@@ -1,4 +1,3 @@
-import datetime
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +7,8 @@ from auth import JWTClaims, get_jwt_claims, get_user_context, require_site_owner
 from rate_limit import limiter
 from config import S3_BUCKET, s3
 from models import AccessRequest, PageSettings
-from s3_helpers import get_content, put_content
+from notifications import write_notification
+from s3_helpers import put_content
 from settings_cache import get_page_settings, invalidate_settings_cache, page_path_from_file_path
 
 router = APIRouter()
@@ -78,10 +78,11 @@ async def request_access(
         if already_shared:
             raise HTTPException(status_code=409, detail="You already have access to this page")
 
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     requester = claims.email or claims.user_id
-    entry = f"- [{ts}] **{requester}** requested access to `{req.path}`\n"
-
-    existing = get_content(req.site, ".user/notifications.md")
-    put_content(req.site, ".user/notifications.md", existing + entry)
+    write_notification(
+        req.site,
+        "access_requested",
+        {"requester": requester, "page": req.path},
+        user_id=claims.user_id,
+    )
     return {"status": "ok"}
