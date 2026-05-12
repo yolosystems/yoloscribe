@@ -1,4 +1,3 @@
-import datetime
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +7,8 @@ from auth import JWTClaims, get_jwt_claims, get_user_context, require_site_owner
 from rate_limit import limiter
 from config import S3_BUCKET, s3
 from models import AccessRequest, PageSettings
-from s3_helpers import get_content, put_content
+from notifications import write_notification
+from s3_helpers import put_content
 from settings_cache import get_page_settings, invalidate_settings_cache, page_path_from_file_path
 
 router = APIRouter()
@@ -47,10 +47,64 @@ async def put_settings(
             raise HTTPException(status_code=400, detail="shared_with access must be 'view' or 'write'")
 
     page_path = page_path_from_file_path(path)
+    old = get_page_settings(site, page_path)
+
     s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
     put_content(site, s3_path, json.dumps(settings.model_dump()))
     invalidate_settings_cache(site, page_path)
+
+    _emit_visibility_notifications(site, page_path or "(root)", old, settings.model_dump(), user_id)
     return {"status": "saved"}
+
+
+def _emit_visibility_notifications(
+    site: str,
+    page: str,
+    old: dict,
+    new: dict,
+    user_id: str,
+) -> None:
+    """Emit notifications for visibility and sharing changes (best-effort)."""
+    try:
+        old_visibility = old.get("visibility", "private")
+        new_visibility = new.get("visibility", "private")
+        if old_visibility != new_visibility:
+            write_notification(
+                site,
+                "page_visibility_changed",
+                {"page": page, "old_visibility": old_visibility, "new_visibility": new_visibility},
+                user_id=user_id,
+            )
+
+        old_users = {u["email"]: u["access"] for u in old.get("shared_with", [])}
+        new_users = {u["email"]: u["access"] for u in new.get("shared_with", [])}
+
+        for email, access in new_users.items():
+            if email not in old_users:
+                write_notification(
+                    site,
+                    "page_shared",
+                    {"page": page, "shared_with": email, "access": access},
+                    user_id=user_id,
+                )
+            elif old_users[email] != access:
+                write_notification(
+                    site,
+                    "page_access_changed",
+                    {"page": page, "user": email, "old_access": old_users[email], "new_access": access},
+                    user_id=user_id,
+                )
+
+        for email in old_users:
+            if email not in new_users:
+                write_notification(
+                    site,
+                    "page_unshared",
+                    {"page": page, "removed_user": email},
+                    user_id=user_id,
+                )
+    except Exception:
+        pass  # notifications are best-effort; never block a settings save
 
 
 @router.post("/request-access", tags=["access"], summary="Request access to a page")
@@ -78,10 +132,11 @@ async def request_access(
         if already_shared:
             raise HTTPException(status_code=409, detail="You already have access to this page")
 
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     requester = claims.email or claims.user_id
-    entry = f"- [{ts}] **{requester}** requested access to `{req.path}`\n"
-
-    existing = get_content(req.site, ".user/notifications.md")
-    put_content(req.site, ".user/notifications.md", existing + entry)
+    write_notification(
+        req.site,
+        "access_requested",
+        {"requester": requester, "page": req.path},
+        user_id=claims.user_id,
+    )
     return {"status": "ok"}

@@ -343,7 +343,8 @@ export default function App() {
   }, [filePath, sessionUserId, authReady, reloadKey])
 
   const isOwner = accessLevel === 'full-control'
-  const canEdit = accessLevel === 'full-control' || accessLevel === 'write'
+  const canEdit = (accessLevel === 'full-control' || accessLevel === 'write')
+    && filePath !== '.user/notifications.md'
   const canRunAgents = accessLevel === 'full-control'
 
   // Poll notifications badge when the user is the site owner

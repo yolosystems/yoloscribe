@@ -142,6 +142,7 @@ def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str)
 
     cron_spec = k8s_client.V1CronJobSpec(
         schedule=schedule,
+        concurrency_policy="Forbid",
         job_template=k8s_client.V1JobTemplateSpec(
             spec=k8s_client.V1JobSpec(
                 template=k8s_client.V1PodTemplateSpec(spec=pod_spec),
@@ -171,11 +172,16 @@ def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str)
             raise
 
 
-def _write_notification_to_s3(s3, bucket: str, site: str, message: str) -> None:
+def _write_notification_to_s3(s3, bucket: str, site: str, event_type: str, payload: dict) -> None:
+    """Append a canonical notification entry to {site}/.user/notifications.md."""
     import datetime
     key = f"{site}/.user/notifications.md"
-    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"## {ts} — {event_type}", ""]
+    for k, v in payload.items():
+        lines.append(f"{k}: {v}")
+    lines.append("")
+    entry = "\n".join(lines) + "\n"
     try:
         existing = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
     except Exception:
@@ -184,7 +190,7 @@ def _write_notification_to_s3(s3, bucket: str, site: str, message: str) -> None:
         s3.put_object(
             Bucket=bucket,
             Key=key,
-            Body=(entry + existing).encode("utf-8"),
+            Body=(existing + entry).encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
     except Exception as exc:
@@ -208,8 +214,8 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
     except AgentDefinitionError as exc:
         log.error("Invalid agent.md at %s: %s", agent_md_key, exc)
         _write_notification_to_s3(
-            s3, bucket, site,
-            f"**Invalid agent definition** (`{agent_md_key}`):\n\n{exc}",
+            s3, bucket, site, "agent_failure",
+            {"agent": agent_md_key, "reason": f"Invalid agent definition: {exc}"},
         )
         return
 

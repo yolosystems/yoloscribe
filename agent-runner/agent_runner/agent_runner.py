@@ -591,22 +591,29 @@ def _write_run_log(
         log.warning("Failed to write run_log %s: %s", run_log_key, exc)
 
 
-def _write_notification(s3, site: str, message: str) -> None:
-    """Prepend a notification entry to {site}/.user/notifications.md."""
+def _write_notification(s3, site: str, event_type: str, payload: dict) -> None:
+    """Append a canonical notification entry to {site}/.user/notifications.md.
+
+    agent_success and agent_failure are intentionally never dispatched to
+    on_notify agents — this function only writes to S3.
+    """
     import datetime
     key = f"{site}/.user/notifications.md"
-    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    entry = f"## Agent Error — {now}\n\n{message}\n\n---\n\n"
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"## {ts} — {event_type}", ""]
+    for k, v in payload.items():
+        lines.append(f"{k}: {v}")
+    lines.append("")
+    entry = "\n".join(lines) + "\n"
     try:
         existing = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
     except Exception:
         existing = ""
-    combined = entry + existing
     try:
         s3.put_object(
             Bucket=BUCKET,
             Key=key,
-            Body=combined.encode("utf-8"),
+            Body=(existing + entry).encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
     except Exception as exc:
@@ -679,8 +686,8 @@ def main() -> None:
         except AgentDefinitionError as exc:
             log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
             _write_notification(
-                s3, _site,
-                f"**Invalid agent definition** (`{AGENT_MD_KEY}`):\n\n{exc}",
+                s3, _site, "agent_failure",
+                {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"},
             )
             return
 
@@ -725,15 +732,25 @@ def main() -> None:
             )
             model = _build_model(model_key)
             log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
-            system_prompt = (
-                agent_def.description
-                + "\n\n"
-                + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
-                f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
-                + "IMPORTANT: When you have finished your work, your final message must contain "
-                "ONLY the complete updated markdown content — no preamble, no explanation, no "
-                "summary, no commentary. Output the raw markdown and nothing else."
-            )
+            if agent_def.trigger == "on_notify":
+                system_prompt = (
+                    agent_def.description
+                    + "\n\n"
+                    + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
+                    f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
+                    + "Use your tools to dispatch this notification. "
+                    "When done, output a brief confirmation of what was dispatched."
+                )
+            else:
+                system_prompt = (
+                    agent_def.description
+                    + "\n\n"
+                    + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
+                    f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
+                    + "IMPORTANT: When you have finished your work, your final message must contain "
+                    "ONLY the complete updated markdown content — no preamble, no explanation, no "
+                    "summary, no commentary. Output the raw markdown and nothing else."
+                )
             agent = Agent(
                 system_prompt=system_prompt,
                 model=model,
@@ -747,86 +764,101 @@ def main() -> None:
                 ),
             )
 
-            # 4. Read → run → conditional write, retrying on write conflict
-            _MAX_WRITE_RETRIES = 3
-            for attempt in range(_MAX_WRITE_RETRIES):
-                # Read fresh content + ETag on every attempt
-                content, etag = _get_content_with_etag(s3, CONTENT_KEY)
+            # 4. Run the agent — on_notify agents dispatch via tools only (no write-back).
+            if agent_def.trigger == "on_notify":
+                prompt = AGENT_PROMPT.strip() or "Process this notification according to your instructions."
+                agent(prompt)
+                updated = ""  # no content written back; set for uniform success logging
+            else:
+                # Read → run → conditional write, retrying on write conflict
+                _MAX_WRITE_RETRIES = 3
+                for attempt in range(_MAX_WRITE_RETRIES):
+                    # Read fresh content + ETag on every attempt
+                    content, etag = _get_content_with_etag(s3, CONTENT_KEY)
 
-                task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
-                full_prompt = (
-                    f"{task}\n\n"
-                    f"Current content:\n```markdown\n{content}\n```\n\n"
-                    "When done, reply with ONLY the updated markdown. No explanations."
-                )
-                response = agent(full_prompt)
+                    task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
+                    full_prompt = (
+                        f"{task}\n\n"
+                        f"Current content:\n```markdown\n{content}\n```\n\n"
+                        "When done, reply with ONLY the updated markdown. No explanations."
+                    )
+                    response = agent(full_prompt)
 
-                # 5. Strip any preamble the model emitted before the markdown heading
-                raw = str(response)
-                lines = raw.splitlines()
-                for idx, line in enumerate(lines):
-                    if line.startswith("#"):
-                        raw = "\n".join(lines[idx:])
+                    # 5. Strip any preamble the model emitted before the markdown heading
+                    raw = str(response)
+                    lines = raw.splitlines()
+                    for idx, line in enumerate(lines):
+                        if line.startswith("#"):
+                            raw = "\n".join(lines[idx:])
+                            break
+                    updated = raw
+
+                    if _put_content_conditional(s3, CONTENT_KEY, updated, etag):
                         break
-                updated = raw
 
-                if _put_content_conditional(s3, CONTENT_KEY, updated, etag):
-                    break
+                    if attempt == _MAX_WRITE_RETRIES - 1:
+                        log.error(
+                            "Write conflict after %d attempts for %s — giving up",
+                            _MAX_WRITE_RETRIES, CONTENT_KEY,
+                        )
+                        error_block = (
+                            "> **Agent Error**: Could not save — the page was modified by "
+                            "another writer on every attempt. Please try again.\n\n"
+                        )
+                        _write_error_to_content(s3, content, error_block)
+                        _write_run_log(
+                            s3, _run_log_key, agent_def.name, "failed",
+                            agent_def.trigger, time.monotonic() - _run_start,
+                            f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
+                        )
+                        _write_notification(
+                            s3, _site, "agent_failure",
+                            {
+                                "agent": AGENT_MD_KEY,
+                                "reason": f"Write conflict: could not save {CONTENT_KEY} after {_MAX_WRITE_RETRIES} attempts",
+                            },
+                        )
+                        return
 
-                if attempt == _MAX_WRITE_RETRIES - 1:
-                    log.error(
-                        "Write conflict after %d attempts for %s — giving up",
-                        _MAX_WRITE_RETRIES, CONTENT_KEY,
+                    log.warning(
+                        "Write conflict on attempt %d for %s — retrying with fresh content",
+                        attempt + 1, CONTENT_KEY,
                     )
-                    error_block = (
-                        "> **Agent Error**: Could not save — the page was modified by "
-                        "another writer on every attempt. Please try again.\n\n"
-                    )
-                    _write_error_to_content(s3, content, error_block)
-                    _write_run_log(
-                        s3, _run_log_key, agent_def.name, "failed",
-                        agent_def.trigger, time.monotonic() - _run_start,
-                        f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
-                    )
-                    _write_notification(
-                        s3, _site,
-                        f"**Agent write conflict** (`{AGENT_MD_KEY}`):\n\n"
-                        f"Could not save `{CONTENT_KEY}` — page modified by another writer "
-                        f"on every attempt.",
-                    )
-                    return
-
-                log.warning(
-                    "Write conflict on attempt %d for %s — retrying with fresh content",
-                    attempt + 1, CONTENT_KEY,
-                )
 
     except Exception as exc:
         log.error("Agent execution failed: %s", exc, exc_info=True)
-        error_block = f"> **Agent Error**: The agent encountered an error during execution: {exc}\n\n"
-        try:
-            _write_error_to_content(s3, content, error_block)
-        except Exception as write_exc:
-            log.error("Additionally failed to write error to content: %s", write_exc)
-        _agent_name = agent_def.name if agent_def is not None else "unknown"
         _trigger = agent_def.trigger if agent_def is not None else "manual"
+        if _trigger != "on_notify":
+            error_block = f"> **Agent Error**: The agent encountered an error during execution: {exc}\n\n"
+            try:
+                _write_error_to_content(s3, content, error_block)
+            except Exception as write_exc:
+                log.error("Additionally failed to write error to content: %s", write_exc)
+        _agent_name = agent_def.name if agent_def is not None else "unknown"
         _write_run_log(
             s3, _run_log_key, _agent_name, "failed",
             _trigger, time.monotonic() - _run_start,
             f"Error: {exc}",
         )
         _write_notification(
-            s3, _site,
-            f"**Agent execution failed** (`{AGENT_MD_KEY}`):\n\n{exc}",
+            s3, _site, "agent_failure",
+            {"agent": AGENT_MD_KEY, "reason": str(exc)},
         )
         return
 
-    log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
+    if agent_def.trigger == "on_notify":
+        log.info("on_notify agent run complete for %s", AGENT_MD_KEY)
+    else:
+        log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
+        _enqueue_index_job(CONTENT_KEY)
     _write_run_log(
         s3, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
     )
-    _enqueue_index_job(CONTENT_KEY)
+    _write_notification(
+        s3, _site, "agent_success",
+        {"agent": AGENT_MD_KEY},
+    )
 
 
 if __name__ == "__main__":

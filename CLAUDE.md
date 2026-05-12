@@ -44,7 +44,7 @@ Every "site" is an S3 prefix. The bucket layout is:
   {page}/.agents/{name}/agent.md      # child-page agent definition
   .skills/{name}/skill.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
-  .user/notifications.md              # owner notification inbox (access requests)
+  .user/notifications.md              # owner notification inbox (platform-controlled; read-only in UI)
   .archive/{page}/content.md          # soft-deleted page archive
 ```
 
@@ -69,9 +69,8 @@ All writable paths must pass `SAFE_PATH` in `main.py`. Allowed patterns:
 - `.agents/{name}/agent.md`
 - `{page}/.agents/{name}/agent.md`
 - `.user/search.md`
-- `.user/notifications.md`
 
-This is validated on both `PUT /content` and `POST /chat`.
+`.user/notifications.md` is **not** in SAFE_PATH — it is platform-controlled and may only be written by `notifications.write_notification()`. This is validated on both `PUT /content` and `POST /chat`.
 
 ### Agent framework (Strands Agents)
 All agents inherit from `BaseAgent` (`backend/agents/base.py`), which itself inherits from `strands.Agent`. Each class has a `SYSTEM_PROMPT` class variable (a Python format-string; placeholders are filled via `**prompt_vars` in the constructor).
@@ -103,7 +102,7 @@ ChatAgent (orchestrator)
 Full format (definition agents) — all metadata in YAML frontmatter, free-form description in the body:
 ```markdown
 ---
-trigger: manual|schedule|on_write
+trigger: manual|schedule|on_write|on_notify
 name: {name}
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
@@ -124,6 +123,33 @@ trigger: on_write
 ref: {page_path}/.agents/{agent_name}/agent.md
 ---
 ```
+
+**Trigger types:**
+- `manual` — run on demand only
+- `schedule` — K8s CronJob (requires `schedule:` cron expression); `concurrencyPolicy: Forbid` prevents overlapping runs
+- `on_write` — fires when the agent's page `content.md` is updated; agents are looked up under the page's `.agents/` directory
+- `on_notify` — fires when a new entry is appended to the site's `notifications.md`; agents are looked up under the site root's `.agents/` directory; `agent_success` and `agent_failure` events never trigger `on_notify` to prevent feedback loops
+
+**Notification system** (`backend/notifications.py`):
+
+`write_notification(site, event_type, payload, *, user_id="")` is the sole entry point for writing to `.user/notifications.md`. Entry format:
+```
+## YYYY-MM-DD HH:MM UTC — {event_type}
+
+key: value
+...
+```
+
+Event types and their sources:
+| Event | Source |
+|---|---|
+| `access_requested` | `POST /request-access` |
+| `page_shared` | `PUT /settings` |
+| `page_unshared` | `PUT /settings` |
+| `page_access_changed` | `PUT /settings` |
+| `page_visibility_changed` | `PUT /settings` |
+| `agent_success` | agent-runner (never triggers `on_notify`) |
+| `agent_failure` | agent-runner + polling_worker (never triggers `on_notify`) |
 
 **Backward-compatible old format** (still parseable but no longer generated):
 ```markdown

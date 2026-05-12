@@ -26,7 +26,6 @@ SAFE_PATH = re.compile(
     rf"|{_PAGE_SEG}/\.agents/{_AGENT_NAME_SEG}/run_log\.md"
     rf"|\.skills/{_AGENT_NAME_SEG}/SKILL\.md"
     r"|\.user/search\.md"
-    r"|\.user/notifications\.md"
     r")$"
 )
 
@@ -178,6 +177,62 @@ def delete_site_vectors(site_name: str) -> None:
         logging.info("Deleted %d vectors for site %s", len(vector_ids), site_name)
     except Exception as exc:
         logging.warning("Failed to delete vectors for site %s: %s", site_name, exc)
+
+
+def enqueue_on_notify_agents(site: str, entry_text: str, user_id: str) -> None:
+    """Enqueue agent-runner jobs for any on_notify agents on the site's root page.
+
+    Looks in {site}/.agents/ for agents with trigger: on_notify. Passes the
+    triggering notification entry as the prompt so the agent sees only the new
+    event. Best-effort; never raises.
+    """
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+
+    agents_prefix = f"{site}/.agents/"
+    try:
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=agents_prefix)
+    except Exception:
+        logging.warning("Failed to list on_notify agents for site %s", site, exc_info=True)
+        return
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith("/agent.md"):
+            continue
+        try:
+            agent_text = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read().decode("utf-8")
+        except Exception:
+            logging.warning("Failed to read agent.md at %s", key, exc_info=True)
+            continue
+
+        trigger_m = re.search(r"^trigger:\s*(\S+)", agent_text, re.MULTILINE)
+        if not trigger_m or trigger_m.group(1) != "on_notify":
+            continue
+
+        ref_m = re.search(r"^ref:\s*(\S+)", agent_text, re.MULTILINE)
+        agent_md_key = f"{site}/{ref_m.group(1).strip()}" if ref_m else key
+
+        prompt = (
+            "A new notification has been added to notifications.md:\n\n"
+            f"{entry_text.strip()}\n\n"
+            "Process this notification according to your instructions."
+        )
+
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": S3_BUCKET,
+                    "agent_md_key": agent_md_key,
+                    "content_key": f"{site}/.user/notifications.md",
+                    "prompt": prompt,
+                    "user_id": user_id,
+                }),
+            )
+            logging.info("Enqueued on_notify agent %s for site %s", agent_md_key, site)
+        except Exception:
+            logging.warning("Failed to enqueue on_notify agent %s", agent_md_key, exc_info=True)
 
 
 def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
