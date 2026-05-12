@@ -23,7 +23,7 @@ class AgentDefinition:
     model: str = ""
 
 
-_VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write"})
+_VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:

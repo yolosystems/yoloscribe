@@ -11,7 +11,7 @@ import re
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _MAX_DESCRIPTION_CHARS = 4_096
-_VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write"})
+_VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
 
 
 class AgentDefinitionError(ValueError):

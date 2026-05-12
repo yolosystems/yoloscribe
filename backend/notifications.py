@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 
-from s3_helpers import get_content, put_content
+from s3_helpers import enqueue_on_notify_agents, get_content, put_content
 
 NOTIFICATIONS_PATH = ".user/notifications.md"
 
@@ -29,8 +29,7 @@ def write_notification(
         ...
 
     agent_success and agent_failure events are written but never enqueue
-    on_notify agents (loop guard). on_notify dispatch will be wired here
-    in YOL-224.
+    on_notify agents (loop guard).
     """
     ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"## {ts} — {event_type}", ""]
@@ -41,3 +40,6 @@ def write_notification(
 
     existing = get_content(site, NOTIFICATIONS_PATH)
     put_content(site, NOTIFICATIONS_PATH, existing + entry)
+
+    if event_type not in NO_DISPATCH_EVENTS:
+        enqueue_on_notify_agents(site, entry, user_id)
