@@ -42,6 +42,10 @@ Your job is to help the user define a new agent for a wiki page by:
      blog/). For on_write agents, the agent is defined at the page whose subtree it
      watches, and on_write subscriptions are created on each individual page that
      should trigger it — see step 7.
+   - "on_notify": runs whenever a new entry is appended to the site's notifications.md
+     (e.g. access requests, page sharing events, agent completions). No scope or schedule
+     needed. The agent is always placed at the site root regardless of which page you are
+     currently viewing — put_agent handles this automatically.
 6. Call put_agent once everything is confirmed, passing trigger, scope (for on_write),
    and schedule/timezone (for schedule).  By default put_agent will refuse to overwrite
    an existing agent — if the user explicitly wants to replace one they own, pass
