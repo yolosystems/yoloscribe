@@ -17,6 +17,8 @@ Environment variables:
     LOCAL_MCP_CONFIG_PATH  (optional) path to local-mcp-servers.json for LOCAL_MODE STDIO tools
                            (default: /app/local-mcp-servers.json)
     AGENT_RUNNER_MAX_PAGE_READS  max wiki_read calls per agent run (default: 10)
+    SQS_QUEUE_URL  (optional) SQS dispatch queue; required to trigger on_notify agents
+                   from confirm_page_change notifications
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ USER_ID = os.environ.get("USER_ID", "default")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
+SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
@@ -591,11 +594,11 @@ def _write_run_log(
         log.warning("Failed to write run_log %s: %s", run_log_key, exc)
 
 
-def _write_notification(s3, site: str, event_type: str, payload: dict) -> None:
+def _write_notification(s3, site: str, event_type: str, payload: dict, user_id: str = "") -> None:
     """Append a canonical notification entry to {site}/.user/notifications.md.
 
-    agent_success and agent_failure are intentionally never dispatched to
-    on_notify agents — this function only writes to S3.
+    agent_success and agent_failure are never dispatched to on_notify agents.
+    All other event types (e.g. confirm_page_change) trigger on_notify dispatch.
     """
     import datetime
     key = f"{site}/.user/notifications.md"
@@ -618,6 +621,68 @@ def _write_notification(s3, site: str, event_type: str, payload: dict) -> None:
         )
     except Exception as exc:
         log.error("Failed to write notification for site %s: %s", site, exc)
+        return
+
+    if event_type not in _NO_DISPATCH_EVENTS:
+        _enqueue_on_notify_agents(s3, site, entry, user_id)
+
+
+_NO_DISPATCH_EVENTS = frozenset({"agent_success", "agent_failure"})
+
+
+def _enqueue_on_notify_agents(s3, site: str, entry_text: str, user_id: str) -> None:
+    """Dispatch on_notify agents for this site (best-effort; never raises)."""
+    if not SQS_QUEUE_URL:
+        return
+    sqs_kwargs: dict = {"region_name": AWS_REGION}
+    if SQS_ENDPOINT_URL:
+        sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
+    try:
+        sqs = _session.client("sqs", **sqs_kwargs)
+    except Exception as exc:
+        log.warning("Could not create SQS client for on_notify dispatch: %s", exc)
+        return
+
+    agents_prefix = f"{site}/.agents/"
+    try:
+        resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=agents_prefix)
+    except Exception as exc:
+        log.warning("Failed to list on_notify agents for site %s: %s", site, exc)
+        return
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith("/agent.md"):
+            continue
+        try:
+            agent_text = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
+        except Exception as exc:
+            log.warning("Failed to read agent.md at %s: %s", key, exc)
+            continue
+
+        trigger_m = re.search(r"^trigger:\s*(\S+)", agent_text, re.MULTILINE)
+        if not trigger_m or trigger_m.group(1) != "on_notify":
+            continue
+
+        prompt = (
+            "A new notification has been added to notifications.md:\n\n"
+            f"{entry_text.strip()}\n\n"
+            "Process this notification according to your instructions."
+        )
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": BUCKET,
+                    "agent_md_key": key,
+                    "content_key": f"{site}/.user/notifications.md",
+                    "prompt": prompt,
+                    "user_id": user_id,
+                }),
+            )
+            log.info("Enqueued on_notify agent %s for site %s", key, site)
+        except Exception as exc:
+            log.warning("Failed to enqueue on_notify agent %s: %s", key, exc)
 
 
 def _write_error_to_content(s3, content: str, error_block: str) -> None:
@@ -805,6 +870,7 @@ def main() -> None:
                         "content_key": CONTENT_KEY,
                         "proposed_key": proposed_key,
                     },
+                    user_id=USER_ID,
                 )
             else:
                 # Read → run → conditional write, retrying on write conflict

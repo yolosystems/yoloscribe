@@ -70,6 +70,8 @@ def _run_local(payload: dict) -> None:
     )
     if SQS_INDEXING_QUEUE_URL:
         env["SQS_INDEXING_QUEUE_URL"] = SQS_INDEXING_QUEUE_URL
+    if SQS_QUEUE_URL:
+        env["SQS_QUEUE_URL"] = SQS_QUEUE_URL
     if AWS_PROFILE:
         env["AWS_PROFILE"] = AWS_PROFILE
 
@@ -99,6 +101,7 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
         k8s_client.V1EnvVar(name="ANTHROPIC_API_KEY", value=ANTHROPIC_API_KEY),
         k8s_client.V1EnvVar(name="SQS_INDEXING_QUEUE_URL", value=SQS_INDEXING_QUEUE_URL),
+        k8s_client.V1EnvVar(name="SQS_QUEUE_URL", value=SQS_QUEUE_URL),
     ]
     return k8s_client.V1Container(
         name="agent-runner",
