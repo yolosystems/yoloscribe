@@ -141,6 +141,7 @@ Event types and their sources:
 | `page_visibility_changed` | `PUT /settings` |
 | `agent_success` | agent-runner (never triggers `on_notify`) |
 | `agent_failure` | agent-runner + polling_worker (never triggers `on_notify`) |
+| `confirm_page_change` | agent-runner (propose mode; DOES trigger `on_notify`) |
 
 **Backward-compatible old format** (still parseable but no longer generated):
 ```markdown

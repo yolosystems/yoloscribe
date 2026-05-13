@@ -769,6 +769,43 @@ def main() -> None:
                 prompt = AGENT_PROMPT.strip() or "Process this notification according to your instructions."
                 agent(prompt)
                 updated = ""  # no content written back; set for uniform success logging
+            elif agent_def.confirm_before_write:
+                # Propose mode: write to .proposed.content.md instead of content.md.
+                # A single run is sufficient — no retry loop needed.
+                proposed_key = CONTENT_KEY[: -len("content.md")] + ".proposed.content.md"
+                content, _ = _get_content_with_etag(s3, CONTENT_KEY)
+
+                task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
+                full_prompt = (
+                    f"{task}\n\n"
+                    f"Current content:\n```markdown\n{content}\n```\n\n"
+                    "When done, reply with ONLY the updated markdown. No explanations."
+                )
+                response = agent(full_prompt)
+
+                raw = str(response)
+                lines = raw.splitlines()
+                for idx, line in enumerate(lines):
+                    if line.startswith("#"):
+                        raw = "\n".join(lines[idx:])
+                        break
+                updated = raw
+
+                s3.put_object(
+                    Bucket=BUCKET,
+                    Key=proposed_key,
+                    Body=updated.encode("utf-8"),
+                    ContentType="text/markdown; charset=utf-8",
+                )
+                log.info("Propose mode: wrote %d chars to s3://%s/%s", len(updated), BUCKET, proposed_key)
+                _write_notification(
+                    s3, _site, "confirm_page_change",
+                    {
+                        "agent": AGENT_MD_KEY,
+                        "content_key": CONTENT_KEY,
+                        "proposed_key": proposed_key,
+                    },
+                )
             else:
                 # Read → run → conditional write, retrying on write conflict
                 _MAX_WRITE_RETRIES = 3
@@ -848,6 +885,8 @@ def main() -> None:
 
     if agent_def.trigger == "on_notify":
         log.info("on_notify agent run complete for %s", AGENT_MD_KEY)
+    elif agent_def.confirm_before_write:
+        log.info("Agent run complete (propose mode): pending review for %s", CONTENT_KEY)
     else:
         log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
         _enqueue_index_job(CONTENT_KEY)
