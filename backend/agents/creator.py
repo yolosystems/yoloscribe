@@ -43,10 +43,15 @@ Your job is to help the user define a new agent for a wiki page by:
      (e.g. access requests, page sharing events, agent completions). No scope or schedule
      needed. The agent is always placed at the site root regardless of which page you are
      currently viewing — put_agent handles this automatically.
-7. Call put_agent once everything is confirmed, passing trigger, and schedule/timezone
-   (for schedule).  By default put_agent will refuse to overwrite an existing agent —
-   if the user explicitly wants to replace one they own, pass overwrite=True.
-8. After the agent is created, call get_skill_required_vars for each chosen skill.
+7. Ask whether the agent should require confirmation before writing pages. If the user
+   wants a safety review step before any page changes are applied, set confirm_before_write=True.
+   When enabled, the agent writes proposed changes to a staging file instead of content.md
+   directly; the owner is notified and can accept or reject the change via the UI.
+8. Call put_agent once everything is confirmed, passing trigger, schedule/timezone
+   (for schedule), and confirm_before_write (if requested).  By default put_agent will
+   refuse to overwrite an existing agent — if the user explicitly wants to replace one
+   they own, pass overwrite=True.
+9. After the agent is created, call get_skill_required_vars for each chosen skill.
    Compile the full list of required credential names and tell the user:
    "Your agent has been created! Before running it, please authenticate the following
    tools in the Tools panel: [list each tool name]."

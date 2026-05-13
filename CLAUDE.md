@@ -109,6 +109,7 @@ timezone: America/New_York  # optional; defaults to UTC
 skills:
   - {skill-name}
 model: sonnet          # optional; overrides server default
+confirm_before_write: true  # optional; when true, writes go to .proposed.content.md
 ---
 
 {description}

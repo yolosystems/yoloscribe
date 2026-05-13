@@ -473,6 +473,7 @@ class S3Tools:
         schedule: str = "",
         timezone: str = "",
         model: str = "",
+        confirm_before_write: bool = False,
         overwrite: bool = False,
     ) -> str:
         """Create a new agent.md file in S3.  Set overwrite=True to replace an existing agent.
@@ -488,6 +489,8 @@ class S3Tools:
             timezone: Timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
                    Leave blank to use the server default.
+            confirm_before_write: When true the agent writes proposed changes to
+                                  .proposed.content.md instead of content.md directly.
             overwrite: If False (default) and an agent with this name already exists,
                        the call is rejected.  Pass True to intentionally replace it.
         """
@@ -529,6 +532,8 @@ class S3Tools:
             fm_lines.append(f"schedule: {schedule}")
         if timezone:
             fm_lines.append(f"timezone: {timezone}")
+        if confirm_before_write:
+            fm_lines.append("confirm_before_write: true")
         fm_lines.append("---")
         fm_block = "\n".join(fm_lines) + "\n\n"
 
