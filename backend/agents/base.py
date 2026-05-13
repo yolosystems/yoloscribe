@@ -424,6 +424,44 @@ class S3Tools:
         return "Available agents: " + ", ".join(names)
 
     @tool
+    def list_all_agents(self, site: str) -> str:
+        """List every agent across the entire site.
+
+        Scans all .agents/ directories site-wide and returns each agent's name,
+        page location, and trigger type. Useful before creating a new agent to
+        check whether one already exists for the intended purpose.
+
+        Args:
+            site: The site name.
+        """
+        self._require_site_ownership(site)
+        paginator = self.s3.get_paginator("list_objects_v2")
+        found: list[str] = []
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"{site}/"):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("/agent.md") or "/.agents/" not in key:
+                    continue
+                rel = key[len(f"{site}/"):]
+                parts = rel.split("/")
+                try:
+                    agents_idx = parts.index(".agents")
+                except ValueError:
+                    continue
+                agent_name = parts[agents_idx + 1]
+                page_path = "/".join(parts[:agents_idx]) if agents_idx > 0 else "(root)"
+                try:
+                    text = self.read_text(key)
+                    trigger_match = re.search(r"^trigger:\s*(\S+)", text, re.MULTILINE)
+                    trigger = trigger_match.group(1) if trigger_match else "manual"
+                except Exception:
+                    trigger = "?"
+                found.append(f"- **{agent_name}** at `{page_path}` (trigger: {trigger})")
+        if not found:
+            return "No agents found on this site."
+        return "All agents on this site:\n\n" + "\n".join(found)
+
+    @tool
     def put_agent(
         self,
         site: str,
@@ -432,7 +470,6 @@ class S3Tools:
         skills: list[str],
         page_path: str = "",
         trigger: str = "manual",
-        scope: list[str] | None = None,
         schedule: str = "",
         timezone: str = "",
         model: str = "",
@@ -447,8 +484,6 @@ class S3Tools:
             skills: List of skill names the agent should use.
             page_path: Relative page path; empty for root.
             trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
-            scope: Glob patterns (relative to agent's page) for cross-page agents.
-                   e.g. ["**"] to match all descendants. Leave empty for own-page only.
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
@@ -494,10 +529,6 @@ class S3Tools:
             fm_lines.append(f"schedule: {schedule}")
         if timezone:
             fm_lines.append(f"timezone: {timezone}")
-        if scope:
-            fm_lines.append("scope:")
-            for pattern in scope:
-                fm_lines.append(f"  - {pattern}")
         fm_lines.append("---")
         fm_block = "\n".join(fm_lines) + "\n\n"
 

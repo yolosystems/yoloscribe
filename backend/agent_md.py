@@ -24,7 +24,6 @@ class AgentDefinition:
     description: str
     skills: list[str]
     trigger: str = "manual"
-    scope: list[str] = dataclasses.field(default_factory=list)
     schedule: str = ""
     timezone: str = ""
     model: str = ""
@@ -86,8 +85,6 @@ def parse_agent_md(text: str) -> AgentDefinition:
             f"Invalid trigger '{trigger}'. Must be one of: {', '.join(sorted(_VALID_TRIGGERS))}."
         )
 
-    scope_raw = fm.get("scope", [])
-    scope: list[str] = [scope_raw] if isinstance(scope_raw, str) else list(scope_raw)
     schedule = fm.get("schedule", "")
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
@@ -153,7 +150,6 @@ def parse_agent_md(text: str) -> AgentDefinition:
         description=description,
         skills=skills,
         trigger=trigger,
-        scope=scope,
         schedule=schedule,
         timezone=timezone,
         model=model,
@@ -169,10 +165,6 @@ def build_agent_md(defn: AgentDefinition) -> str:
         fm_lines.append(f"schedule: {defn.schedule}")
     if defn.timezone:
         fm_lines.append(f"timezone: {defn.timezone}")
-    if defn.scope:
-        fm_lines.append("scope:")
-        for pattern in defn.scope:
-            fm_lines.append(f"  - {pattern}")
     if defn.skills:
         fm_lines.append("skills:")
         for s in defn.skills:

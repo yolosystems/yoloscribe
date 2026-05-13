@@ -611,7 +611,6 @@ def create_mcp_app(
             "trigger": defn.trigger,
             "description": defn.description,
             "skills": defn.skills,
-            "scope": defn.scope,
             "schedule": defn.schedule,
             "timezone": defn.timezone,
             "model": defn.model,
@@ -624,7 +623,6 @@ def create_mcp_app(
         skills: list[str],
         page_path: str = "",
         trigger: str = "manual",
-        scope: list[str] | None = None,
         schedule: str = "",
         timezone: str = "",
         model: str = "",
@@ -639,7 +637,6 @@ def create_mcp_app(
             skills: List of skill names the agent should use.
             page_path: Page to attach the agent to; empty string for the root page.
             trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
-            scope: Glob patterns for cross-page agents (e.g. ["**"] for all descendants).
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for scheduled agents (e.g. "America/New_York").
             model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
@@ -664,7 +661,6 @@ def create_mcp_app(
             description=description,
             skills=skills or [],
             trigger=trigger,
-            scope=scope or [],
             schedule=schedule,
             timezone=timezone,
             model=model,
@@ -728,7 +724,6 @@ def create_mcp_app(
         description: str | None = None,
         skills: list[str] | None = None,
         trigger: str | None = None,
-        scope: list[str] | None = None,
         schedule: str | None = None,
         timezone: str | None = None,
         model: str | None = None,
@@ -743,8 +738,7 @@ def create_mcp_app(
             page_path: Page the agent is attached to; empty string for the root page.
             description: New agent description / system prompt.
             skills: Replacement skills list.
-            trigger: New trigger type — "manual", "schedule", or "on_write".
-            scope: Replacement scope patterns.
+            trigger: New trigger type — "manual", "schedule", "on_write", or "on_notify".
             schedule: New cron expression (required if changing trigger to "schedule").
             timezone: New timezone.
             model: New model key. Pass empty string to clear.
@@ -768,7 +762,6 @@ def create_mcp_app(
             description=description if description is not None else defn.description,
             skills=skills if skills is not None else defn.skills,
             trigger=trigger if trigger is not None else defn.trigger,
-            scope=scope if scope is not None else defn.scope,
             schedule=schedule if schedule is not None else defn.schedule,
             timezone=timezone if timezone is not None else defn.timezone,
             model=model if model is not None else defn.model,

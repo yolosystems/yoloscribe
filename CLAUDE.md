@@ -106,8 +106,6 @@ trigger: manual|schedule|on_write|on_notify
 name: {name}
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
-scope:                 # optional; glob patterns for cross-page agents
-  - "**"
 skills:
   - {skill-name}
 model: sonnet          # optional; overrides server default
