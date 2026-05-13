@@ -27,6 +27,7 @@ class AgentDefinition:
     schedule: str = ""
     timezone: str = ""
     model: str = ""
+    confirm_before_write: bool = False
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -88,6 +89,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     schedule = fm.get("schedule", "")
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
+    confirm_before_write = str(fm.get("confirm_before_write", "")).lower() in ("true", "yes", "1")
 
     # name and skills may come from frontmatter (new format) or body sections (old format)
     name = fm.get("name", "")
@@ -153,6 +155,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         schedule=schedule,
         timezone=timezone,
         model=model,
+        confirm_before_write=confirm_before_write,
     )
 
 
@@ -171,6 +174,8 @@ def build_agent_md(defn: AgentDefinition) -> str:
             fm_lines.append(f"  - {s}")
     if defn.model:
         fm_lines.append(f"model: {defn.model}")
+    if defn.confirm_before_write:
+        fm_lines.append("confirm_before_write: true")
     fm_lines.append("---")
     fm_block = "\n".join(fm_lines) + "\n"
     body = (defn.description or "").strip()

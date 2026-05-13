@@ -614,6 +614,7 @@ def create_mcp_app(
             "schedule": defn.schedule,
             "timezone": defn.timezone,
             "model": defn.model,
+            "confirm_before_write": defn.confirm_before_write,
         }
 
     @mcp.tool()
@@ -626,6 +627,7 @@ def create_mcp_app(
         schedule: str = "",
         timezone: str = "",
         model: str = "",
+        confirm_before_write: bool = False,
         overwrite: bool = False,
         ctx: Context = None,
     ) -> dict:
@@ -640,6 +642,9 @@ def create_mcp_app(
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for scheduled agents (e.g. "America/New_York").
             model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
+            confirm_before_write: When true the agent writes proposed changes to
+                .proposed.content.md instead of content.md directly. The owner
+                must accept or reject the proposal via the UI or API.
             overwrite: Set True to replace an existing agent with the same name.
         """
         user = _user(ctx)
@@ -664,6 +669,7 @@ def create_mcp_app(
             schedule=schedule,
             timezone=timezone,
             model=model,
+            confirm_before_write=confirm_before_write,
         )
         try:
             build_agent_md(defn)  # validates before writing
@@ -727,6 +733,7 @@ def create_mcp_app(
         schedule: str | None = None,
         timezone: str | None = None,
         model: str | None = None,
+        confirm_before_write: bool | None = None,
         ctx: Context = None,
     ) -> dict:
         """Update fields of an existing agent definition.
@@ -742,6 +749,7 @@ def create_mcp_app(
             schedule: New cron expression (required if changing trigger to "schedule").
             timezone: New timezone.
             model: New model key. Pass empty string to clear.
+            confirm_before_write: Set or clear the propose-mode flag.
         """
         user = _user(ctx)
         key = _agent_key(user.site, page_path, agent_name)
@@ -765,6 +773,7 @@ def create_mcp_app(
             schedule=schedule if schedule is not None else defn.schedule,
             timezone=timezone if timezone is not None else defn.timezone,
             model=model if model is not None else defn.model,
+            confirm_before_write=confirm_before_write if confirm_before_write is not None else defn.confirm_before_write,
         )
         try:
             content = build_agent_md(updated)

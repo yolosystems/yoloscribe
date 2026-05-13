@@ -19,6 +19,7 @@ class AgentDefinition:
     schedule: str = ""
     timezone: str = ""
     model: str = ""
+    confirm_before_write: bool = False
 
 
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
@@ -105,6 +106,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     schedule = fm.get("schedule", "")
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
+    confirm_before_write = str(fm.get("confirm_before_write", "")).lower() in ("true", "yes", "1")
 
     # name and skills may come from frontmatter (new format) or body sections (old format)
     name = fm.get("name", "")
@@ -170,4 +172,5 @@ def parse_agent_md(text: str) -> AgentDefinition:
         schedule=schedule,
         timezone=timezone,
         model=model,
+        confirm_before_write=confirm_before_write,
     )

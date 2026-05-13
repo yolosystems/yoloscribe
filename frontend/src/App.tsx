@@ -16,6 +16,7 @@ import ChildPagesList from './components/ChildPagesList'
 import PageSettingsPanel from './components/PageSettingsPanel'
 import AccessDeniedView from './components/AccessDeniedView'
 import TokensPanel from './components/TokensPanel'
+import ProposedChangeBanner from './components/ProposedChangeBanner'
 
 type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
@@ -190,6 +191,7 @@ export default function App() {
   const [plusOpen, setPlusOpen] = useState(false)
   const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
+  const [proposedContent, setProposedContent] = useState<string | null>(null)
 
   // Subscribe to auth state changes (skipped in LOCAL_MODE).
   useEffect(() => {
@@ -359,6 +361,23 @@ export default function App() {
       .catch(() => {})
   }, [isOwner, session, filePath])
 
+  // Poll for pending proposed content on content pages (owner only)
+  const isContentPage = filePath === 'content.md' || filePath.endsWith('/content.md')
+  useEffect(() => {
+    if (!isOwner || !session || !isContentPage) {
+      setProposedContent(null)
+      return
+    }
+    const pagePath = getPagePath(filePath)
+    fetch(
+      `${API_BASE}/proposed?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`,
+      { headers: { Authorization: `Bearer ${session.access_token}` } },
+    )
+      .then((res) => (res.ok ? res.text() : null))
+      .then((text) => setProposedContent(text))
+      .catch(() => setProposedContent(null))
+  }, [isOwner, session, filePath, reloadKey])
+
   async function save(force = false) {
     if (content === null || !session) return
     setSaving(true)
@@ -422,7 +441,6 @@ export default function App() {
 
 
   // appView === 'site'
-  const isContentPage = filePath === 'content.md' || filePath.endsWith('/content.md')
 
   return (
     <>
@@ -709,6 +727,23 @@ export default function App() {
                     .then((data) => setAgents(data.agents ?? []))
                     .catch(() => setAgents([]))
                 }}
+              />
+            )}
+
+            {proposedContent !== null && isContentPage && isOwner && session && (
+              <ProposedChangeBanner
+                proposedContent={proposedContent}
+                currentContent={content ?? ''}
+                apiBase={API_BASE}
+                site={SITE}
+                pagePath={getPagePath(filePath)}
+                token={session.access_token}
+                onAccepted={(newContent) => {
+                  setContent(newContent)
+                  setSavedContent(newContent)
+                  setProposedContent(null)
+                }}
+                onRejected={() => setProposedContent(null)}
               />
             )}
 
