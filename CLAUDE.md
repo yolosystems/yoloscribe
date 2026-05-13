@@ -116,14 +116,6 @@ model: sonnet          # optional; overrides server default
 {description}
 ```
 
-Pointer agents (on_write subscriptions) use frontmatter only — no body:
-```markdown
----
-trigger: on_write
-ref: {page_path}/.agents/{agent_name}/agent.md
----
-```
-
 **Trigger types:**
 - `manual` — run on demand only
 - `schedule` — K8s CronJob (requires `schedule:` cron expression); `concurrencyPolicy: Forbid` prevents overlapping runs

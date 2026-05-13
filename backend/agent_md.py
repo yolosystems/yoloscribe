@@ -25,7 +25,6 @@ class AgentDefinition:
     skills: list[str]
     trigger: str = "manual"
     scope: list[str] = dataclasses.field(default_factory=list)
-    ref: str = ""
     schedule: str = ""
     timezone: str = ""
     model: str = ""
@@ -89,7 +88,6 @@ def parse_agent_md(text: str) -> AgentDefinition:
 
     scope_raw = fm.get("scope", [])
     scope: list[str] = [scope_raw] if isinstance(scope_raw, str) else list(scope_raw)
-    ref = fm.get("ref", "")
     schedule = fm.get("schedule", "")
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
@@ -145,10 +143,9 @@ def parse_agent_md(text: str) -> AgentDefinition:
     if not model:
         model = _section_text("Model")
 
-    if not ref and not name:
+    if not name:
         raise AgentDefinitionError(
-            "agent.md must have a 'name' frontmatter field or a '# Agent: {name}' heading, "
-            "or a 'ref' frontmatter field for pointer agents."
+            "agent.md must have a 'name' frontmatter field or a '# Agent: {name}' heading."
         )
 
     return AgentDefinition(
@@ -157,7 +154,6 @@ def parse_agent_md(text: str) -> AgentDefinition:
         skills=skills,
         trigger=trigger,
         scope=scope,
-        ref=ref,
         schedule=schedule,
         timezone=timezone,
         model=model,
@@ -177,8 +173,6 @@ def build_agent_md(defn: AgentDefinition) -> str:
         fm_lines.append("scope:")
         for pattern in defn.scope:
             fm_lines.append(f"  - {pattern}")
-    if defn.ref:
-        fm_lines.append(f"ref: {defn.ref}")
     if defn.skills:
         fm_lines.append("skills:")
         for s in defn.skills:
@@ -187,10 +181,5 @@ def build_agent_md(defn: AgentDefinition) -> str:
         fm_lines.append(f"model: {defn.model}")
     fm_lines.append("---")
     fm_block = "\n".join(fm_lines) + "\n"
-
-    # Pointer agents have no body
-    if defn.ref and not defn.name:
-        return fm_block + "\n"
-
     body = (defn.description or "").strip()
     return fm_block + "\n" + body + "\n"
