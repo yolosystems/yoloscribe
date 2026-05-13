@@ -211,9 +211,6 @@ def enqueue_on_notify_agents(site: str, entry_text: str, user_id: str) -> None:
         if not trigger_m or trigger_m.group(1) != "on_notify":
             continue
 
-        ref_m = re.search(r"^ref:\s*(\S+)", agent_text, re.MULTILINE)
-        agent_md_key = f"{site}/{ref_m.group(1).strip()}" if ref_m else key
-
         prompt = (
             "A new notification has been added to notifications.md:\n\n"
             f"{entry_text.strip()}\n\n"
@@ -225,25 +222,22 @@ def enqueue_on_notify_agents(site: str, entry_text: str, user_id: str) -> None:
                 QueueUrl=SQS_QUEUE_URL,
                 MessageBody=json.dumps({
                     "bucket": S3_BUCKET,
-                    "agent_md_key": agent_md_key,
+                    "agent_md_key": key,
                     "content_key": f"{site}/.user/notifications.md",
                     "prompt": prompt,
                     "user_id": user_id,
                 }),
             )
-            logging.info("Enqueued on_notify agent %s for site %s", agent_md_key, site)
+            logging.info("Enqueued on_notify agent %s for site %s", key, site)
         except Exception:
-            logging.warning("Failed to enqueue on_notify agent %s", agent_md_key, exc_info=True)
+            logging.warning("Failed to enqueue on_notify agent %s", key, exc_info=True)
 
 
 def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
     """Enqueue agent-runner jobs for any on_write agents subscribed to this page.
 
-    Lists .agents/ under the written page's directory. For each agent.md with
-    trigger: on_write, a K8s Job is queued via SQS. If the agent carries a ref
-    field, the referenced agent.md is used as the job's entry point.
-
-    Best-effort; never raises.
+    Lists .agents/ under the written page's directory and queues a K8s Job via SQS
+    for each agent.md with trigger: on_write. Best-effort; never raises.
     """
     if sqs is None or not SQS_QUEUE_URL:
         return
@@ -274,23 +268,20 @@ def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
         if not trigger_m or trigger_m.group(1) != "on_write":
             continue
 
-        ref_m = re.search(r"^ref:\s*(\S+)", agent_text, re.MULTILINE)
-        agent_md_key = f"{site}/{ref_m.group(1).strip()}" if ref_m else key
-
         try:
             sqs.send_message(
                 QueueUrl=SQS_QUEUE_URL,
                 MessageBody=json.dumps({
                     "bucket": S3_BUCKET,
-                    "agent_md_key": agent_md_key,
+                    "agent_md_key": key,
                     "content_key": content_key,
                     "prompt": "A page in your scope has been updated. Review it and apply any necessary updates to your tracked pages.",
                     "user_id": user_id,
                 }),
             )
-            logging.info("Enqueued on_write agent %s for %s", agent_md_key, content_key)
+            logging.info("Enqueued on_write agent %s for %s", key, content_key)
         except Exception:
-            logging.warning("Failed to enqueue on_write agent %s", agent_md_key, exc_info=True)
+            logging.warning("Failed to enqueue on_write agent %s", key, exc_info=True)
 
 
 def enqueue_index_job(content_key: str, user_id: str) -> None:

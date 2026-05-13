@@ -424,6 +424,44 @@ class S3Tools:
         return "Available agents: " + ", ".join(names)
 
     @tool
+    def list_all_agents(self, site: str) -> str:
+        """List every agent across the entire site.
+
+        Scans all .agents/ directories site-wide and returns each agent's name,
+        page location, and trigger type. Useful before creating a new agent to
+        check whether one already exists for the intended purpose.
+
+        Args:
+            site: The site name.
+        """
+        self._require_site_ownership(site)
+        paginator = self.s3.get_paginator("list_objects_v2")
+        found: list[str] = []
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"{site}/"):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("/agent.md") or "/.agents/" not in key:
+                    continue
+                rel = key[len(f"{site}/"):]
+                parts = rel.split("/")
+                try:
+                    agents_idx = parts.index(".agents")
+                except ValueError:
+                    continue
+                agent_name = parts[agents_idx + 1]
+                page_path = "/".join(parts[:agents_idx]) if agents_idx > 0 else "(root)"
+                try:
+                    text = self.read_text(key)
+                    trigger_match = re.search(r"^trigger:\s*(\S+)", text, re.MULTILINE)
+                    trigger = trigger_match.group(1) if trigger_match else "manual"
+                except Exception:
+                    trigger = "?"
+                found.append(f"- **{agent_name}** at `{page_path}` (trigger: {trigger})")
+        if not found:
+            return "No agents found on this site."
+        return "All agents on this site:\n\n" + "\n".join(found)
+
+    @tool
     def put_agent(
         self,
         site: str,
@@ -432,7 +470,6 @@ class S3Tools:
         skills: list[str],
         page_path: str = "",
         trigger: str = "manual",
-        scope: list[str] | None = None,
         schedule: str = "",
         timezone: str = "",
         model: str = "",
@@ -447,8 +484,6 @@ class S3Tools:
             skills: List of skill names the agent should use.
             page_path: Relative page path; empty for root.
             trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
-            scope: Glob patterns (relative to agent's page) for cross-page agents.
-                   e.g. ["**"] to match all descendants. Leave empty for own-page only.
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
             model: Optional model key from the registry (e.g. "sonnet", "bedrock-opus").
@@ -494,10 +529,6 @@ class S3Tools:
             fm_lines.append(f"schedule: {schedule}")
         if timezone:
             fm_lines.append(f"timezone: {timezone}")
-        if scope:
-            fm_lines.append("scope:")
-            for pattern in scope:
-                fm_lines.append(f"  - {pattern}")
         fm_lines.append("---")
         fm_block = "\n".join(fm_lines) + "\n\n"
 
@@ -512,110 +543,6 @@ class S3Tools:
 
         self.write_text(key, fm_block + body)
         return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
-
-    @tool
-    def list_ancestor_scope_agents(self, site: str, page_path: str) -> str:
-        """Find agents in ancestor pages that declare cross-page scope.
-
-        Walks up the page hierarchy from page_path to the site root and lists
-        any agents that have scope patterns declared in their frontmatter.
-        Use this when creating a page or agent to offer on_write subscriptions.
-
-        Args:
-            site: The site name.
-            page_path: Relative page path of the new page.
-        """
-        self._require_site_ownership(site)
-        import re as _re
-
-        parts = [p for p in page_path.split("/") if p] if page_path else []
-        # Check all ancestors (not the page itself)
-        ancestors: list[str] = []
-        for i in range(len(parts) - 1, -1, -1):
-            ancestors.append("/".join(parts[:i]) if i > 0 else "")
-
-        found: list[str] = []
-        for ancestor in ancestors:
-            prefix = f"{site}/{ancestor}/.agents/" if ancestor else f"{site}/.agents/"
-            try:
-                resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
-            except Exception:
-                continue
-            for obj in resp.get("Contents", []):
-                key = obj["Key"]
-                if not key.endswith("/agent.md"):
-                    continue
-                try:
-                    text = self.read_text(key)
-                except Exception:
-                    continue
-                # Parse frontmatter only (between first --- pair)
-                fm_match = _re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, _re.DOTALL)
-                if not fm_match:
-                    continue
-                fm_text = fm_match.group(1)
-                scope_m = _re.search(r"^scope:", fm_text, _re.MULTILINE)
-                if not scope_m:
-                    continue
-                scope_patterns = _re.findall(r"^\s+-\s+(.+)$", fm_text, _re.MULTILINE)
-                if not scope_patterns:
-                    continue
-                agent_name = key.split("/")[-2]
-                ancestor_label = ancestor if ancestor else "(root)"
-                ref = key[len(f"{site}/"):]
-                found.append(
-                    f"- **{agent_name}** at page `{ancestor_label}` "
-                    f"— scope: {', '.join(f'`{p}`' for p in scope_patterns)} "
-                    f"— ref: `{ref}`"
-                )
-
-        if not found:
-            return "No ancestor agents with cross-page scope found."
-        return "Ancestor agents with declared scope:\n\n" + "\n".join(found)
-
-    @tool
-    def create_on_write_subscription(
-        self, site: str, page_path: str, ref: str, agent_name: str = ""
-    ) -> str:
-        """Create an on_write pointer agent linking a page to an upstream agent.
-
-        Creates a minimal agent.md at {page_path}/.agents/{agent_name}/agent.md
-        with trigger: on_write and the given ref. When this page's content.md is
-        saved, the referenced agent will be queued to run against that page.
-
-        Args:
-            site: The site name.
-            page_path: Page that should trigger the upstream agent on writes.
-            ref: Site-relative S3 path to the upstream agent.md
-                 (e.g. "projects/.agents/link-checker/agent.md").
-            agent_name: Name for the pointer — defaults to the agent name derived
-                        from ref (the second-to-last path segment before agent.md).
-        """
-        try:
-            self._require_site_ownership(site)
-            # Derive agent_name from ref if not supplied
-            if not agent_name:
-                ref_parts = ref.rstrip("/").split("/")
-                agent_name = (
-                    ref_parts[-2]
-                    if len(ref_parts) >= 2 and ref_parts[-1] == "agent.md"
-                    else ref_parts[-1]
-                )
-            if not AGENT_NAME_RE.match(agent_name):
-                return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
-            key = f"{site}/{page_path}/.agents/{agent_name}/agent.md"
-            content = f"---\ntrigger: on_write\nref: {ref}\n---\n"
-            self.write_text(key, content)
-            return (
-                f"Subscription created: page '{page_path}' will trigger "
-                f"agent '{agent_name}' on write."
-            )
-        except Exception:
-            logger.exception(
-                "create_on_write_subscription failed: site=%r page_path=%r ref=%r agent_name=%r",
-                site, page_path, ref, agent_name,
-            )
-            raise
 
     @tool
     def create_page(self, site: str, page_path: str, content: str = "") -> str:
