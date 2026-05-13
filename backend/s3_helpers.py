@@ -118,6 +118,33 @@ def get_content_with_etag(site: str, path: str = "content.md") -> tuple[str, str
     return obj["Body"].read().decode("utf-8"), obj["ETag"]
 
 
+def _proposed_path(path: str) -> str:
+    """Return the .proposed.content.md path corresponding to a content.md path."""
+    return path[: -len("content.md")] + ".proposed.content.md"
+
+
+def get_proposed(site: str, page_path: str) -> str | None:
+    """Read .proposed.content.md for a page. Returns None if not found."""
+    content_md = f"{page_path}/content.md" if page_path else "content.md"
+    proposed = _proposed_path(content_md)
+    obj_key = f"{site}/{proposed}"
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=obj_key)
+        return obj["Body"].read().decode("utf-8")
+    except s3.exceptions.NoSuchKey:
+        return None
+
+
+def delete_proposed(site: str, page_path: str) -> None:
+    """Delete .proposed.content.md for a page (best-effort; never raises)."""
+    content_md = f"{page_path}/content.md" if page_path else "content.md"
+    proposed = _proposed_path(content_md)
+    try:
+        s3.delete_object(Bucket=S3_BUCKET, Key=f"{site}/{proposed}")
+    except Exception as exc:
+        logging.warning("Failed to delete proposed for %s/%s: %s", site, page_path, exc)
+
+
 def put_content(site: str, path: str, content: str) -> None:
     s3.put_object(
         Bucket=S3_BUCKET,

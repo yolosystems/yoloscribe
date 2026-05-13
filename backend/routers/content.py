@@ -12,7 +12,7 @@ from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_u
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from k8s_agent import enqueue_schedule_bootstrap
 from rate_limit import limiter
-from s3_helpers import get_content, get_content_with_etag, put_content, put_content_conditional, is_safe_path, enqueue_index_job, enqueue_on_write_agents
+from s3_helpers import get_content, get_content_with_etag, get_proposed, put_content, put_content_conditional, is_safe_path, enqueue_index_job, enqueue_on_write_agents
 from settings_cache import get_page_settings, page_path_from_file_path
 
 _audit_log = logging.getLogger("yoloscribe.audit")
@@ -231,3 +231,27 @@ async def put_content_route(
     elif ".agents/" in path and path.endswith("agent.md") and not is_shared_write:
         _maybe_bootstrap_schedule(site, path, text, claims.user_id)
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
+
+
+@router.get(
+    "/proposed",
+    tags=["content"],
+    summary="Get proposed page content",
+    description=(
+        "Return the pending proposed content for a page, written by an agent with "
+        "confirm_before_write: true. Returns 404 if no proposal is pending. "
+        "Requires authentication as the site owner."
+    ),
+)
+async def get_proposed_route(
+    site: str = "default",
+    page_path: str = "",
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> Response:
+    _, user_site = get_user_context(credentials)
+    require_site_owner(site, user_site)
+
+    proposed = get_proposed(site, page_path)
+    if proposed is None:
+        raise HTTPException(status_code=404, detail="No pending proposal for this page")
+    return Response(content=proposed, media_type="text/plain; charset=utf-8")
