@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "slack": {
+      "url": "https://mcp.slack.com/",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}
