@@ -1941,6 +1941,7 @@ dependencies = [
     { name = "strands-agents", extra = ["anthropic"] },
     { name = "strands-agents-tools" },
     { name = "yolo-secrets" },
+    { name = "yoloscribe-notification-mcp" },
 ]
 
 [package.metadata]
@@ -1953,6 +1954,22 @@ requires-dist = [
     { name = "strands-agents", extras = ["anthropic"], specifier = ">=0.1.0" },
     { name = "strands-agents-tools", specifier = ">=0.1.0" },
     { name = "yolo-secrets", directory = "../libs/yolo_secrets" },
+    { name = "yoloscribe-notification-mcp", directory = "../notification-mcp" },
+]
+
+[[package]]
+name = "yoloscribe-notification-mcp"
+version = "0.1.0"
+source = { directory = "../notification-mcp" }
+dependencies = [
+    { name = "httpx" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=1.9" },
 ]
 
 [[package]]

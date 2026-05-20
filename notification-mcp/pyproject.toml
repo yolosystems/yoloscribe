@@ -1,0 +1,15 @@
+[project]
+name = "yoloscribe-notification-mcp"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Stateless outbound webhook notification MCP server for YoloScribe agents"
+dependencies = [
+    "mcp>=1.9",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+notification-mcp = "notification_mcp.server:main"
+
+[tool.uv]
+package = true
