@@ -42,16 +42,20 @@ Every "site" is an S3 prefix. The bucket layout is:
   {page}/settings.json                # child page access-control settings
   .agents/{name}/agent.md             # root-page agent definition
   {page}/.agents/{name}/agent.md      # child-page agent definition
-  .skills/{name}/skill.md             # skill instructions (site-scoped)
+  .skills/{name}/SKILL.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
   .user/notifications.md              # owner notification inbox (platform-controlled; read-only in UI)
   .archive/{page}/content.md          # soft-deleted page archive
+
+.tools/{name}/mcp.json                # tool MCP server config (bucket root, shared across all sites)
+.tools/{name}/oauth_client.json       # OAuth client credentials for the tool (optional)
+.tools/{name}/tool.md                 # human/agent-readable description of the tool (optional)
 ```
 
 `settings.json` schema: `{"visibility": "public"|"private"|"shared", "shared_with": [{"email": "...", "access": "view"|"write"}]}`
 Default when absent: `{"visibility": "private", "shared_with": []}`
 
-Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under `{page}/.agents/`).
+Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under `{page}/.agents/`). Tools are bucket-scoped (under `.tools/` at the bucket root, shared across all sites).
 
 ### Frontend routing
 - `SITE` is derived from the **first URL path segment** (e.g. `/knuth-home/` → `"knuth-home"`). Falls back to the `VITE_SITE` env var or `"default"` in dev.
@@ -168,6 +172,24 @@ The schema is defined in `backend/agent_md.py` (MCP server) and `agent-runner/ag
 
 ### `mcp.json` format
 Standard MCP config with `mcpServers` map. Used by the async SQS worker to spawn MCP subprocesses. Environment variable placeholders `${VAR}` are substituted at load time.
+
+### Tool config format (`.tools/{name}/`)
+Each tool in the bucket-root `.tools/` directory has up to three files:
+
+**`mcp.json`** (required) — MCP server config. Two transport patterns:
+```json
+// Remote HTTP tool (OAuth-based, e.g. Linear, GitHub, Slack)
+{ "mcpServers": { "linear": { "url": "https://mcp.linear.app/mcp", "transport": "streamable-http", "auth": "oauth" } } }
+
+// Stdio subprocess tool (e.g. notification-mcp)
+{ "mcpServers": { "notifications": { "command": "notification-mcp" } } }
+```
+
+**`oauth_client.json`** (optional) — OAuth app credentials for tools with `"auth": "oauth"`. Schema varies by provider but typically `{"client_id": "...", "client_secret_name": "..."}` where `client_secret_name` is a Secrets Manager key.
+
+**`tool.md`** (optional) — human/agent-readable description: use cases, available capabilities, auth requirements. Follows the pattern in `mcp-tools/` in the repo. Not machine-parsed — serves as documentation for agents browsing available tools and for sysadmins configuring the deployment.
+
+The `mcp-tools/` directory in the repo is the source of truth for tool configs. Sysadmins deploy these files to `.tools/{name}/` in S3 to enable a tool across all sites.
 
 ### Remote MCP Server (`backend/mcp_server.py`)
 Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, and agent definition management for Claude Code and other MCP-compatible AI agents.
