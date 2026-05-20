@@ -29,6 +29,7 @@ from routers import (
     mcp_oauth_router,
     oauth_router,
     obsidian_router,
+    outbound_webhooks_router,
     pages_router,
     settings_router,
     site_router,
@@ -69,7 +70,7 @@ _OPENAPI_TAGS = [
     {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
     {"name": "tokens", "description": "Create, list, and revoke site-scoped API tokens."},
     {"name": "obsidian", "description": "Purpose-built sync API for the YoloScribe Obsidian plugin."},
-    {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems."},
+    {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems, and outbound webhook management."},
     {"name": "mcp", "description": "Remote MCP server for AI coding agents (Claude Code, etc.)."},
 ]
 
@@ -177,4 +178,5 @@ if not LOCAL_MODE:
     app.include_router(mcp_oauth_router)
 app.include_router(site_router)
 app.include_router(tokens_router)
+app.include_router(outbound_webhooks_router)
 app.include_router(webhooks_router)

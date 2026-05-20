@@ -40,6 +40,30 @@ LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes"
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 
+# SM client — initialised in main(), None in LOCAL_RUNNER mode.
+_sm_client = None
+
+
+def _load_user_webhooks(user_id: str) -> str:
+    """Return YOLOSCRIBE_WEBHOOKS value (JSON list of URL strings) for a user.
+
+    Reads from SM at yoloscribe/{user_id}/webhooks. Returns '[]' when the path
+    doesn't exist, SM is unavailable, or LOCAL_RUNNER is set — keeping the
+    notification-mcp tool functional but no-op in those cases.
+    """
+    if _sm_client is None:
+        return "[]"
+    try:
+        resp = _sm_client.get_secret_value(SecretId=f"yoloscribe/{user_id}/webhooks")
+        entries = json.loads(resp["SecretString"])
+        urls = [e["url"] if isinstance(e, dict) else str(e) for e in entries if e]
+        return json.dumps(urls)
+    except _sm_client.exceptions.ResourceNotFoundException:
+        return "[]"
+    except Exception as exc:
+        log.warning("Failed to load webhooks for user %s: %s", user_id, exc)
+        return "[]"
+
 
 def _safe_k8s_name(*parts: str, max_len: int = 63) -> str:
     """Build a DNS-label-safe K8s name from parts, truncated to max_len chars.
@@ -57,6 +81,7 @@ def _safe_k8s_name(*parts: str, max_len: int = 63) -> str:
 
 def _run_local(payload: dict) -> None:
     """Run the agent runner in a subprocess (local dev mode, no K8s)."""
+    user_id = payload.get("user_id", "default")
     env = os.environ.copy()
     env.update(
         {
@@ -64,8 +89,9 @@ def _run_local(payload: dict) -> None:
             "AGENT_MD_KEY": payload["agent_md_key"],
             "CONTENT_KEY": payload["content_key"],
             "AGENT_PROMPT": payload["prompt"],
-            "USER_ID": payload.get("user_id", "default"),
+            "USER_ID": user_id,
             "AWS_REGION": AWS_REGION,
+            "YOLOSCRIBE_WEBHOOKS": _load_user_webhooks(user_id),
         }
     )
     if SQS_INDEXING_QUEUE_URL:
@@ -92,16 +118,18 @@ def _run_local(payload: dict) -> None:
 def _build_container(payload: dict):  # type: ignore[return]
     from kubernetes import client as k8s_client  # noqa: PLC0415
 
+    user_id = payload.get("user_id", "default")
     env_vars = [
         k8s_client.V1EnvVar(name="BUCKET", value=payload["bucket"]),
         k8s_client.V1EnvVar(name="AGENT_MD_KEY", value=payload["agent_md_key"]),
         k8s_client.V1EnvVar(name="CONTENT_KEY", value=payload["content_key"]),
         k8s_client.V1EnvVar(name="AGENT_PROMPT", value=payload["prompt"]),
-        k8s_client.V1EnvVar(name="USER_ID", value=payload.get("user_id", "default")),
+        k8s_client.V1EnvVar(name="USER_ID", value=user_id),
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
         k8s_client.V1EnvVar(name="ANTHROPIC_API_KEY", value=ANTHROPIC_API_KEY),
         k8s_client.V1EnvVar(name="SQS_INDEXING_QUEUE_URL", value=SQS_INDEXING_QUEUE_URL),
         k8s_client.V1EnvVar(name="SQS_QUEUE_URL", value=SQS_QUEUE_URL),
+        k8s_client.V1EnvVar(name="YOLOSCRIBE_WEBHOOKS", value=_load_user_webhooks(user_id)),
     ]
     return k8s_client.V1Container(
         name="agent-runner",
@@ -243,6 +271,7 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
 
 
 def main() -> None:
+    global _sm_client
     _session = boto3.Session(profile_name=AWS_PROFILE or None)
     _sqs_kwargs: dict = {"region_name": AWS_REGION}
     if SQS_ENDPOINT_URL:
@@ -260,6 +289,7 @@ def main() -> None:
     if LOCAL_RUNNER:
         log.info("LOCAL_RUNNER mode — agents will run as subprocesses (no K8s)")
         batch_v1 = None
+        _sm_client = None
     else:
         from kubernetes import client as k8s_client  # type: ignore[import-untyped]  # noqa: PLC0415
         from kubernetes import config as k8s_config  # type: ignore[import-untyped]  # noqa: PLC0415
@@ -269,6 +299,7 @@ def main() -> None:
         except Exception:
             k8s_config.load_kube_config()
         batch_v1 = k8s_client.BatchV1Api()
+        _sm_client = _session.client("secretsmanager", region_name=AWS_REGION)
 
         # Inherit imagePullSecrets from this pod so spawned jobs can pull the same image.
         try:

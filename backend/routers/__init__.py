@@ -10,6 +10,7 @@ from .settings import router as settings_router
 from .site import router as site_router
 from .tokens import router as tokens_router
 from .tools import router as tools_router
+from .outbound_webhooks import router as outbound_webhooks_router
 from .webhooks import router as webhooks_router
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "site_router",
     "tokens_router",
     "tools_router",
+    "outbound_webhooks_router",
     "webhooks_router",
 ]

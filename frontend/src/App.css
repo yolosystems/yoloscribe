@@ -886,6 +886,83 @@ body {
   border-color: var(--accent);
 }
 
+/* ── Outbound Webhooks panel ── */
+.credentials-section {
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+}
+
+.credentials-section-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.credentials-section-description {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem;
+}
+
+.credentials-webhook-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.credentials-webhook-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.credentials-webhook-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.credentials-webhook-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.credentials-webhook-url {
+  font-size: 0.8rem;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.credentials-webhook-add {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.credentials-webhook-add .credentials-input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.btn-icon {
+  padding: 0.35rem 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 /* ── API Tokens panel ── */
 .tokens-create-card {
   border: 1px solid var(--border);
