@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import OutboundWebhooksPanel from './OutboundWebhooksPanel'
 
 // ── API response types ────────────────────────────────────────────────────────
 
@@ -567,6 +568,7 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
             </div>
           </div>
         ))}
+        <OutboundWebhooksPanel apiBase={apiBase} token={token} />
       </div>
     </div>
   )

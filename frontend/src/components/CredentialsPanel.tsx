@@ -222,8 +222,8 @@ export default function CredentialsPanel({ apiBase, token }: Props) {
             )}
           </div>
         ))}
+        <OutboundWebhooksPanel apiBase={apiBase} token={token} />
       </div>
-      <OutboundWebhooksPanel apiBase={apiBase} token={token} />
     </div>
   )
 }

@@ -2,6 +2,21 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Agent Runner (polling-worker)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "agent_runner.polling_worker",
+      "cwd": "${workspaceFolder}/agent-runner",
+      "python": "${workspaceFolder}/agent-runner/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "LOCAL_MODE": "true",
+        "LOCAL_RUNNER": "true",
+        "LOCAL_MCP_CONFIG_PATH": "${workspaceFolder}/agent-runner/local-mcp-servers.json"
+      },
+      "justMyCode": false
+    },
+    {
       "name": "YoloScribe Backend",
       "type": "debugpy",
       "request": "launch",

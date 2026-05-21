@@ -17,6 +17,7 @@ from config import (
     LOCAL_MODE,
     S3_BUCKET,
     SQS_INDEXING_QUEUE_URL,
+    SQS_QUEUE_URL,
     boto_session,
 )
 
@@ -95,6 +96,17 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
             },
         },
     ]
+    if SQS_QUEUE_URL:
+        queue_name = SQS_QUEUE_URL.rstrip("/").split("/")[-1]
+        agent_queue_arn = f"arn:aws:sqs:{AWS_REGION}:{AWS_ACCOUNT_ID}:{queue_name}"
+        statements.append(
+            {
+                "Sid": "SQSSendAgentQueue",
+                "Effect": "Allow",
+                "Action": "sqs:SendMessage",
+                "Resource": agent_queue_arn,
+            }
+        )
     if SQS_INDEXING_QUEUE_URL:
         queue_name = SQS_INDEXING_QUEUE_URL.rstrip("/").split("/")[-1]
         indexing_queue_arn = f"arn:aws:sqs:{AWS_REGION}:{AWS_ACCOUNT_ID}:{queue_name}"

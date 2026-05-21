@@ -320,6 +320,7 @@ def _parse_skill_tools(text: str) -> list[str]:
 
 def _collect_tool_names(skill_names: list[str], site: str, s3) -> list[str]:
     """Resolve skill names → tool names via SKILL.md frontmatter."""
+    log.info("Resolving tool names from skills: %s", skill_names)
     tool_names: list[str] = []
     seen: set[str] = set()
     for skill_name in skill_names:
@@ -329,15 +330,17 @@ def _collect_tool_names(skill_names: list[str], site: str, s3) -> list[str]:
             skill_text = obj["Body"].read().decode("utf-8")
             names = _parse_skill_tools(skill_text)
         except Exception as exc:
-            log.warning("Failed to read SKILL.md for skill '%s': %s", skill_name, exc)
+            log.warning("Failed to read SKILL.md for skill '%s' (key=%s): %s", skill_name, skill_key, exc)
             continue
         if not names:
             log.warning("Skill '%s' has no tools defined — skipping", skill_name)
             continue
+        log.info("Skill '%s' declares tools: %s", skill_name, names)
         for name in names:
             if name not in seen:
                 seen.add(name)
                 tool_names.append(name)
+    log.info("Resolved tool names: %s", tool_names)
     return tool_names
 
 
@@ -426,6 +429,8 @@ def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> t
     Remote tools without "auth" (or "auth": "none"): connects via streamable HTTP unauthenticated.
     """
     try:
+        from mcp import StdioServerParameters
+        from mcp.client.stdio import stdio_client
         from mcp.client.streamable_http import streamablehttp_client
         from strands.tools.mcp import MCPClient
     except ImportError:
@@ -446,8 +451,28 @@ def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> t
             continue
 
         for server_name, server_cfg in config.get("mcpServers", {}).items():
+            if "command" in server_cfg:
+                # Stdio tool bundled in the agent-runner container
+                command = server_cfg["command"]
+                args = server_cfg.get("args", [])
+                env = {**os.environ, **server_cfg.get("env", {})}
+                webhooks_set = bool(env.get("YOLOSCRIBE_WEBHOOKS", "[]").strip("[] \t"))
+                log.info(
+                    "Building stdio MCP client for tool '%s' server '%s' "
+                    "(command=%s, YOLOSCRIBE_WEBHOOKS set=%s)",
+                    tool_name, server_name, command, webhooks_set,
+                )
+                params = StdioServerParameters(command=command, args=args, env=env)
+                clients.append(
+                    MCPClient(
+                        lambda p=params: stdio_client(p),
+                        prefix=tool_name,
+                    )
+                )
+                continue
+
             if "url" not in server_cfg:
-                log.warning("Skipping non-remote MCP server '%s' in tool '%s'", server_name, tool_name)
+                log.warning("Skipping MCP server '%s' in tool '%s': no url or command", server_name, tool_name)
                 continue
 
             auth = server_cfg.get("auth", "none")
@@ -488,6 +513,7 @@ def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[li
     lookup, no OAuth. In production: reads .tools/{name}/mcp.json from S3 and builds
     HTTP clients with OAuth/SSO auth as configured.
     """
+    log.info("Building MCP clients for skills %s (LOCAL_MODE=%s)", skill_names, LOCAL_MODE)
     if LOCAL_MODE:
         return _build_local_mcp_clients(skill_names, site, s3)
     return _build_remote_mcp_clients(skill_names, site, s3, store)
@@ -774,20 +800,24 @@ def main() -> None:
 
         # 3. Build agent once — MCP tools, model, and system prompt are stable across retries
         tools = [http_request]
+        log.info("Starting %d MCP client(s)", len(mcp_clients))
         with contextlib.ExitStack() as stack:
-            for client in mcp_clients:
+            for i, client in enumerate(mcp_clients):
+                client_repr = getattr(client, "_name", None) or f"client[{i}]"
                 try:
                     stack.enter_context(client)
+                    log.info("MCP client started: %s", client_repr)
                 except Exception as exc:
-                    log.warning("MCP client failed to start: %s", exc)
+                    log.warning("MCP client failed to start (%s): %s", client_repr, exc)
                     continue
                 try:
                     mcp_tools = client.list_tools_sync()
                     _sanitize_tool_names(mcp_tools)
+                    tool_names_loaded = [getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "?") for t in mcp_tools]
                     tools.extend(mcp_tools)
-                    log.info("Loaded %d tools from MCP client", len(mcp_tools))
+                    log.info("Loaded %d tool(s) from %s: %s", len(mcp_tools), client_repr, tool_names_loaded)
                 except Exception as exc:
-                    log.warning("Failed to load tools from MCP client: %s", exc)
+                    log.warning("Failed to list tools from MCP client (%s): %s", client_repr, exc)
 
             tools = _apply_read_limit(tools, AGENT_RUNNER_MAX_PAGE_READS)
             log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)

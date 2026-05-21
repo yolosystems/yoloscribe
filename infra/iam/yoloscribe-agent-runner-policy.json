@@ -22,6 +22,12 @@
         "arn:aws:s3:::yoloscribe-*",
         "arn:aws:s3:::yoloscribe-*/*"
       ]
+    },
+    {
+      "Sid": "SMReadUserWebhooks",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe/*/webhooks*"
     }
   ]
 }

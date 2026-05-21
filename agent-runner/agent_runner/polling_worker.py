@@ -53,15 +53,18 @@ def _load_user_webhooks(user_id: str) -> str:
     """
     if _sm_client is None:
         return "[]"
+    secret_id = f"yoloscribe/{user_id}/webhooks"
     try:
-        resp = _sm_client.get_secret_value(SecretId=f"yoloscribe/{user_id}/webhooks")
+        resp = _sm_client.get_secret_value(SecretId=secret_id)
         entries = json.loads(resp["SecretString"])
         urls = [e["url"] if isinstance(e, dict) else str(e) for e in entries if e]
+        log.info("Loaded %d webhook(s) for user %s", len(urls), user_id)
         return json.dumps(urls)
     except _sm_client.exceptions.ResourceNotFoundException:
+        log.info("No webhooks secret found for user %s (key=%s)", user_id, secret_id)
         return "[]"
     except Exception as exc:
-        log.warning("Failed to load webhooks for user %s: %s", user_id, exc)
+        log.warning("Failed to load webhooks for user %s (key=%s): %s", user_id, secret_id, exc)
         return "[]"
 
 
