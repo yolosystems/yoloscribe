@@ -711,14 +711,6 @@ def _enqueue_on_notify_agents(s3, site: str, entry_text: str, user_id: str) -> N
             log.warning("Failed to enqueue on_notify agent %s: %s", key, exc)
 
 
-def _write_error_to_content(s3, content: str, error_block: str) -> None:
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=CONTENT_KEY,
-        Body=(error_block + content).encode("utf-8"),
-        ContentType="text/markdown; charset=utf-8",
-    )
-
 
 def _get_content_with_etag(s3, key: str) -> tuple[str, str | None]:
     """Read content.md and return (content, etag). Returns ("", None) on missing key."""
@@ -786,16 +778,14 @@ def main() -> None:
         site = AGENT_MD_KEY.split("/")[0]
         mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, store)
         if oauth_errors:
-            content, _ = _get_content_with_etag(s3, CONTENT_KEY)
-            error_block = (
-                "\n".join(
-                    f"> **Agent Error** (tool `{e.tool_name}`): {e.reason}"
-                    for e in oauth_errors
-                )
-                + "\n\n"
-            )
-            _write_error_to_content(s3, content, error_block)
             log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
+            _write_notification(
+                s3, _site, "agent_failure",
+                {
+                    "agent": AGENT_MD_KEY,
+                    "reason": "; ".join(str(e) for e in oauth_errors),
+                },
+            )
             return
 
         # 3. Build agent once — MCP tools, model, and system prompt are stable across retries
@@ -934,11 +924,6 @@ def main() -> None:
                             "Write conflict after %d attempts for %s — giving up",
                             _MAX_WRITE_RETRIES, CONTENT_KEY,
                         )
-                        error_block = (
-                            "> **Agent Error**: Could not save — the page was modified by "
-                            "another writer on every attempt. Please try again.\n\n"
-                        )
-                        _write_error_to_content(s3, content, error_block)
                         _write_run_log(
                             s3, _run_log_key, agent_def.name, "failed",
                             agent_def.trigger, time.monotonic() - _run_start,
@@ -961,12 +946,6 @@ def main() -> None:
     except Exception as exc:
         log.error("Agent execution failed: %s", exc, exc_info=True)
         _trigger = agent_def.trigger if agent_def is not None else "manual"
-        if _trigger != "on_notify":
-            error_block = f"> **Agent Error**: The agent encountered an error during execution: {exc}\n\n"
-            try:
-                _write_error_to_content(s3, content, error_block)
-            except Exception as write_exc:
-                log.error("Additionally failed to write error to content: %s", write_exc)
         _agent_name = agent_def.name if agent_def is not None else "unknown"
         _write_run_log(
             s3, _run_log_key, _agent_name, "failed",
