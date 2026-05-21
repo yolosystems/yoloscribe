@@ -205,7 +205,7 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, store) -> dict:
                 )
             )
         except OAuthError as exc:
-            raise OAuthTokenError(skill_name, f"Token refresh failed: {exc}")
+            raise OAuthTokenError(tool_name, f"Token refresh failed: {exc}")
 
         token_data["access_token"] = new_tokens.get("access_token", token_data["access_token"])
         if "refresh_token" in new_tokens:
