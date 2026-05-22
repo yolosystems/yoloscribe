@@ -74,7 +74,8 @@ class EventType:
 
     # Skill
     SKILL_CREATED = "skill.created"
-    SKILL_UPDATED = "skill.updated"
+    SKILL_CHANGED = "skill.changed"
+    SKILL_DELETED = "skill.deleted"
 
     # Settings
     SETTINGS_CHANGED = "settings.changed"
