@@ -45,6 +45,11 @@ from .webhooks import (
     WebhookEntry,
     Webhooks,
 )
+from .media_asset import (
+    MediaAsset,
+    list_page_media,
+    load_media_asset,
+)
 
 __all__ = [
     "NO_DISPATCH_EVENTS",
@@ -89,4 +94,7 @@ __all__ = [
     "APITokenData",
     "WebhookEntry",
     "Webhooks",
+    "MediaAsset",
+    "list_page_media",
+    "load_media_asset",
 ]

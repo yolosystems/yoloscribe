@@ -63,6 +63,8 @@ class EventType:
     PAGE_VISIBILITY_CHANGED = "page.visibility_changed"
     PAGE_MEDIA_UPLOADED = "page.media_uploaded"
     PAGE_MEDIA_DELETED = "page.media_deleted"
+    PAGE_MEDIA_ADDED = "page.media_added"
+    PAGE_MEDIA_REMOVED = "page.media_removed"
 
     # Agent
     AGENT_CREATED = "agent.created"
