@@ -58,7 +58,7 @@ class S3StorageBackend(StorageBackend):
     def read_with_etag(self, key: str) -> tuple[str, str] | tuple[None, None]:
         try:
             obj = self._s3.get_object(Bucket=self._bucket, Key=key)
-            return obj["Body"].read().decode("utf-8"), obj["ETag"]
+            return obj["Body"].read().decode("utf-8"), obj.get("ETag", "")
         except Exception as exc:
             if _is_not_found(exc):
                 return None, None

@@ -14,6 +14,7 @@ dependencies = [
     "pyjwt[crypto]>=2.8.0",
     "mcp-oauth",
     "yolo-secrets",
+    "yoloscribe-io",
     "fastmcp>=2.14.0",
     "slowapi>=0.1.9",
     "bleach>=6.3.0",
@@ -31,3 +32,4 @@ dev-dependencies = [
 [tool.uv.sources]
 mcp-oauth = {path = "../libs/mcp_oauth"}
 yolo-secrets = {path = "../libs/yolo_secrets"}
+yoloscribe-io = {path = "../libs/yoloscribe_io"}

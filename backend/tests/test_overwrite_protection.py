@@ -110,9 +110,8 @@ class TestPutAgentOverwrite:
         )
         assert "created" in result
         body = tools.s3.put_object.call_args[1]["Body"].decode()
-        assert "## Schedule" in body
-        assert "0 9 * * *" in body
-        assert "Europe/London" in body
+        assert "schedule: 0 9 * * *" in body
+        assert "timezone: Europe/London" in body
 
 
 # ---------------------------------------------------------------------------

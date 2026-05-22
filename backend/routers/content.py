@@ -12,7 +12,9 @@ from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_u
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from k8s_agent import enqueue_schedule_bootstrap
 from rate_limit import limiter
-from s3_helpers import get_content, get_content_with_etag, get_proposed, delete_proposed, put_content, put_content_conditional, is_safe_path, enqueue_index_job, enqueue_on_write_agents
+from path_safety import is_safe_path
+from queue_helpers import enqueue_index_job, enqueue_on_write_agents
+from s3_storage import storage
 from settings_cache import get_page_settings, page_path_from_file_path
 
 _audit_log = logging.getLogger("yoloscribe.audit")
@@ -38,10 +40,18 @@ router = APIRouter()
 
 def _get_content_with_etag_safe(site: str, path: str) -> tuple[str, str | None]:
     """Return (content, etag), falling back to ("", None) if the object is missing."""
-    try:
-        return get_content_with_etag(site, path)
-    except Exception:
-        return "", None
+    content, etag = storage.read_with_etag(f"{site}/{path}")
+    return content or "", etag
+
+
+def _get_proposed(site: str, page_path: str) -> str | None:
+    proposed = f"{page_path}/.proposed.content.md" if page_path else ".proposed.content.md"
+    return storage.read(f"{site}/{proposed}")
+
+
+def _delete_proposed(site: str, page_path: str) -> None:
+    proposed = f"{page_path}/.proposed.content.md" if page_path else ".proposed.content.md"
+    storage.delete(f"{site}/{proposed}")
 
 
 @router.get(
@@ -68,14 +78,14 @@ async def get_content_route(
 
     # config.json is always public
     if path == "config.json":
-        content = get_content(site, path)
+        content = storage.read(f"{site}/{path}") or ""
         return Response(content=content, media_type="application/json")
 
     # Non-content paths are always owner-only
     if not is_content_path:
         _, user_site = get_user_context(credentials)
         require_site_owner(site, user_site)
-        content = get_content(site, path)
+        content = storage.read(f"{site}/{path}") or ""
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = "full-control"
         return resp
@@ -93,7 +103,7 @@ async def get_content_route(
                     access = "full-control"
             except HTTPException:
                 pass
-        content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
+        content, etag = _get_content_with_etag_safe(site, path)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = access
         if etag:
@@ -107,7 +117,7 @@ async def get_content_route(
     _, user_site = get_user_context(credentials)
 
     if user_site == site:
-        content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
+        content, etag = _get_content_with_etag_safe(site, path)
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = "full-control"
         if etag:
@@ -124,7 +134,7 @@ async def get_content_route(
         shared_with = settings.get("shared_with", [])
         match = next((u for u in shared_with if u.get("email") == user_email), None)
         if match:
-            content, etag = _get_content_with_etag_safe(site, path) if is_content_path else (get_content(site, path), None)
+            content, etag = _get_content_with_etag_safe(site, path)
             resp = Response(content=content, media_type="text/plain; charset=utf-8")
             resp.headers["X-Page-Access"] = match.get("access", "view")
             if etag:
@@ -212,7 +222,7 @@ async def put_content_route(
 
     if_match = request.headers.get("If-Match")
     if if_match:
-        saved = put_content_conditional(site, path, text, if_match)
+        saved = storage.write_conditional(f"{site}/{path}", text, if_match)
         if not saved:
             return Response(
                 content='{"detail":"Conflict: the page was modified by another writer. Reload and try again."}',
@@ -220,7 +230,7 @@ async def put_content_route(
                 media_type="application/json",
             )
     else:
-        put_content(site, path, text)
+        storage.write(f"{site}/{path}", text)
     if is_content_path:
         content_key = f"{site}/{path}"
         enqueue_index_job(content_key, claims.user_id)
@@ -251,13 +261,13 @@ async def accept_proposed_route(
     user_site = get_site_for_user(claims.user_id)
     require_site_owner(site, user_site)
 
-    proposed = get_proposed(site, page_path)
+    proposed = _get_proposed(site, page_path)
     if proposed is None:
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
     content_path = f"{page_path}/content.md" if page_path else "content.md"
-    put_content(site, content_path, proposed)
-    delete_proposed(site, page_path)
+    storage.write(f"{site}/{content_path}", proposed)
+    _delete_proposed(site, page_path)
 
     content_key = f"{site}/{content_path}"
     enqueue_index_job(content_key, claims.user_id)
@@ -284,11 +294,11 @@ async def reject_proposed_route(
     _, user_site = get_user_context(credentials)
     require_site_owner(site, user_site)
 
-    proposed = get_proposed(site, page_path)
+    proposed = _get_proposed(site, page_path)
     if proposed is None:
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
-    delete_proposed(site, page_path)
+    _delete_proposed(site, page_path)
     return Response(content='{"status":"rejected"}', status_code=200, media_type="application/json")
 
 
@@ -310,7 +320,7 @@ async def get_proposed_route(
     _, user_site = get_user_context(credentials)
     require_site_owner(site, user_site)
 
-    proposed = get_proposed(site, page_path)
+    proposed = _get_proposed(site, page_path)
     if proposed is None:
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
     return Response(content=proposed, media_type="text/plain; charset=utf-8")

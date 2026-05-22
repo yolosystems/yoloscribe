@@ -8,7 +8,8 @@ from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, SQS_QUEUE_URL, s3, secrets_store, sqs
 from models import ChatRequest, ChatResponse
 from rate_limit import limiter
-from s3_helpers import enqueue_index_job, is_safe_path
+from path_safety import is_safe_path
+from queue_helpers import enqueue_index_job
 
 router = APIRouter()
 

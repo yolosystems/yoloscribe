@@ -141,7 +141,7 @@ class TestSignMediaCookies:
         policy_json = _decode_cf_b64(cookies["CloudFront-Policy"]).decode()
         policy = json.loads(policy_json)
         resource = policy["Statement"][0]["Resource"]
-        assert resource == "https://cf.example.com/my-site/assets/*"
+        assert resource == "https://cf.example.com/my-site/*"
 
     def test_policy_expiry_is_in_future(self):
         before = int(time.time())

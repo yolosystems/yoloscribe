@@ -143,6 +143,9 @@ class S3Tools:
         # decide whether to retry the agent invocation.
         self.write_conflict: bool = False
 
+        from yoloscribe_io import S3StorageBackend
+        self._storage = S3StorageBackend(bucket, s3)
+
     # ── Ownership / access checks ─────────────────────────────────────────────
 
     def _require_site_ownership(self, site: str) -> None:
@@ -173,8 +176,15 @@ class S3Tools:
             f"{site}/{page_path}/settings.json" if page_path else f"{site}/settings.json"
         )
         try:
-            obj = self.s3.get_object(Bucket=self.bucket, Key=settings_key)
-            settings: dict = json.loads(obj["Body"].read())
+            raw = self._storage.read(settings_key)
+        except Exception:
+            raw = None
+        if raw is None:
+            raise PermissionError(
+                f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
+            )
+        try:
+            settings: dict = json.loads(raw)
         except Exception:
             raise PermissionError(
                 f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
@@ -195,16 +205,13 @@ class S3Tools:
     # ── content helpers ───────────────────────────────────────────────────────
 
     def read_text(self, key: str) -> str:
-        obj = self.s3.get_object(Bucket=self.bucket, Key=key)
-        return obj["Body"].read().decode("utf-8")
+        result = self._storage.read(key)
+        if result is None:
+            raise KeyError(f"Key not found: {key}")
+        return result
 
     def write_text(self, key: str, text: str, content_type: str = "text/markdown; charset=utf-8") -> None:
-        self.s3.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=text.encode("utf-8"),
-            ContentType=content_type,
-        )
+        self._storage.write(key, text, content_type=content_type)
 
     def list_prefixes(self, prefix: str) -> list[str]:
         resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix + "/", Delimiter="/")
@@ -223,12 +230,10 @@ class S3Tools:
         """
         self._require_read_access(site, page_path)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
-        try:
-            obj = self.s3.get_object(Bucket=self.bucket, Key=key)
-            self._etag_cache[key] = obj["ETag"]
-            return obj["Body"].read().decode("utf-8")
-        except Exception:
-            return ""
+        content, etag = self._storage.read_with_etag(key)
+        if content is not None and etag is not None:
+            self._etag_cache[key] = etag
+        return content or ""
 
     @tool
     def put_content(self, site: str, content: str, page_path: str = "") -> str:
@@ -242,23 +247,13 @@ class S3Tools:
         self._require_site_ownership(site)
         key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
         etag = self._etag_cache.get(key)
-        kwargs: dict = {"IfMatch": etag} if etag else {}
-        try:
-            self.s3.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=content.encode("utf-8"),
-                ContentType="text/markdown; charset=utf-8",
-                **kwargs,
+        saved = self._storage.write_conditional(key, content, etag)
+        if not saved:
+            self.write_conflict = True
+            return (
+                "Write conflict: the page was modified by another writer between "
+                "your read and write. Do not retry — this will be handled automatically."
             )
-        except self.s3.exceptions.ClientError as exc:
-            if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
-                self.write_conflict = True
-                return (
-                    "Write conflict: the page was modified by another writer between "
-                    "your read and write. Do not retry — this will be handled automatically."
-                )
-            raise
         return f"Saved content to {key}"
 
     # ── Tools (bucket-root, admin-managed) ────────────────────────────────────

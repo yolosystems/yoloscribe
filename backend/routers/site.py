@@ -9,7 +9,9 @@ from rate_limit import limiter
 from aws.infra import deprovision_user_infrastructure, provision_user_infrastructure
 from config import CLOUDFRONT_DOMAIN, LOCAL_MODE, S3_BUCKET, auth_provider, user_site_repo, s3
 from models import ProvisionRequest, ProvisionResponse
-from s3_helpers import DEFAULT_WELCOME_MD, SITE_NAME_RE, VALID_THEMES, delete_s3_prefix, delete_site_vectors
+from defaults import DEFAULT_WELCOME_MD
+from path_safety import SITE_NAME_RE, VALID_THEMES
+from site_helpers import delete_s3_prefix, delete_site_vectors
 
 router = APIRouter()
 

@@ -7,9 +7,11 @@ from agent_md import AgentDefinitionError, parse_agent_md
 from agents.base import AGENT_NAME_RE, agents_prefix, skills_prefix
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, s3
+from defaults import default_child_page_md
 from k8s_agent import delete_agent_cronjob
 from models import CreateAgentRequest, CreatePageRequest
-from s3_helpers import PAGE_PATH_RE, default_child_page_md, enqueue_index_job
+from path_safety import PAGE_PATH_RE
+from queue_helpers import enqueue_index_job
 
 router = APIRouter()
 

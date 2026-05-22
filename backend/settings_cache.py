@@ -4,7 +4,7 @@ import json
 import threading
 import time
 
-from s3_helpers import get_content
+from s3_storage import storage
 
 _settings_cache: dict[str, tuple[dict, float]] = {}
 _settings_cache_lock = threading.Lock()
@@ -44,7 +44,7 @@ def get_page_settings(site: str, page_path: str) -> dict:
             if now - ts < _SETTINGS_CACHE_TTL:
                 return data
     s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
-    raw = get_content(site, s3_path)
+    raw = storage.read(f"{site}/{s3_path}")
     data: dict = json.loads(raw) if raw else {"visibility": "private", "shared_with": []}
     with _settings_cache_lock:
         _settings_cache[cache_key] = (data, now)

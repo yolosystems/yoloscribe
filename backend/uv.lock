@@ -2498,6 +2498,7 @@ dependencies = [
     { name = "strands-agents-tools" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "yolo-secrets" },
+    { name = "yoloscribe-io" },
 ]
 
 [package.dev-dependencies]
@@ -2524,6 +2525,7 @@ requires-dist = [
     { name = "strands-agents-tools", specifier = ">=0.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35.0" },
     { name = "yolo-secrets", directory = "../libs/yolo_secrets" },
+    { name = "yoloscribe-io", directory = "../libs/yoloscribe_io" },
 ]
 
 [package.metadata.requires-dev]
@@ -2532,6 +2534,23 @@ dev = [
     { name = "mypy", specifier = ">=1.19.1" },
     { name = "pytest", specifier = ">=9.0.2" },
 ]
+
+[[package]]
+name = "yoloscribe-io"
+version = "0.1.0"
+source = { directory = "../libs/yoloscribe_io" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+provides-extras = ["s3", "dev"]
 
 [[package]]
 name = "zipp"
