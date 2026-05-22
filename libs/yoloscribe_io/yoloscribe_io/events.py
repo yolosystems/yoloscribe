@@ -55,6 +55,7 @@ class EventType:
     # Page
     PAGE_READ = "page.read"
     PAGE_WRITTEN = "page.written"
+    PAGE_CREATED = "page.created"
     PAGE_DELETED = "page.deleted"
     PAGE_SHARED = "page.shared"
     PAGE_UNSHARED = "page.unshared"

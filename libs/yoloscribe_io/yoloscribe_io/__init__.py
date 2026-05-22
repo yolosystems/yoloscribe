@@ -1,5 +1,12 @@
 from .events import Event, EventEmitter, EventHandler, EventType, LoggerEventHandler
 from .markdown_file import MarkdownFile
+from .wiki_page import (
+    OnWriteEventHandler,
+    PageSettings,
+    SettingsData,
+    SharedUser,
+    WikiPageMarkdownFile,
+)
 from .secrets import (
     LocalSecretStore,
     SecretsManagerStore,
@@ -14,14 +21,19 @@ __all__ = [
     "EventEmitter",
     "EventHandler",
     "EventType",
-    "LoggerEventHandler",
     "LocalSecretStore",
+    "LocalStorageBackend",
+    "LoggerEventHandler",
     "MarkdownFile",
+    "OnWriteEventHandler",
+    "PageSettings",
+    "S3StorageBackend",
     "SecretsManagerStore",
     "SecretStore",
+    "SettingsData",
+    "SharedUser",
     "StorageBackend",
-    "S3StorageBackend",
-    "LocalStorageBackend",
     "SupabaseSecretStore",
     "UserSecret",
+    "WikiPageMarkdownFile",
 ]
