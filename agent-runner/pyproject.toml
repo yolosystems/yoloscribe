@@ -11,6 +11,7 @@ dependencies = [
     "mcp-oauth",
     "python-json-logger>=3.2.0",
     "yolo-secrets",
+    "yoloscribe-io",
     "yoloscribe-notification-mcp",
 ]
 
@@ -25,4 +26,5 @@ package = true
 [tool.uv.sources]
 mcp-oauth = {path = "../libs/mcp_oauth"}
 yolo-secrets = {path = "../libs/yolo_secrets"}
+yoloscribe-io = {path = "../libs/yoloscribe_io"}
 yoloscribe-notification-mcp = {path = "../notification-mcp"}

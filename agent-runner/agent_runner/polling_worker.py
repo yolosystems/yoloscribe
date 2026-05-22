@@ -23,8 +23,9 @@ import time
 
 import boto3
 
+from yoloscribe_io import AgentDefinitionError, NotificationsMarkdownFile, S3StorageBackend, SecretsManagerStore, Webhooks, parse_agent_md
+
 from .log_setup import configure_logging
-from .parse import AgentDefinitionError, parse_agent_md
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -53,18 +54,14 @@ def _load_user_webhooks(user_id: str) -> str:
     """
     if _sm_client is None:
         return "[]"
-    secret_id = f"yoloscribe/{user_id}/webhooks"
     try:
-        resp = _sm_client.get_secret_value(SecretId=secret_id)
-        entries = json.loads(resp["SecretString"])
-        urls = [e["url"] if isinstance(e, dict) else str(e) for e in entries if e]
+        store = SecretsManagerStore(_sm_client)
+        entries = Webhooks(user_id, store).list()
+        urls = [e.url for e in entries]
         log.info("Loaded %d webhook(s) for user %s", len(urls), user_id)
         return json.dumps(urls)
-    except _sm_client.exceptions.ResourceNotFoundException:
-        log.info("No webhooks secret found for user %s (key=%s)", user_id, secret_id)
-        return "[]"
     except Exception as exc:
-        log.warning("Failed to load webhooks for user %s (key=%s): %s", user_id, secret_id, exc)
+        log.warning("Failed to load webhooks for user %s: %s", user_id, exc)
         return "[]"
 
 
@@ -208,25 +205,9 @@ def _upsert_cronjob(batch_v1, name: str, pod_spec, schedule: str, timezone: str)
 
 def _write_notification_to_s3(s3, bucket: str, site: str, event_type: str, payload: dict) -> None:
     """Append a canonical notification entry to {site}/.user/notifications.md."""
-    import datetime
-    key = f"{site}/.user/notifications.md"
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"## {ts} — {event_type}", ""]
-    for k, v in payload.items():
-        lines.append(f"{k}: {v}")
-    lines.append("")
-    entry = "\n".join(lines) + "\n"
+    storage = S3StorageBackend(bucket, s3)
     try:
-        existing = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
-    except Exception:
-        existing = ""
-    try:
-        s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=(existing + entry).encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        NotificationsMarkdownFile(site, storage).notify(event_type, payload)
     except Exception as exc:
         log.error("Failed to write notification for site %s: %s", site, exc)
 
@@ -242,9 +223,9 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
     site = parts[0] if parts else "unknown"
     agent_name = parts[-2] if len(parts) >= 2 else "unknown"
 
-    obj = s3.get_object(Bucket=bucket, Key=agent_md_key)
+    raw_agent_md = S3StorageBackend(bucket, s3).read(agent_md_key) or ""
     try:
-        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+        agent_def = parse_agent_md(raw_agent_md)
     except AgentDefinitionError as exc:
         log.error("Invalid agent.md at %s: %s", agent_md_key, exc)
         _write_notification_to_s3(

@@ -39,7 +39,16 @@ import boto3
 from strands import Agent, ModelRetryStrategy
 from strands_tools import http_request
 
-from .parse import AgentDefinitionError, parse_agent_md
+from yoloscribe_io import (
+    AgentDefinitionError,
+    NotificationsMarkdownFile,
+    S3StorageBackend,
+    TokenData,
+    ToolToken,
+    load_tool_config,
+    parse_agent_md,
+    parse_skill_md,
+)
 
 BUCKET = os.environ["BUCKET"]
 AGENT_MD_KEY = os.environ["AGENT_MD_KEY"]
@@ -163,17 +172,14 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, store) -> dict:
     from mcp_oauth import refresh_access_token as _refresh
     from mcp_oauth.discovery import AuthorizationServerMetadata
 
-    secret_key = f"yoloscribe/{user_id}/oauth/{tool_name}"
-    raw = store.get(secret_key)
-    if raw is None:
+    tool_token = ToolToken(user_id, tool_name, store)
+    data = tool_token.load()
+    if data is None:
         raise OAuthTokenError(
             tool_name,
             "No OAuth token found. Please open the Tools panel and authenticate this tool.",
         )
-    try:
-        token_data: dict = json.loads(raw)
-    except Exception as exc:
-        raise OAuthTokenError(tool_name, f"Failed to read token: {exc}")
+    token_data = data.to_dict()
 
     # Proactive refresh: refresh if the token expires within 5 minutes
     expires_at = token_data.get("expires_at", 0)
@@ -215,7 +221,7 @@ def _load_and_refresh_oauth_token(tool_name: str, user_id: str, store) -> dict:
             token_data["scope"] = new_tokens["scope"]
 
         try:
-            store.put(secret_key, json.dumps(token_data))
+            tool_token.save(TokenData.from_dict(token_data))
             log.info("Refreshed and persisted OAuth token for tool '%s'", tool_name)
         except Exception as exc:
             log.warning("Failed to persist refreshed token for tool '%s': %s", tool_name, exc)
@@ -282,43 +288,10 @@ def _get_aws_sso_credential_headers(user_id: str, store) -> dict[str, str]:
     }
 
 
-# ── Frontmatter parser ────────────────────────────────────────────────────────
-
-
-def _parse_skill_tools(text: str) -> list[str]:
-    """Extract the tools list from a SKILL.md frontmatter block.
-
-    Returns an empty list if parsing fails or the tools key is absent.
-    """
-    if not text.startswith("---"):
-        return []
-    end = text.find("\n---", 3)
-    if end == -1:
-        return []
-    fm_text = text[3:end].strip()
-    tools: list[str] = []
-    in_tools = False
-    for line in fm_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("tools:"):
-            in_tools = True
-            value = stripped[len("tools:"):].strip()
-            if value:  # inline list or scalar
-                tools = [v.strip().strip("\"'") for v in value.strip("[]").split(",") if v.strip()]
-            continue
-        if in_tools and stripped.startswith("- "):
-            tools.append(stripped[2:].strip().strip("\"'"))
-        elif ":" in stripped and not stripped.startswith("- "):
-            in_tools = False
-    return tools
-
-
 # ── MCP client construction ───────────────────────────────────────────────────
 
 
-def _collect_tool_names(skill_names: list[str], site: str, s3) -> list[str]:
+def _collect_tool_names(skill_names: list[str], site: str, storage: S3StorageBackend) -> list[str]:
     """Resolve skill names → tool names via SKILL.md frontmatter."""
     log.info("Resolving tool names from skills: %s", skill_names)
     tool_names: list[str] = []
@@ -326,9 +299,11 @@ def _collect_tool_names(skill_names: list[str], site: str, s3) -> list[str]:
     for skill_name in skill_names:
         skill_key = f"{site}/.skills/{skill_name}/SKILL.md"
         try:
-            obj = s3.get_object(Bucket=BUCKET, Key=skill_key)
-            skill_text = obj["Body"].read().decode("utf-8")
-            names = _parse_skill_tools(skill_text)
+            skill_text = storage.read(skill_key)
+            if skill_text is None:
+                log.warning("SKILL.md not found for skill '%s' (key=%s)", skill_name, skill_key)
+                continue
+            names = parse_skill_md(skill_text).tools
         except Exception as exc:
             log.warning("Failed to read SKILL.md for skill '%s' (key=%s): %s", skill_name, skill_key, exc)
             continue
@@ -363,7 +338,7 @@ def _load_local_mcp_config() -> dict[str, dict]:
         return {}
 
 
-def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[list, list]:
+def _build_local_mcp_clients(skill_names: list[str], site: str, storage: S3StorageBackend) -> tuple[list, list]:
     """Build STDIO MCPClient instances from local-mcp-servers.json (LOCAL_MODE only).
 
     Only servers whose name appears in the tool names required by the agent's skills
@@ -385,7 +360,7 @@ def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[lis
     if not local_servers:
         return [], []
 
-    required_tool_names = set(_collect_tool_names(skill_names, site, s3))
+    required_tool_names = set(_collect_tool_names(skill_names, site, storage))
     if not required_tool_names:
         log.warning("No tool names resolved from skills %s — no local MCP clients will be loaded", skill_names)
         return [], []
@@ -417,7 +392,7 @@ def _build_local_mcp_clients(skill_names: list[str], site: str, s3) -> tuple[lis
     return clients, []
 
 
-def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
+def _build_remote_mcp_clients(skill_names: list[str], site: str, storage: S3StorageBackend, store) -> tuple[list, list[OAuthTokenError]]:
     """Build HTTP MCPClient instances for all skills used by an agent.
 
     Resolution chain: agent.md → skill names → SKILL.md (tools list) → .tools/{name}/mcp.json
@@ -439,18 +414,15 @@ def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> t
 
     clients: list = []
     errors: list[OAuthTokenError] = []
-    tool_names = _collect_tool_names(skill_names, site, s3)
+    tool_names = _collect_tool_names(skill_names, site, storage)
 
     for tool_name in tool_names:
-        tool_key = f".tools/{tool_name}/mcp.json"
-        try:
-            obj = s3.get_object(Bucket=BUCKET, Key=tool_key)
-            config = json.loads(obj["Body"].read().decode("utf-8"))
-        except Exception as exc:
-            log.warning("Failed to read mcp.json for tool '%s': %s", tool_name, exc)
+        tool_cfg = load_tool_config(tool_name, storage)
+        if tool_cfg is None:
+            log.warning("No mcp.json found for tool '%s'", tool_name)
             continue
 
-        for server_name, server_cfg in config.get("mcpServers", {}).items():
+        for server_name, server_cfg in tool_cfg.raw_mcp.get("mcpServers", {}).items():
             if "command" in server_cfg:
                 # Stdio tool bundled in the agent-runner container
                 command = server_cfg["command"]
@@ -506,7 +478,7 @@ def _build_remote_mcp_clients(skill_names: list[str], site: str, s3, store) -> t
     return clients, errors
 
 
-def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[list, list[OAuthTokenError]]:
+def _build_mcp_clients(skill_names: list[str], site: str, storage: S3StorageBackend, store) -> tuple[list, list[OAuthTokenError]]:
     """Build Strands MCPClient instances for all skills used by an agent.
 
     In LOCAL_MODE: reads local-mcp-servers.json and builds STDIO clients — no S3 tool
@@ -515,8 +487,8 @@ def _build_mcp_clients(skill_names: list[str], site: str, s3, store) -> tuple[li
     """
     log.info("Building MCP clients for skills %s (LOCAL_MODE=%s)", skill_names, LOCAL_MODE)
     if LOCAL_MODE:
-        return _build_local_mcp_clients(skill_names, site, s3)
-    return _build_remote_mcp_clients(skill_names, site, s3, store)
+        return _build_local_mcp_clients(skill_names, site, storage)
+    return _build_remote_mcp_clients(skill_names, site, storage, store)
 
 
 # ── Tool name sanitisation ────────────────────────────────────────────────────
@@ -583,7 +555,7 @@ def _apply_read_limit(tools: list, max_reads: int) -> list:
 
 
 def _write_run_log(
-    s3,
+    storage: S3StorageBackend,
     run_log_key: str,
     agent_name: str,
     status: str,
@@ -606,137 +578,10 @@ def _write_run_log(
     lines += ["", "---", ""]
     entry = "\n".join(lines) + "\n"
     try:
-        existing = s3.get_object(Bucket=BUCKET, Key=run_log_key)["Body"].read().decode("utf-8")
-    except Exception:
-        existing = ""
-    try:
-        s3.put_object(
-            Bucket=BUCKET,
-            Key=run_log_key,
-            Body=(entry + existing).encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        existing = storage.read(run_log_key) or ""
+        storage.write(run_log_key, entry + existing)
     except Exception as exc:
         log.warning("Failed to write run_log %s: %s", run_log_key, exc)
-
-
-def _write_notification(s3, site: str, event_type: str, payload: dict, user_id: str = "") -> None:
-    """Append a canonical notification entry to {site}/.user/notifications.md.
-
-    agent_success and agent_failure are never dispatched to on_notify agents.
-    All other event types (e.g. confirm_page_change) trigger on_notify dispatch.
-    """
-    import datetime
-    key = f"{site}/.user/notifications.md"
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"## {ts} — {event_type}", ""]
-    for k, v in payload.items():
-        lines.append(f"{k}: {v}")
-    lines.append("")
-    entry = "\n".join(lines) + "\n"
-    try:
-        existing = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
-    except Exception:
-        existing = ""
-    try:
-        s3.put_object(
-            Bucket=BUCKET,
-            Key=key,
-            Body=(existing + entry).encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
-    except Exception as exc:
-        log.error("Failed to write notification for site %s: %s", site, exc)
-        return
-
-    if event_type not in _NO_DISPATCH_EVENTS:
-        _enqueue_on_notify_agents(s3, site, entry, user_id)
-
-
-_NO_DISPATCH_EVENTS = frozenset({"agent_success", "agent_failure"})
-
-
-def _enqueue_on_notify_agents(s3, site: str, entry_text: str, user_id: str) -> None:
-    """Dispatch on_notify agents for this site (best-effort; never raises)."""
-    if not SQS_QUEUE_URL:
-        return
-    sqs_kwargs: dict = {"region_name": AWS_REGION}
-    if SQS_ENDPOINT_URL:
-        sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
-    try:
-        sqs = _session.client("sqs", **sqs_kwargs)
-    except Exception as exc:
-        log.warning("Could not create SQS client for on_notify dispatch: %s", exc)
-        return
-
-    agents_prefix = f"{site}/.agents/"
-    try:
-        resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=agents_prefix)
-    except Exception as exc:
-        log.warning("Failed to list on_notify agents for site %s: %s", site, exc)
-        return
-
-    for obj in resp.get("Contents", []):
-        key = obj["Key"]
-        if not key.endswith("/agent.md"):
-            continue
-        try:
-            agent_text = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode("utf-8")
-        except Exception as exc:
-            log.warning("Failed to read agent.md at %s: %s", key, exc)
-            continue
-
-        trigger_m = re.search(r"^trigger:\s*(\S+)", agent_text, re.MULTILINE)
-        if not trigger_m or trigger_m.group(1) != "on_notify":
-            continue
-
-        prompt = (
-            "A new notification has been added to notifications.md:\n\n"
-            f"{entry_text.strip()}\n\n"
-            "Process this notification according to your instructions."
-        )
-        try:
-            sqs.send_message(
-                QueueUrl=SQS_QUEUE_URL,
-                MessageBody=json.dumps({
-                    "bucket": BUCKET,
-                    "agent_md_key": key,
-                    "content_key": f"{site}/.user/notifications.md",
-                    "prompt": prompt,
-                    "user_id": user_id,
-                }),
-            )
-            log.info("Enqueued on_notify agent %s for site %s", key, site)
-        except Exception as exc:
-            log.warning("Failed to enqueue on_notify agent %s: %s", key, exc)
-
-
-
-def _get_content_with_etag(s3, key: str) -> tuple[str, str | None]:
-    """Read content.md and return (content, etag). Returns ("", None) on missing key."""
-    try:
-        obj = s3.get_object(Bucket=BUCKET, Key=key)
-        return obj["Body"].read().decode("utf-8"), obj["ETag"]
-    except Exception:
-        return "", None
-
-
-def _put_content_conditional(s3, key: str, content: str, etag: str | None) -> bool:
-    """PUT with If-Match if an etag is available. Returns True on success, False on 412."""
-    kwargs: dict = {"IfMatch": etag} if etag else {}
-    try:
-        s3.put_object(
-            Bucket=BUCKET,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-            **kwargs,
-        )
-        return True
-    except s3.exceptions.ClientError as exc:
-        if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
-            return False
-        raise
 
 
 def main() -> None:
@@ -750,11 +595,52 @@ def main() -> None:
     )
 
     s3 = _s3_client()
+    storage = S3StorageBackend(BUCKET, s3)
     store = _make_secrets_store(s3)
 
     _run_start = time.monotonic()
     _site = AGENT_MD_KEY.split("/")[0]
     _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
+
+    # Build a lightweight SQS enqueue function for on_notify dispatch.
+    # NotificationsMarkdownFile handles dispatch internally when enqueue is provided.
+    def _make_enqueue_fn():
+        if not SQS_QUEUE_URL:
+            return None
+        sqs_kwargs: dict = {"region_name": AWS_REGION}
+        if SQS_ENDPOINT_URL:
+            sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
+        try:
+            sqs = _session.client("sqs", **sqs_kwargs)
+        except Exception as exc:
+            log.warning("Could not create SQS client for on_notify dispatch: %s", exc)
+            return None
+
+        def _enqueue(agent_md_key: str, notifications_key: str, prompt: str, user_id: str) -> None:
+            try:
+                sqs.send_message(
+                    QueueUrl=SQS_QUEUE_URL,
+                    MessageBody=json.dumps({
+                        "bucket": BUCKET,
+                        "agent_md_key": agent_md_key,
+                        "content_key": notifications_key,
+                        "prompt": prompt,
+                        "user_id": user_id,
+                    }),
+                )
+                log.info("Enqueued on_notify agent %s for site %s", agent_md_key, _site)
+            except Exception as exc:
+                log.warning("Failed to enqueue on_notify agent %s: %s", agent_md_key, exc)
+
+        return _enqueue
+
+    _notif = NotificationsMarkdownFile(_site, storage, enqueue=_make_enqueue_fn())
+
+    def _notify(event_type: str, payload: dict, user_id: str = "") -> None:
+        try:
+            _notif.notify(event_type, payload, user_id=user_id)
+        except Exception as exc:
+            log.error("Failed to write notification for site %s: %s", _site, exc)
 
     # content and agent_def are declared here so the top-level except block
     # can use them for error reporting even if early steps never ran.
@@ -763,24 +649,23 @@ def main() -> None:
 
     try:
         # 1. Read and parse agent.md
-        obj = s3.get_object(Bucket=BUCKET, Key=AGENT_MD_KEY)
+        raw_agent_md = storage.read(AGENT_MD_KEY)
+        if raw_agent_md is None:
+            raise FileNotFoundError(f"agent.md not found: {AGENT_MD_KEY}")
         try:
-            agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
+            agent_def = parse_agent_md(raw_agent_md)
         except AgentDefinitionError as exc:
             log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
-            _write_notification(
-                s3, _site, "agent_failure",
-                {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"},
-            )
+            _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"})
             return
 
         # 2. Build MCP clients once — not repeated on write-conflict retries
         site = AGENT_MD_KEY.split("/")[0]
-        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, s3, store)
+        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, storage, store)
         if oauth_errors:
             log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
-            _write_notification(
-                s3, _site, "agent_failure",
+            _notify(
+                "agent_failure",
                 {
                     "agent": AGENT_MD_KEY,
                     "reason": "; ".join(str(e) for e in oauth_errors),
@@ -858,7 +743,7 @@ def main() -> None:
                 # Propose mode: write to .proposed.content.md instead of content.md.
                 # A single run is sufficient — no retry loop needed.
                 proposed_key = CONTENT_KEY[: -len("content.md")] + ".proposed.content.md"
-                content, _ = _get_content_with_etag(s3, CONTENT_KEY)
+                content = storage.read(CONTENT_KEY) or ""
 
                 task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
                 full_prompt = (
@@ -876,15 +761,10 @@ def main() -> None:
                         break
                 updated = raw
 
-                s3.put_object(
-                    Bucket=BUCKET,
-                    Key=proposed_key,
-                    Body=updated.encode("utf-8"),
-                    ContentType="text/markdown; charset=utf-8",
-                )
+                storage.write(proposed_key, updated)
                 log.info("Propose mode: wrote %d chars to s3://%s/%s", len(updated), BUCKET, proposed_key)
-                _write_notification(
-                    s3, _site, "confirm_page_change",
+                _notify(
+                    "confirm_page_change",
                     {
                         "agent": AGENT_MD_KEY,
                         "content_key": CONTENT_KEY,
@@ -897,7 +777,8 @@ def main() -> None:
                 _MAX_WRITE_RETRIES = 3
                 for attempt in range(_MAX_WRITE_RETRIES):
                     # Read fresh content + ETag on every attempt
-                    content, etag = _get_content_with_etag(s3, CONTENT_KEY)
+                    content, etag = storage.read_with_etag(CONTENT_KEY)
+                    content = content or ""
 
                     task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
                     full_prompt = (
@@ -916,7 +797,7 @@ def main() -> None:
                             break
                     updated = raw
 
-                    if _put_content_conditional(s3, CONTENT_KEY, updated, etag):
+                    if storage.write_conditional(CONTENT_KEY, updated, etag):
                         break
 
                     if attempt == _MAX_WRITE_RETRIES - 1:
@@ -925,12 +806,12 @@ def main() -> None:
                             _MAX_WRITE_RETRIES, CONTENT_KEY,
                         )
                         _write_run_log(
-                            s3, _run_log_key, agent_def.name, "failed",
+                            storage, _run_log_key, agent_def.name, "failed",
                             agent_def.trigger, time.monotonic() - _run_start,
                             f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
                         )
-                        _write_notification(
-                            s3, _site, "agent_failure",
+                        _notify(
+                            "agent_failure",
                             {
                                 "agent": AGENT_MD_KEY,
                                 "reason": f"Write conflict: could not save {CONTENT_KEY} after {_MAX_WRITE_RETRIES} attempts",
@@ -948,14 +829,11 @@ def main() -> None:
         _trigger = agent_def.trigger if agent_def is not None else "manual"
         _agent_name = agent_def.name if agent_def is not None else "unknown"
         _write_run_log(
-            s3, _run_log_key, _agent_name, "failed",
+            storage, _run_log_key, _agent_name, "failed",
             _trigger, time.monotonic() - _run_start,
             f"Error: {exc}",
         )
-        _write_notification(
-            s3, _site, "agent_failure",
-            {"agent": AGENT_MD_KEY, "reason": str(exc)},
-        )
+        _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": str(exc)})
         return
 
     if agent_def.trigger == "on_notify":
@@ -966,13 +844,10 @@ def main() -> None:
         log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
         _enqueue_index_job(CONTENT_KEY)
     _write_run_log(
-        s3, _run_log_key, agent_def.name, "success",
+        storage, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
     )
-    _write_notification(
-        s3, _site, "agent_success",
-        {"agent": AGENT_MD_KEY},
-    )
+    _notify("agent_success", {"agent": AGENT_MD_KEY})
 
 
 if __name__ == "__main__":
