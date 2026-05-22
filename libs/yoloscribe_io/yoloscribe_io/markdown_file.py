@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .events import EventEmitter, EventType
 from .storage import StorageBackend
 
 
-class MarkdownFile:
+class MarkdownFile(EventEmitter):
     """Base class for all yoloscribe-io file types.
 
     site and path are bound at construction and never accepted as method
@@ -20,6 +21,7 @@ class MarkdownFile:
         storage: StorageBackend,
         content: str | None = None,
     ) -> None:
+        super().__init__()
         self._site = site
         self._path = path
         self._storage = storage
@@ -62,12 +64,14 @@ class MarkdownFile:
     def read(self) -> str:
         """Fetch latest content from storage and return it."""
         self._raw_content = self._storage.read(self.key) or ""
+        self._emit(EventType.PAGE_READ, {"key": self.key})
         return self._raw_content
 
     def write(self, raw_content: str) -> None:
         """Persist raw_content to storage."""
         self._storage.write(self.key, raw_content)
         self._raw_content = raw_content
+        self._emit(EventType.PAGE_WRITTEN, {"key": self.key})
 
 
 # ── Frontmatter parsing ────────────────────────────────────────────────────────
