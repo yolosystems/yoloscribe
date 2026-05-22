@@ -1,3 +1,11 @@
+from .agent_page import (
+    AgentDefinition,
+    AgentDefinitionError,
+    AgentMarkdownFile,
+    Scope,
+    build_agent_md,
+    parse_agent_md,
+)
 from .events import Event, EventEmitter, EventHandler, EventType, LoggerEventHandler
 from .markdown_file import MarkdownFile
 from .wiki_page import (
@@ -17,6 +25,9 @@ from .secrets import (
 from .storage import LocalStorageBackend, S3StorageBackend, StorageBackend
 
 __all__ = [
+    "AgentDefinition",
+    "AgentDefinitionError",
+    "AgentMarkdownFile",
     "Event",
     "EventEmitter",
     "EventHandler",
@@ -28,6 +39,7 @@ __all__ = [
     "OnWriteEventHandler",
     "PageSettings",
     "S3StorageBackend",
+    "Scope",
     "SecretsManagerStore",
     "SecretStore",
     "SettingsData",
@@ -36,4 +48,6 @@ __all__ = [
     "SupabaseSecretStore",
     "UserSecret",
     "WikiPageMarkdownFile",
+    "build_agent_md",
+    "parse_agent_md",
 ]
