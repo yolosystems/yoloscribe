@@ -89,10 +89,14 @@ class EventType:
 
     # Webhook
     WEBHOOK_RECEIVED = "webhook.received"
+    WEBHOOK_ADDED = "webhook.added"
+    WEBHOOK_REMOVED = "webhook.removed"
 
     # Token
     TOKEN_REFRESHED = "token.refreshed"
     TOKEN_EXPIRED = "token.expired"
+    TOKEN_CREATED = "token.created"
+    TOKEN_REVOKED = "token.revoked"
 
     # Access
     ACCESS_REQUESTED = "access.requested"

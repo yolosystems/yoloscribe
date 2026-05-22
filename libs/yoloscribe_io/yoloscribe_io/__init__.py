@@ -39,6 +39,12 @@ from .tool_config import (
     list_tools,
     load_tool_config,
 )
+from .webhooks import (
+    APIToken,
+    APITokenData,
+    WebhookEntry,
+    Webhooks,
+)
 
 __all__ = [
     "NO_DISPATCH_EVENTS",
@@ -79,4 +85,8 @@ __all__ = [
     "ToolToken",
     "list_tools",
     "load_tool_config",
+    "APIToken",
+    "APITokenData",
+    "WebhookEntry",
+    "Webhooks",
 ]
