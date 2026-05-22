@@ -85,6 +85,7 @@ class EventType:
     TOOL_AUTH_COMPLETED = "tool.auth_completed"
     TOOL_AUTH_FAILED = "tool.auth_failed"
     TOOL_AUTH_EXPIRED = "tool.auth_expired"
+    TOOL_AUTH_REVOKED = "tool.auth_revoked"
 
     # Webhook
     WEBHOOK_RECEIVED = "webhook.received"

@@ -31,6 +31,14 @@ from .secrets import (
     UserSecret,
 )
 from .storage import LocalStorageBackend, S3StorageBackend, StorageBackend
+from .tool_config import (
+    OAuthClientConfig,
+    TokenData,
+    ToolConfig,
+    ToolToken,
+    list_tools,
+    load_tool_config,
+)
 
 __all__ = [
     "NO_DISPATCH_EVENTS",
@@ -65,4 +73,10 @@ __all__ = [
     "parse_skill_md",
     "SkillDefinition",
     "SkillMarkdownFile",
+    "OAuthClientConfig",
+    "TokenData",
+    "ToolConfig",
+    "ToolToken",
+    "list_tools",
+    "load_tool_config",
 ]
