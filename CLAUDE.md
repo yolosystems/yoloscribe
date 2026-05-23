@@ -64,6 +64,15 @@ Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under 
   - anything else → `content.md`
 - `API_BASE` is always `/api` in dev (Vite proxy); `VITE_API_BASE` (set at build time) in production.
 
+### Invite / magic link flow (waitlist sign-up)
+New users arrive at `app.yoloscribe.com` (or `app-dev.yoloscribe.com`) via a Supabase invite magic link sent by the waitlist Edge Function. Supabase's implicit flow (`flowType: 'implicit'` in `auth.ts`) automatically processes the `#access_token=...&type=invite` hash on page load, fires `onAuthStateChange`, and establishes the session. The existing routing then calls `GET /my-site` → null → `OnboardingView` → `POST /provision`.
+
+**Required Supabase project configuration (Auth → URL Configuration):**
+- Add `https://app.yoloscribe.com` and `https://app-dev.yoloscribe.com` to the **Redirect URLs** allowlist. Without this, `inviteUserByEmail` calls from the Edge Function will be rejected.
+- The invite TTL is configurable under Auth → Email → OTP Expiry (default 24 h; consider raising to 72 h or more).
+
+If the invite link is expired or already used, Supabase redirects back with `#error=access_denied&error_description=...` in the URL hash. `App.tsx` detects this on initial load (before Supabase clears the hash) and renders a friendly error page linking back to the marketing site.
+
 ### Backend path safety
 All writable paths must pass `SAFE_PATH` in `main.py`. Allowed patterns:
 - `content.md`

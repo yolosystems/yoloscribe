@@ -32,6 +32,26 @@ export interface AgentMeta {
 // code paths continue to work without changes.
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
 
+const MARKETING_SITE_URL = import.meta.env.VITE_MARKETING_SITE_URL || 'https://yoloscribe.com'
+
+// Detect a Supabase magic-link error in the URL hash on initial page load.
+// When a magic link or invite link is expired or already used, Supabase redirects
+// back with: #error=access_denied&error_code=otp_expired&error_description=...
+// We must capture this before Supabase clears the hash.
+function getInviteLinkError(): string | null {
+  const hash = window.location.hash
+  if (!hash.includes('error_description=')) return null
+  try {
+    const params = new URLSearchParams(hash.replace(/^#/, ''))
+    const desc = params.get('error_description')
+    return desc
+      ? decodeURIComponent(desc.replace(/\+/g, ' '))
+      : 'Your invite link is invalid or has expired.'
+  } catch {
+    return 'Your invite link is invalid or has expired.'
+  }
+}
+
 const LOCAL_SESSION: AuthSession = {
   access_token: 'local',
   user: {
@@ -168,6 +188,7 @@ type Mode = 'view' | 'edit' | 'tools'
 type AppView = 'loading' | 'landing' | 'onboarding' | 'site'
 
 export default function App() {
+  const [inviteLinkError] = useState<string | null>(getInviteLinkError)
   const [filePath, setFilePath] = useState(getFilePath)
   const [content, setContent] = useState<string | null>(null)
   const [savedContent, setSavedContent] = useState<string>('')
@@ -419,6 +440,20 @@ export default function App() {
   }
 
   // ── View rendering ────────────────────────────────────────────────────────
+
+  if (inviteLinkError) {
+    return (
+      <div className="state-center" style={{ height: '100vh', flexDirection: 'column', gap: '1rem', textAlign: 'center', padding: '2rem' }}>
+        <p style={{ fontSize: '1.1em' }}>This invite link has expired or has already been used.</p>
+        <p>
+          <a href={MARKETING_SITE_URL} style={{ color: 'var(--accent)' }}>
+            Return to yoloscribe.com
+          </a>
+          {' '}to sign up for a new invite.
+        </p>
+      </div>
+    )
+  }
 
   if (appView === 'loading') {
     return <div className="state-center" style={{ height: '100vh' }}>Loading…</div>
