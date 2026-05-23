@@ -16,6 +16,7 @@ from path_safety import is_safe_path
 from queue_helpers import enqueue_index_job, enqueue_on_write_agents
 from s3_storage import storage
 from settings_cache import get_page_settings, page_path_from_file_path
+from yoloscribe_io import WikiPageMarkdownFile
 
 _audit_log = logging.getLogger("yoloscribe.audit")
 
@@ -36,12 +37,6 @@ _ALLOWED_ATTRS = {
 }
 
 router = APIRouter()
-
-
-def _get_content_with_etag_safe(site: str, path: str) -> tuple[str, str | None]:
-    """Return (content, etag), falling back to ("", None) if the object is missing."""
-    content, etag = storage.read_with_etag(f"{site}/{path}")
-    return content or "", etag
 
 
 def _get_proposed(site: str, page_path: str) -> str | None:
@@ -93,6 +88,7 @@ async def get_content_route(
     # Content pages: check visibility settings
     settings = get_page_settings(site, page_path)
     visibility = settings.get("visibility", "private")
+    wiki = WikiPageMarkdownFile(site=site, page_path=page_path, storage=storage)
 
     if visibility == "public":
         access = "view"
@@ -103,7 +99,7 @@ async def get_content_route(
                     access = "full-control"
             except HTTPException:
                 pass
-        content, etag = _get_content_with_etag_safe(site, path)
+        content, etag = wiki.read_with_etag()
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = access
         if etag:
@@ -117,7 +113,7 @@ async def get_content_route(
     _, user_site = get_user_context(credentials)
 
     if user_site == site:
-        content, etag = _get_content_with_etag_safe(site, path)
+        content, etag = wiki.read_with_etag()
         resp = Response(content=content, media_type="text/plain; charset=utf-8")
         resp.headers["X-Page-Access"] = "full-control"
         if etag:
@@ -134,7 +130,7 @@ async def get_content_route(
         shared_with = settings.get("shared_with", [])
         match = next((u for u in shared_with if u.get("email") == user_email), None)
         if match:
-            content, etag = _get_content_with_etag_safe(site, path)
+            content, etag = wiki.read_with_etag()
             resp = Response(content=content, media_type="text/plain; charset=utf-8")
             resp.headers["X-Page-Access"] = match.get("access", "view")
             if etag:
@@ -221,25 +217,38 @@ async def put_content_route(
         )
 
     if_match = request.headers.get("If-Match")
-    if if_match:
-        saved = storage.write_conditional(f"{site}/{path}", text, if_match)
-        if not saved:
-            return Response(
-                content='{"detail":"Conflict: the page was modified by another writer. Reload and try again."}',
-                status_code=409,
-                media_type="application/json",
-            )
-    else:
-        storage.write(f"{site}/{path}", text)
+
     if is_content_path:
-        content_key = f"{site}/{path}"
-        enqueue_index_job(content_key, claims.user_id)
-        if not is_shared_write:
-            enqueue_on_write_agents(site, content_key, claims.user_id)
         page_path = page_path_from_file_path(path)
+        wiki = WikiPageMarkdownFile(site=site, page_path=page_path, storage=storage)
+        if if_match:
+            saved = wiki.write_conditional(text, if_match, user_id=claims.user_id)
+            if not saved:
+                return Response(
+                    content='{"detail":"Conflict: the page was modified by another writer. Reload and try again."}',
+                    status_code=409,
+                    media_type="application/json",
+                )
+        else:
+            wiki.write(text, user_id=claims.user_id)
+        enqueue_index_job(wiki.key, claims.user_id)
+        if not is_shared_write:
+            enqueue_on_write_agents(site, wiki.key, claims.user_id)
         sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "web"})
-    elif ".agents/" in path and path.endswith("agent.md") and not is_shared_write:
-        _maybe_bootstrap_schedule(site, path, text, claims.user_id)
+    else:
+        if if_match:
+            saved = storage.write_conditional(f"{site}/{path}", text, if_match)
+            if not saved:
+                return Response(
+                    content='{"detail":"Conflict: the page was modified by another writer. Reload and try again."}',
+                    status_code=409,
+                    media_type="application/json",
+                )
+        else:
+            storage.write(f"{site}/{path}", text)
+        if ".agents/" in path and path.endswith("agent.md") and not is_shared_write:
+            _maybe_bootstrap_schedule(site, path, text, claims.user_id)
+
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
 
 
@@ -265,13 +274,12 @@ async def accept_proposed_route(
     if proposed is None:
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
-    content_path = f"{page_path}/content.md" if page_path else "content.md"
-    storage.write(f"{site}/{content_path}", proposed)
+    wiki = WikiPageMarkdownFile(site=site, page_path=page_path, storage=storage)
+    wiki.write(proposed, user_id=claims.user_id)
     _delete_proposed(site, page_path)
 
-    content_key = f"{site}/{content_path}"
-    enqueue_index_job(content_key, claims.user_id)
-    enqueue_on_write_agents(site, content_key, claims.user_id)
+    enqueue_index_job(wiki.key, claims.user_id)
+    enqueue_on_write_agents(site, wiki.key, claims.user_id)
     sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "agent"})
 
     return Response(content='{"status":"accepted"}', status_code=200, media_type="application/json")

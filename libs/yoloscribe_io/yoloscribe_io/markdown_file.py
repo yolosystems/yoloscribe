@@ -67,6 +67,13 @@ class MarkdownFile(EventEmitter):
         self._emit(EventType.PAGE_READ, {"key": self.key})
         return self._raw_content
 
+    def read_with_etag(self) -> tuple[str, str]:
+        """Fetch latest content and ETag from storage. ETag is empty string when absent."""
+        content, etag = self._storage.read_with_etag(self.key)
+        self._raw_content = content or ""
+        self._emit(EventType.PAGE_READ, {"key": self.key})
+        return self._raw_content, etag or ""
+
     def write(self, raw_content: str) -> None:
         """Persist raw_content to storage."""
         self._storage.write(self.key, raw_content)

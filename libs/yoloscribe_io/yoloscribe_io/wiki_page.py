@@ -127,6 +127,23 @@ class WikiPageMarkdownFile(MarkdownFile):
             "user_id": user_id,
         })
 
+    def write_conditional(self, raw_content: str, etag: str | None, user_id: str = "") -> bool:
+        """Conditional write with optimistic concurrency (If-Match semantics).
+
+        Returns True on success; False if the ETag didn't match (conflict).
+        Emits page.written only on success.
+        """
+        saved = self._storage.write_conditional(self.key, raw_content, etag)
+        if saved:
+            self._raw_content = raw_content
+            self._emit(EventType.PAGE_WRITTEN, {
+                "key": self.key,
+                "site": self._site,
+                "page_path": self._page_path,
+                "user_id": user_id,
+            })
+        return saved
+
     def create(self, initial_content: str = "", user_id: str = "") -> None:
         """Write initial content and emit page.created."""
         self._storage.write(self.key, initial_content)
