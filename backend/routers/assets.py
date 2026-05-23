@@ -27,7 +27,7 @@ from config import (
     cloudfront,
     s3,
 )
-from s3_helpers import (
+from path_safety import (
     ASSET_MAX_BYTES,
     asset_media_category,
     asset_mime_type,

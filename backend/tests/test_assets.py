@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from s3_helpers import (
+from path_safety import (
     ASSET_ALLOWED_EXTENSIONS,
     ASSET_MAX_BYTES,
     is_safe_asset_path,

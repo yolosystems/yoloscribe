@@ -35,8 +35,8 @@ from agent_md import (
     parse_agent_md,
 )
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
-from s3_helpers import enqueue_on_write_agents
-from agents.base import _parse_frontmatter
+from queue_helpers import enqueue_on_write_agents
+from agent_md import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
 log = logging.getLogger(__name__)

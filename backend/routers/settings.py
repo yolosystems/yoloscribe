@@ -8,7 +8,7 @@ from rate_limit import limiter
 from config import S3_BUCKET, s3
 from models import AccessRequest, PageSettings
 from notifications import write_notification
-from s3_helpers import put_content
+from s3_storage import storage
 from settings_cache import get_page_settings, invalidate_settings_cache, page_path_from_file_path
 
 router = APIRouter()
@@ -50,7 +50,7 @@ async def put_settings(
     old = get_page_settings(site, page_path)
 
     s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
-    put_content(site, s3_path, json.dumps(settings.model_dump()))
+    storage.write(f"{site}/{s3_path}", json.dumps(settings.model_dump()), content_type="application/json")
     invalidate_settings_cache(site, page_path)
 
     _emit_visibility_notifications(site, page_path or "(root)", old, settings.model_dump(), user_id)

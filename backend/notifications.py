@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
-import datetime
+import json
 
-from s3_helpers import enqueue_on_notify_agents, get_content, put_content
+from yoloscribe_io import NotificationsMarkdownFile
 
-NOTIFICATIONS_PATH = ".user/notifications.md"
+from s3_storage import storage
 
-# These event types are written to notifications.md but must never trigger
-# on_notify dispatch — they would cause an agent feedback loop.
-NO_DISPATCH_EVENTS = frozenset({"agent_success", "agent_failure"})
+
+def _make_sqs_enqueue(site: str):
+    """Return an enqueue callable for NotificationsMarkdownFile, or None if SQS is unconfigured."""
+    from config import S3_BUCKET, SQS_QUEUE_URL, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return None
+
+    def _enqueue(agent_md_key: str, notif_key: str, prompt: str, user_id: str) -> None:
+        sqs.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps({
+                "bucket": S3_BUCKET,
+                "agent_md_key": agent_md_key,
+                "content_key": notif_key,
+                "prompt": prompt,
+                "user_id": user_id,
+            }),
+        )
+
+    return _enqueue
 
 
 def write_notification(
@@ -29,17 +47,7 @@ def write_notification(
         ...
 
     agent_success and agent_failure events are written but never enqueue
-    on_notify agents (loop guard).
+    on_notify agents (loop guard — enforced by NotificationsMarkdownFile).
     """
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"## {ts} — {event_type}", ""]
-    for key, value in payload.items():
-        lines.append(f"{key}: {value}")
-    lines.append("")
-    entry = "\n".join(lines) + "\n"
-
-    existing = get_content(site, NOTIFICATIONS_PATH)
-    put_content(site, NOTIFICATIONS_PATH, existing + entry)
-
-    if event_type not in NO_DISPATCH_EVENTS:
-        enqueue_on_notify_agents(site, entry, user_id)
+    notif = NotificationsMarkdownFile(site, storage, enqueue=_make_sqs_enqueue(site))
+    notif.notify(event_type, payload, user_id=user_id)

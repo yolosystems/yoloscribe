@@ -1,0 +1,77 @@
+"""SQS queue helpers for agent-runner and indexing jobs."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+
+log = logging.getLogger(__name__)
+
+_ON_WRITE_PATTERN = re.compile(r"^trigger:\s*on_write", re.MULTILINE)
+
+
+def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
+    """Enqueue agent-runner jobs for any on_write agents subscribed to this page.
+
+    Lists .agents/ under the written page's directory and queues a job via SQS
+    for each agent.md with trigger: on_write. Best-effort; never raises.
+    """
+    from config import S3_BUCKET, SQS_QUEUE_URL, s3, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+
+    if not content_key.endswith("/content.md"):
+        return
+    page_dir = content_key[: -len("/content.md")]
+    agents_prefix = f"{page_dir}/.agents/"
+
+    try:
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=agents_prefix)
+    except Exception:
+        log.warning("Failed to list on_write agents for %s", content_key, exc_info=True)
+        return
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith("/agent.md"):
+            continue
+        try:
+            agent_text = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read().decode("utf-8")
+        except Exception:
+            log.warning("Failed to read agent.md at %s", key, exc_info=True)
+            continue
+
+        if not _ON_WRITE_PATTERN.search(agent_text):
+            continue
+
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": S3_BUCKET,
+                    "agent_md_key": key,
+                    "content_key": content_key,
+                    "prompt": "A page in your scope has been updated. Review it and apply any necessary updates to your tracked pages.",
+                    "user_id": user_id,
+                }),
+            )
+            log.info("Enqueued on_write agent %s for %s", key, content_key)
+        except Exception:
+            log.warning("Failed to enqueue on_write agent %s", key, exc_info=True)
+
+
+def enqueue_index_job(content_key: str, user_id: str) -> None:
+    """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
+    from config import S3_BUCKET, SQS_INDEXING_QUEUE_URL, sqs_indexing
+
+    if sqs_indexing is None or not SQS_INDEXING_QUEUE_URL:
+        return
+    try:
+        sqs_indexing.send_message(
+            QueueUrl=SQS_INDEXING_QUEUE_URL,
+            MessageBody=json.dumps({"bucket": S3_BUCKET, "content_key": content_key, "user_id": user_id}),
+        )
+    except Exception:
+        log.warning("Failed to enqueue indexing job for %s", content_key, exc_info=True)

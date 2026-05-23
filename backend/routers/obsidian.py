@@ -22,7 +22,8 @@ import sse_broadcaster
 from auth import get_user_context
 from config import S3_BUCKET, s3
 from rate_limit import limiter
-from s3_helpers import PAGE_PATH_RE, enqueue_index_job
+from path_safety import PAGE_PATH_RE
+from queue_helpers import enqueue_index_job
 
 router = APIRouter(prefix="/obsidian", tags=["obsidian"])
 

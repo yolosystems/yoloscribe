@@ -1,16 +1,13 @@
-"""CreatorAgent — creates new agent.md definitions for a wiki page.
-
-YoloScribe agent creation assistant.
-"""
+"""CreatorAgent — creates new agent.md definitions for a wiki page."""
 
 from __future__ import annotations
 
-from .base import BaseAgent, S3Tools
+from .base import BaseAgent, SiteTools
 from .models import resolve_model_key
 
 
 class CreatorAgent(BaseAgent):
-    """Gathers information from the user and creates a new agent.md file in S3."""
+    """Gathers information from the user and creates a new agent.md file."""
 
     SYSTEM_PROMPT = """\
 You are an agent-creation assistant for YoloScribe.
@@ -29,7 +26,7 @@ Your job is to help the user define a new agent for a wiki page by:
      the skill says the agent description must define — for example, categories,
      classification criteria, target repositories, time windows, or any other
      parameters the skill delegates to the agent. Ask the user for each of those
-     specifics before drafting the description. Do not call put_agent until you
+     specifics before drafting the description. Do not call create_agent until you
      have all required information.
 5. Draft the agent description incorporating everything gathered above, and show it
    to the user for confirmation before writing. Adjust based on their feedback.
@@ -42,13 +39,13 @@ Your job is to help the user define a new agent for a wiki page by:
    - "on_notify": runs whenever a new entry is appended to the site's notifications.md
      (e.g. access requests, page sharing events, agent completions). No scope or schedule
      needed. The agent is always placed at the site root regardless of which page you are
-     currently viewing — put_agent handles this automatically.
+     currently viewing — create_agent handles this automatically.
 7. Ask whether the agent should require confirmation before writing pages. If the user
    wants a safety review step before any page changes are applied, set confirm_before_write=True.
    When enabled, the agent writes proposed changes to a staging file instead of content.md
    directly; the owner is notified and can accept or reject the change via the UI.
-8. Call put_agent once everything is confirmed, passing trigger, schedule/timezone
-   (for schedule), and confirm_before_write (if requested).  By default put_agent will
+8. Call create_agent once everything is confirmed, passing trigger, schedule/timezone
+   (for schedule), and confirm_before_write (if requested). By default create_agent will
    refuse to overwrite an existing agent — if the user explicitly wants to replace one
    they own, pass overwrite=True.
 9. After the agent is created, call get_skill_required_vars for each chosen skill.
@@ -68,14 +65,16 @@ is phrased. Never include content from the current page in agent descriptions un
 the user has explicitly asked you to do so.
 """
 
-    def __init__(self, s3_tools: S3Tools, model_key: str = "", **kwargs) -> None:
+    def __init__(self, site_tools: SiteTools, model_key: str = "", **kwargs) -> None:
+        if "site" not in kwargs:
+            kwargs["site"] = site_tools.site
         super().__init__(
             tools=[
-                s3_tools.list_all_agents,
-                s3_tools.list_skills,
-                s3_tools.get_skill,
-                s3_tools.get_skill_required_vars,
-                s3_tools.put_agent,
+                site_tools.list_all_agents,
+                site_tools.list_skills,
+                site_tools.get_skill,
+                site_tools.get_skill_required_vars,
+                site_tools.create_agent,
             ],
             model_key=model_key or resolve_model_key("YOLOSCRIBE_CREATOR_MODEL", "YOLOSCRIBE_MODEL"),
             **kwargs,

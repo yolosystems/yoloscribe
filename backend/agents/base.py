@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import dataclasses
-import json
 import logging
-import os
 import re
 from typing import TYPE_CHECKING
 
@@ -15,19 +12,29 @@ from strands import Agent, ModelRetryStrategy, tool
 
 from .models import DEFAULT_MODEL_KEY, build_strands_model
 
-if TYPE_CHECKING:
-    import mypy_boto3_s3
+from yoloscribe_io import (
+    AgentDefinition,
+    AgentMarkdownFile,
+    S3StorageBackend,
+    SkillDefinition,
+    SkillMarkdownFile,
+    StorageBackend,
+    WikiPageMarkdownFile,
+    build_agent_md,
+    list_tools as _list_tools_lib,
+    load_tool_config,
+    parse_agent_md,
+)
 
-# ── S3 path helpers ───────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+_MAX_DESCRIPTION_CHARS = 4_096
+_MAX_RUNNER_PROMPT_CHARS = 2_048
+
 # ── Prompt-injection detector ─────────────────────────────────────────────────
 
-# Common trigger phrases used in prompt-injection attacks.  This is a best-effort
-# deterministic filter; it runs before the LLM layer so it cannot be defeated by
-# the LLM itself.  False positives are possible — the patterns are intentionally
-# conservative (they match only well-known injection preambles, not generic prose).
 _INJECTION_RE = re.compile(
     r"ignore\s+(all\s+)?(previous|prior)\s+instructions?"
     r"|disregard\s+(all\s+)?(previous|prior)\s+instructions?"
@@ -40,9 +47,6 @@ _INJECTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MAX_DESCRIPTION_CHARS = 4_096
-_MAX_RUNNER_PROMPT_CHARS = 2_048
-
 
 def _check_injection(text: str, field_name: str) -> str | None:
     """Return an error string if *text* matches a known injection pattern, else None."""
@@ -54,12 +58,10 @@ def _check_injection(text: str, field_name: str) -> str | None:
     return None
 
 
-def agents_prefix(site: str, page_path: str = "") -> str:
-    """Return the S3 prefix for the .agents directory of a page.
+# ── Path helpers (used by chat.py runner tool) ────────────────────────────────
 
-    page_path is relative to the site root (e.g. "" for root page,
-    "child-page" for a child page).
-    """
+def agents_prefix(site: str, page_path: str = "") -> str:
+    """Return the S3 prefix for the .agents directory of a page."""
     if page_path:
         return f"{site}/{page_path}/.agents"
     return f"{site}/.agents"
@@ -71,314 +73,146 @@ def tools_prefix() -> str:
 
 
 def skills_prefix(site: str) -> str:
-    """Return the S3 prefix for the per-site .skills directory."""
+    """Return the S3 prefix for the site's .skills directory."""
     return f"{site}/.skills"
 
 
-# ── Frontmatter parser ────────────────────────────────────────────────────────
+# ── WikiPageTools ─────────────────────────────────────────────────────────────
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML-style frontmatter from a markdown string.
+class WikiPageTools:
+    """Strands tools for reading and writing a specific wiki page.
 
-    Returns (frontmatter_dict, body_text).  The frontmatter must be delimited
-    by ``---`` lines at the very start of the file.  Only the simple types
-    needed for SKILL.md are supported: string scalars and string lists.
+    site and page_path are bound at construction via the WikiPageMarkdownFile
+    argument; the LLM tools take no site/path arguments so they cannot be
+    coerced into operating on arbitrary pages.
     """
-    if not text.startswith("---"):
-        return {}, text
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}, text
-    fm_text = text[3:end].strip()
-    body = text[end + 4:].lstrip("\n")
 
-    fm: dict = {}
-    current_key: str | None = None
-    for line in fm_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- "):
-            # List item under the current key
-            item = stripped[2:].strip().strip("\"'")
-            if current_key is not None:
-                if not isinstance(fm.get(current_key), list):
-                    fm[current_key] = []
-                fm[current_key].append(item)
-        elif ":" in stripped:
-            key, _, value = stripped.partition(":")
-            key = key.strip()
-            value = value.strip().strip("\"'")
-            current_key = key
-            if value:
-                fm[key] = value
-            else:
-                fm[key] = []
-
-    return fm, body
-
-
-# ── S3Tools (class-based tools) ───────────────────────────────────────────────
-
-
-class S3Tools:
-    """Strands class-based tools for reading and writing YoloScribe S3 objects."""
-
-    def __init__(
-        self,
-        s3: "mypy_boto3_s3.S3Client",
-        bucket: str,
-        user_site: str | None = None,
-        user_email: str | None = None,
-    ) -> None:
-        self.s3 = s3
-        self.bucket = bucket
-        self._user_site = user_site
-        self._user_email = user_email
-        # ETag captured on get_content; used as IfMatch on put_content.
-        self._etag_cache: dict[str, str] = {}
-        # Set True by put_content when a 412 PreconditionFailed is returned by
-        # S3. The caller (content_writer tool in chat.py) checks this flag to
-        # decide whether to retry the agent invocation.
+    def __init__(self, wiki: WikiPageMarkdownFile, user_id: str = "") -> None:
+        self._wiki = wiki
+        self._user_id = user_id
+        self._etag: str | None = None
         self.write_conflict: bool = False
 
-    # ── Ownership / access checks ─────────────────────────────────────────────
+    @property
+    def site(self) -> str:
+        return self._wiki.site
 
-    def _require_site_ownership(self, site: str) -> None:
-        """Raise PermissionError if the authenticated user does not own `site`.
-
-        If no user_site is set (unauthenticated / internal call), the check is
-        skipped to preserve backwards compatibility during rollout.
-        """
-        if self._user_site is not None and site != self._user_site:
-            raise PermissionError(
-                f"Access denied: site '{site}' is not owned by the authenticated user"
-            )
-
-    def _require_read_access(self, site: str, page_path: str) -> None:
-        """Raise PermissionError if the authenticated user cannot read the page.
-
-        Ownership grants unconditional read access.  For non-owners, falls back
-        to checking the page's settings.json visibility (public = allowed;
-        shared = allowed if the user's email is in shared_with).
-        """
-        if self._user_site is None:
-            return  # No auth context — internal/unauthenticated call, skip check
-        if site == self._user_site:
-            return  # Owner always has read access
-
-        # Not the owner — inspect visibility settings
-        settings_key = (
-            f"{site}/{page_path}/settings.json" if page_path else f"{site}/settings.json"
-        )
-        try:
-            obj = self.s3.get_object(Bucket=self.bucket, Key=settings_key)
-            settings: dict = json.loads(obj["Body"].read())
-        except Exception:
-            raise PermissionError(
-                f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
-            )
-
-        visibility = settings.get("visibility", "private")
-        if visibility == "public":
-            return
-        if visibility == "shared" and self._user_email:
-            shared_with = settings.get("shared_with", [])
-            if any(e.get("email") == self._user_email for e in shared_with):
-                return
-
-        raise PermissionError(
-            f"Access denied: cannot read page '{page_path or '(root)'}' in site '{site}'"
-        )
-
-    # ── content helpers ───────────────────────────────────────────────────────
-
-    def read_text(self, key: str) -> str:
-        obj = self.s3.get_object(Bucket=self.bucket, Key=key)
-        return obj["Body"].read().decode("utf-8")
-
-    def write_text(self, key: str, text: str, content_type: str = "text/markdown; charset=utf-8") -> None:
-        self.s3.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=text.encode("utf-8"),
-            ContentType=content_type,
-        )
-
-    def list_prefixes(self, prefix: str) -> list[str]:
-        resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix + "/", Delimiter="/")
-        return [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
-
-    # ── strands @tool methods ─────────────────────────────────────────────────
+    @property
+    def page_path(self) -> str:
+        return self._wiki.page_path
 
     @tool
-    def get_content(self, site: str, page_path: str = "") -> str:
-        """Retrieve the content.md for a wiki page from S3.
-
-        Args:
-            site: The site name (top-level S3 prefix).
-            page_path: Relative path of the page within the site.
-                       Empty string for the root page.
-        """
-        self._require_read_access(site, page_path)
-        key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
-        try:
-            obj = self.s3.get_object(Bucket=self.bucket, Key=key)
-            self._etag_cache[key] = obj["ETag"]
-            return obj["Body"].read().decode("utf-8")
-        except Exception:
-            return ""
+    def read_page(self) -> str:
+        """Retrieve the current content of this wiki page."""
+        content, etag = self._wiki.read_with_etag()
+        self._etag = etag or None
+        return content or ""
 
     @tool
-    def put_content(self, site: str, content: str, page_path: str = "") -> str:
-        """Save updated content.md for a wiki page back to S3.
+    def write_page(self, content: str) -> str:
+        """Save updated Markdown content to this wiki page.
 
         Args:
-            site: The site name.
-            content: Full updated markdown content.
-            page_path: Relative page path; empty for root.
+            content: The complete updated Markdown content to write.
         """
-        self._require_site_ownership(site)
-        key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
-        etag = self._etag_cache.get(key)
-        kwargs: dict = {"IfMatch": etag} if etag else {}
-        try:
-            self.s3.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=content.encode("utf-8"),
-                ContentType="text/markdown; charset=utf-8",
-                **kwargs,
+        saved = self._wiki.write_conditional(content, self._etag, user_id=self._user_id)
+        if not saved:
+            self.write_conflict = True
+            return (
+                "Write conflict: the page was modified by another writer between "
+                "your read and write. Do not retry — this will be handled automatically."
             )
-        except self.s3.exceptions.ClientError as exc:
-            if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
-                self.write_conflict = True
-                return (
-                    "Write conflict: the page was modified by another writer between "
-                    "your read and write. Do not retry — this will be handled automatically."
-                )
-            raise
-        return f"Saved content to {key}"
+        return "Page saved."
 
-    # ── Tools (bucket-root, admin-managed) ────────────────────────────────────
 
-    def list_tool_names(self) -> list[str]:
-        """Return names of all tools in the shared .tools directory."""
-        return self.list_prefixes(tools_prefix())
+# ── SiteTools ─────────────────────────────────────────────────────────────────
 
-    def get_tool_mcp_config(self, tool_name: str) -> dict:
-        """Read .tools/{tool_name}/mcp.json and return as a dict."""
-        key = f"{tools_prefix()}/{tool_name}/mcp.json"
-        raw = self.read_text(key)
-        return json.loads(raw)
 
-    def is_remote_tool(self, tool_name: str) -> bool:
-        """Return True if the tool's mcp.json uses remote HTTP transport."""
-        try:
-            config = self.get_tool_mcp_config(tool_name)
-            return any("url" in srv for srv in config.get("mcpServers", {}).values())
-        except Exception:
-            return False
+class SiteTools:
+    """Strands tools for site-level operations: skills, agents, and pages.
 
-    def get_tool_required_vars(self, tool_name: str) -> list[str]:
-        """Return the list of ${VAR_NAME} placeholders in a stdio tool's mcp.json."""
-        key = f"{tools_prefix()}/{tool_name}/mcp.json"
-        try:
-            raw = self.read_text(key)
-            return list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
-        except Exception:
-            return []
+    site is bound at construction. All tools operate exclusively within this site.
+    """
 
-    def get_tool_oauth_client(self, tool_name: str) -> dict | None:
-        """Read .tools/{tool_name}/oauth_client.json, or None if absent."""
-        key = f"{tools_prefix()}/{tool_name}/oauth_client.json"
-        try:
-            raw = self.read_text(key)
-            return json.loads(raw)
-        except Exception:
-            return None
+    def __init__(self, site: str, storage: StorageBackend, user_id: str = "") -> None:
+        self._site = site
+        self._storage = storage
+        self._user_id = user_id
 
-    # ── Skills (per-site, user-managed) ───────────────────────────────────────
+    @property
+    def site(self) -> str:
+        return self._site
+
+    # ── Skills ────────────────────────────────────────────────────────────────
 
     @tool
-    def list_skills(self, site: str) -> str:
-        """List all skills available in the user's site and summarise what each one does.
+    def list_skills(self) -> str:
+        """List all skills available in this site and summarise what each one does.
 
-        Reads the SKILL.md for every skill in the site's .skills directory.
-
-        Args:
-            site: The site name.
+        Reads the SKILL.md for every skill and returns a formatted summary.
         """
-        self._require_site_ownership(site)
-        prefix = skills_prefix(site)
-        names = self.list_prefixes(prefix)
+        prefix = f"{self._site}/.skills/"
+        names = sorted(set(
+            k[len(prefix):].split("/")[0]
+            for k in self._storage.list(prefix)
+            if k.endswith("/SKILL.md")
+        ))
         if not names:
             return "No skills are currently defined for this site."
         parts = []
         for name in names:
-            key = f"{prefix}/{name}/SKILL.md"
-            try:
-                text = self.read_text(key)
-                fm, _ = _parse_frontmatter(text)
-                description = fm.get("description", "(No description)")
-                tool_list = fm.get("tools", [])
-                tools_str = ", ".join(tool_list) if tool_list else "none"
-                parts.append(f"### {name}\n\n{description}\n\nTools: {tools_str}")
-            except Exception:
-                parts.append(f"### {name}\n\n(No description available.)")
+            skill = SkillMarkdownFile(self._site, name, self._storage)
+            defn = skill.definition
+            tools_str = ", ".join(defn.tools) if defn.tools else "none"
+            parts.append(
+                f"### {name}\n\n{defn.description or '(No description)'}\n\nTools: {tools_str}"
+            )
         return "## Available Skills\n\n" + "\n\n---\n\n".join(parts)
 
-    def get_skill(self, site: str, skill_name: str) -> "SkillDefinition":
-        """Read and parse {site}/.skills/{skill_name}/SKILL.md.
-
-        Args:
-            site: The site name.
-            skill_name: Name of the skill to retrieve.
-        """
-        key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
-        text = self.read_text(key)
-        fm, body = _parse_frontmatter(text)
-        tools_list = fm.get("tools", [])
-        if isinstance(tools_list, str):
-            tools_list = [tools_list]
-        return SkillDefinition(
-            name=skill_name,
-            description=fm.get("description", ""),
-            tools=tools_list,
-            body=body,
-        )
-
-    def get_skill_tools(self, site: str, skill_name: str) -> list[str]:
-        """Return the list of tool names referenced by a skill's frontmatter.
-
-        Args:
-            site: The site name.
-            skill_name: Skill name.
-        """
-        try:
-            return self.get_skill(site, skill_name).tools
-        except Exception:
-            return []
+    def _get_skill_defn(self, skill_name: str) -> SkillDefinition | None:
+        skill = SkillMarkdownFile(self._site, skill_name, self._storage)
+        raw = skill.raw_content
+        return skill.definition if raw else None
 
     @tool
-    def get_skill_required_vars(self, site: str, skill_name: str) -> str:
-        """Return the credential variable names required by all tools in a skill.
+    def get_skill(self, skill_name: str) -> str:
+        """Read a specific skill's full definition including instructions.
+
+        Call this to understand what a skill does and what parameters the agent
+        description must define before using it.
+
+        Args:
+            skill_name: Name of the skill to retrieve.
+        """
+        skill = SkillMarkdownFile(self._site, skill_name, self._storage)
+        raw = skill.raw_content
+        if not raw:
+            return f"Skill '{skill_name}' not found."
+        defn = skill.definition
+        tools_str = ", ".join(defn.tools) if defn.tools else "none"
+        return f"### {skill_name}\n\n{defn.description}\n\nTools: {tools_str}\n\n{defn.instructions}"
+
+    @tool
+    def get_skill_required_vars(self, skill_name: str) -> str:
+        """Return credential variable names required by all tools in a skill.
 
         Reads the skill's tool list from its frontmatter, then collects the
-        ${VAR_NAME} placeholders from each tool's mcp.json.  Returns a plain
+        ${VAR_NAME} placeholders from each tool's mcp.json. Returns a plain
         text summary suitable for showing to the user.
 
         Args:
-            site: The site name.
             skill_name: Name of the skill to inspect.
         """
-        tool_names = self.get_skill_tools(site, skill_name)
-        if not tool_names:
+        defn = self._get_skill_defn(skill_name)
+        if defn is None:
+            return f"Skill '{skill_name}' not found."
+        if not defn.tools:
             return f"Skill '{skill_name}' uses no tools, so no credentials are required."
         all_vars: list[str] = []
-        for tool_name in tool_names:
-            vars_ = self.get_tool_required_vars(tool_name)
+        for tool_name in defn.tools:
+            raw = self._storage.read(f".tools/{tool_name}/mcp.json") or ""
+            vars_ = list(dict.fromkeys(re.findall(r"\$\{([A-Z0-9_]+)\}", raw)))
             all_vars.extend(v for v in vars_ if v not in all_vars)
         if not all_vars:
             return f"Skill '{skill_name}' requires no credentials."
@@ -387,84 +221,66 @@ class S3Tools:
             + ", ".join(all_vars)
         )
 
-    def put_skill(self, site: str, skill_name: str, markdown: str, overwrite: bool = False) -> None:
-        """Write a SKILL.md to {site}/.skills/{skill_name}/SKILL.md.
+    def get_skill_tools(self, skill_name: str) -> list[str]:
+        """Return the tool names declared by a skill (not an LLM tool)."""
+        defn = self._get_skill_defn(skill_name)
+        return defn.tools if defn else []
 
-        Args:
-            site: The site name.
-            skill_name: Skill name (must match AGENT_NAME_RE).
-            markdown: Full SKILL.md content including frontmatter.
-            overwrite: If False (default) and a skill with this name already exists,
-                       raise ValueError.  Pass True to intentionally replace it.
-        """
-        self._require_site_ownership(site)
-        key = f"{skills_prefix(site)}/{skill_name}/SKILL.md"
-        if not overwrite:
-            resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
-            if resp.get("KeyCount", 0) > 0:
-                raise ValueError(
-                    f"Skill '{skill_name}' already exists. "
-                    f"Pass overwrite=True to replace it, or choose a different name."
-                )
-        self.write_text(key, markdown)
+    # ── Agents ────────────────────────────────────────────────────────────────
 
     @tool
-    def list_agents(self, site: str, page_path: str = "") -> str:
+    def list_agents(self, page_path: str = "") -> str:
         """List agents defined for a wiki page.
 
         Args:
-            site: The site name.
-            page_path: Relative page path; empty for root.
+            page_path: Relative page path; empty for the root page.
         """
-        self._require_site_ownership(site)
-        prefix = agents_prefix(site, page_path)
-        names = self.list_prefixes(prefix)
+        prefix = (
+            f"{self._site}/{page_path}/.agents/"
+            if page_path
+            else f"{self._site}/.agents/"
+        )
+        names = sorted(set(
+            k[len(prefix):].split("/")[0]
+            for k in self._storage.list(prefix)
+            if k.endswith("/agent.md")
+        ))
         if not names:
             return "No agents defined for this page."
         return "Available agents: " + ", ".join(names)
 
     @tool
-    def list_all_agents(self, site: str) -> str:
+    def list_all_agents(self) -> str:
         """List every agent across the entire site.
 
         Scans all .agents/ directories site-wide and returns each agent's name,
         page location, and trigger type. Useful before creating a new agent to
         check whether one already exists for the intended purpose.
-
-        Args:
-            site: The site name.
         """
-        self._require_site_ownership(site)
-        paginator = self.s3.get_paginator("list_objects_v2")
         found: list[str] = []
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"{site}/"):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if not key.endswith("/agent.md") or "/.agents/" not in key:
-                    continue
-                rel = key[len(f"{site}/"):]
-                parts = rel.split("/")
-                try:
-                    agents_idx = parts.index(".agents")
-                except ValueError:
-                    continue
-                agent_name = parts[agents_idx + 1]
-                page_path = "/".join(parts[:agents_idx]) if agents_idx > 0 else "(root)"
-                try:
-                    text = self.read_text(key)
-                    trigger_match = re.search(r"^trigger:\s*(\S+)", text, re.MULTILINE)
-                    trigger = trigger_match.group(1) if trigger_match else "manual"
-                except Exception:
-                    trigger = "?"
-                found.append(f"- **{agent_name}** at `{page_path}` (trigger: {trigger})")
+        site_prefix = f"{self._site}/"
+        for key in self._storage.list(site_prefix):
+            if not key.endswith("/agent.md") or "/.agents/" not in key:
+                continue
+            rel = key[len(site_prefix):]
+            parts = rel.split("/")
+            try:
+                agents_idx = parts.index(".agents")
+            except ValueError:
+                continue
+            agent_name = parts[agents_idx + 1]
+            page_loc = "/".join(parts[:agents_idx]) if agents_idx > 0 else "(root)"
+            raw = self._storage.read(key) or ""
+            trigger_match = re.search(r"^trigger:\s*(\S+)", raw, re.MULTILINE)
+            trigger = trigger_match.group(1) if trigger_match else "manual"
+            found.append(f"- **{agent_name}** at `{page_loc}` (trigger: {trigger})")
         if not found:
             return "No agents found on this site."
         return "All agents on this site:\n\n" + "\n".join(found)
 
     @tool
-    def put_agent(
+    def create_agent(
         self,
-        site: str,
         agent_name: str,
         description: str,
         skills: list[str],
@@ -476,10 +292,9 @@ class S3Tools:
         confirm_before_write: bool = False,
         overwrite: bool = False,
     ) -> str:
-        """Create a new agent.md file in S3.  Set overwrite=True to replace an existing agent.
+        """Create a new agent.md file. Set overwrite=True to replace an existing agent.
 
         Args:
-            site: The site name.
             agent_name: Name of the agent (lowercase, alphanumeric/hyphen/underscore).
             description: Agent purpose / system prompt.
             skills: List of skill names the agent should use.
@@ -492,11 +307,13 @@ class S3Tools:
             confirm_before_write: When true the agent writes proposed changes to
                                   .proposed.content.md instead of content.md directly.
             overwrite: If False (default) and an agent with this name already exists,
-                       the call is rejected.  Pass True to intentionally replace it.
+                       the call is rejected. Pass True to intentionally replace it.
         """
-        self._require_site_ownership(site)
         if not AGENT_NAME_RE.match(agent_name):
-            return f"Error: invalid agent name {agent_name!r}. Use lowercase letters, digits, hyphens, underscores."
+            return (
+                f"Error: invalid agent name {agent_name!r}. "
+                f"Use lowercase letters, digits, hyphens, underscores."
+            )
         if len(description) > _MAX_DESCRIPTION_CHARS:
             return (
                 f"Error: description is too long ({len(description)} chars). "
@@ -507,65 +324,104 @@ class S3Tools:
 
         valid_triggers = {"manual", "schedule", "on_write", "on_notify"}
         if trigger not in valid_triggers:
-            return f"Error: invalid trigger '{trigger}'. Use one of: manual, schedule, on_write, on_notify."
+            return (
+                f"Error: invalid trigger '{trigger}'. "
+                f"Use one of: manual, schedule, on_write, on_notify."
+            )
         if trigger == "schedule" and not schedule:
             return "Error: trigger 'schedule' requires a 'schedule' cron expression."
 
-        # on_notify agents must always live at the site root — the runner only
-        # searches {site}/.agents/ regardless of which page context triggered creation.
+        # on_notify agents always live at the site root.
         if trigger == "on_notify":
             page_path = ""
 
-        prefix = agents_prefix(site, page_path)
-        key = f"{prefix}/{agent_name}/agent.md"
-        if not overwrite:
-            resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
-            if resp.get("KeyCount", 0) > 0:
-                return (
-                    f"Error: agent '{agent_name}' already exists. "
-                    f"Pass overwrite=True to replace it, or choose a different name."
-                )
+        agent_file = AgentMarkdownFile(self._site, page_path, agent_name, self._storage)
+        if not overwrite and self._storage.read(agent_file.key) is not None:
+            return (
+                f"Error: agent '{agent_name}' already exists. "
+                f"Pass overwrite=True to replace it, or choose a different name."
+            )
 
-        # Build YAML frontmatter
-        fm_lines = ["---", f"trigger: {trigger}"]
-        if schedule:
-            fm_lines.append(f"schedule: {schedule}")
-        if timezone:
-            fm_lines.append(f"timezone: {timezone}")
-        if confirm_before_write:
-            fm_lines.append("confirm_before_write: true")
-        fm_lines.append("---")
-        fm_block = "\n".join(fm_lines) + "\n\n"
-
-        skills_list = "\n".join(f"- {s}" for s in skills)
-        body = (
-            f"# Agent: {agent_name}\n\n"
-            f"## Description\n\n{description}\n\n"
-            f"## Skills\n\n{skills_list}\n"
+        defn = AgentDefinition(
+            name=agent_name,
+            description=description,
+            skills=skills,
+            trigger=trigger,
+            schedule=schedule,
+            timezone=timezone,
+            model=model,
+            confirm_before_write=confirm_before_write,
         )
-        if model:
-            body += f"\n## Model\n\n{model}\n"
+        if overwrite:
+            agent_file.save(defn)
+        else:
+            agent_file.create(defn)
 
-        self.write_text(key, fm_block + body)
         return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
 
+    # ── Skills (write) ────────────────────────────────────────────────────────
+
     @tool
-    def create_page(self, site: str, page_path: str, content: str = "") -> str:
-        """Create a new wiki page in S3 with a content.md and .agents directory marker.
+    def create_skill(
+        self,
+        name: str,
+        description: str,
+        tools_list: list[str],
+        body: str,
+        overwrite: bool = False,
+    ) -> str:
+        """Write a new SKILL.md to the site's .skills directory.
+
+        Only call this after gathering all required information from the user
+        conversationally. See the system prompt for the required steps.
 
         Args:
-            site: The site name.
-            page_path: Path of the new page relative to site root.
-            content: Optional markdown content for the page. If omitted, a default
-                     welcome page is written. Supply this when the user has specified
-                     what they want the page to display.
+            name: Skill name (lowercase, alphanumeric/hyphen/underscore).
+            description: One-line description shown in the UI.
+            tools_list: List of tool names (from the shared .tools directory) the skill uses.
+            body: The skill's instruction body — the system prompt text injected when active.
+            overwrite: If False (default) and a skill with this name already exists,
+                       the call is rejected. Pass True to intentionally replace it.
         """
-        self._require_site_ownership(site)
+        if not AGENT_NAME_RE.match(name):
+            return (
+                f"Error: invalid skill name {name!r}. "
+                f"Use lowercase letters, digits, hyphens, underscores."
+            )
+        skill_file = SkillMarkdownFile(self._site, name, self._storage)
+        if not overwrite and self._storage.read(skill_file.key) is not None:
+            return (
+                f"Skill '{name}' already exists. "
+                f"Pass overwrite=True to replace it, or choose a different name."
+            )
+        defn = SkillDefinition(
+            name=name, description=description, tools=tools_list, instructions=body
+        )
+        if overwrite:
+            skill_file.save(defn)
+        else:
+            skill_file.create(defn)
+        return f"Skill '{name}' created. View/edit at #/.skills/{name}"
+
+    # ── Pages ─────────────────────────────────────────────────────────────────
+
+    @tool
+    def create_page(self, page_path: str, content: str = "") -> str:
+        """Create a new wiki page with a content.md and .agents directory marker.
+
+        Args:
+            page_path: Path of the new page relative to site root.
+            content: Optional markdown content. If omitted, a default welcome page is written.
+                     Supply this when the user has specified what they want on the page.
+        """
         if not re.match(r"^[a-z0-9][a-z0-9_/-]*$", page_path):
-            return f"Error: invalid page path {page_path!r}. Use lowercase alphanumerics, hyphens, underscores, slashes."
-        title = page_path.split("/")[-1].replace("-", " ").title()
+            return (
+                f"Error: invalid page path {page_path!r}. "
+                f"Use lowercase alphanumerics, hyphens, underscores, slashes."
+            )
         if not content:
-            page_content = (
+            title = page_path.split("/")[-1].replace("-", " ").title()
+            content = (
                 f"# {title}\n\n"
                 f"This is a new wiki page. Edit this content using the editor,\n"
                 f"or ask the AI assistant in the Chat panel to help you write and organise your notes.\n\n"
@@ -574,80 +430,21 @@ class S3Tools:
                 f"- Use the **Chat** panel to ask the AI to help you write content\n"
                 f"- Navigate to sub-pages by clicking links\n"
             )
-        else:
-            page_content = content
-        content_key = f"{site}/{page_path}/content.md"
-        self.write_text(content_key, page_content)
-        # Write a .agents directory marker (S3 doesn't need it, but keeps structure clear)
-        self.write_text(f"{site}/{page_path}/.agents/.keep", "")
-        return f"Page '{page_path}' created at {content_key}"
+        wiki = WikiPageMarkdownFile(self._site, page_path, self._storage)
+        wiki.create(content, user_id=self._user_id)
+        self._storage.write(f"{self._site}/{page_path}/.agents/.keep", "")
+        return f"Page '{page_path}' created at {wiki.key}"
 
+    # ── Tool introspection (used by orchestrator, not LLM tools) ─────────────
 
-# ── AgentDefinition + SkillDefinition + parsers ───────────────────────────────
+    def list_tool_names(self) -> list[str]:
+        """Return names of all tools in the shared .tools directory."""
+        return _list_tools_lib(self._storage)
 
-
-@dataclasses.dataclass
-class AgentDefinition:
-    name: str
-    description: str
-    skills: list[str]
-    schedule: str = ""
-    timezone: str = ""
-    model: str = ""
-
-
-@dataclasses.dataclass
-class SkillDefinition:
-    name: str
-    description: str   # from YAML frontmatter
-    tools: list[str]   # tool names from .tools/ referenced in frontmatter
-    body: str          # full SKILL.md body (injected as system prompt context at runtime)
-
-
-def parse_agent_md(text: str) -> AgentDefinition:
-    """Parse an agent.md file into an AgentDefinition.
-
-    Handles both frontmatter and legacy section-only formats.
-    Frontmatter is stripped before section parsing so skills are always
-    read from the markdown body.
-    """
-    # Strip YAML frontmatter if present so section parsing still works
-    _, body = _parse_frontmatter(text)
-
-    sections: dict[str, list[str]] = {}
-    current_section: str | None = None
-    name = ""
-
-    for line in body.splitlines():
-        if line.startswith("# Agent:"):
-            name = line[len("# Agent:"):].strip()
-        elif line.startswith("## "):
-            current_section = line[3:].strip()
-            sections.setdefault(current_section, [])
-        elif current_section is not None:
-            sections[current_section].append(line)
-
-    def _section_text(key: str) -> str:
-        return "\n".join(sections.get(key, [])).strip()
-
-    description = _section_text("Description")
-    schedule = _section_text("Schedule")
-    timezone = _section_text("Timezone")
-    model = _section_text("Model")
-    skills = [
-        line[2:].strip()
-        for line in sections.get("Skills", [])
-        if line.startswith("- ")
-    ]
-
-    return AgentDefinition(
-        name=name,
-        description=description,
-        skills=skills,
-        schedule=schedule,
-        timezone=timezone,
-        model=model,
-    )
+    def is_remote_tool(self, tool_name: str) -> bool:
+        """Return True if the tool uses OAuth (remote HTTP transport)."""
+        cfg = load_tool_config(tool_name, self._storage)
+        return cfg.requires_oauth if cfg else False
 
 
 # ── BaseAgent ─────────────────────────────────────────────────────────────────
