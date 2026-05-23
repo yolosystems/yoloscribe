@@ -45,6 +45,7 @@ from yoloscribe_io import (
     S3StorageBackend,
     TokenData,
     ToolToken,
+    WikiPageMarkdownFile,
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
@@ -602,6 +603,11 @@ def main() -> None:
     _site = AGENT_MD_KEY.split("/")[0]
     _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
 
+    # Derive the wiki page path from CONTENT_KEY (strips "{site}/" prefix and "/content.md" suffix).
+    _content_rel = CONTENT_KEY[len(_site) + 1:]
+    _page_path = "" if _content_rel == "content.md" else _content_rel[: -len("/content.md")]
+    wiki = WikiPageMarkdownFile(site=_site, page_path=_page_path, storage=storage)
+
     # Build a lightweight SQS enqueue function for on_notify dispatch.
     # NotificationsMarkdownFile handles dispatch internally when enqueue is provided.
     def _make_enqueue_fn():
@@ -743,7 +749,7 @@ def main() -> None:
                 # Propose mode: write to .proposed.content.md instead of content.md.
                 # A single run is sufficient — no retry loop needed.
                 proposed_key = CONTENT_KEY[: -len("content.md")] + ".proposed.content.md"
-                content = storage.read(CONTENT_KEY) or ""
+                content = wiki.read()
 
                 task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
                 full_prompt = (
@@ -777,8 +783,7 @@ def main() -> None:
                 _MAX_WRITE_RETRIES = 3
                 for attempt in range(_MAX_WRITE_RETRIES):
                     # Read fresh content + ETag on every attempt
-                    content, etag = storage.read_with_etag(CONTENT_KEY)
-                    content = content or ""
+                    content, etag = wiki.read_with_etag()
 
                     task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
                     full_prompt = (
@@ -797,7 +802,7 @@ def main() -> None:
                             break
                     updated = raw
 
-                    if storage.write_conditional(CONTENT_KEY, updated, etag):
+                    if wiki.write_conditional(updated, etag, user_id=USER_ID):
                         break
 
                     if attempt == _MAX_WRITE_RETRIES - 1:
