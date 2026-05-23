@@ -254,6 +254,58 @@ def test_wiki_page_frontmatter_accessible(store):
     assert f.content == "Body."
 
 
+def test_wiki_page_write_conditional_succeeds_on_matching_etag(store):
+    store.write("s/p/content.md", "v1")
+    _, etag = store.read_with_etag("s/p/content.md")
+    f = WikiPageMarkdownFile("s", "p", store)
+    result = f.write_conditional("v2", etag, user_id="u1")
+    assert result is True
+    assert store.read("s/p/content.md") == "v2"
+
+
+def test_wiki_page_write_conditional_fails_on_stale_etag(store):
+    store.write("s/p/content.md", "v1")
+    _, etag = store.read_with_etag("s/p/content.md")
+    store.write("s/p/content.md", "v1-modified")
+    f = WikiPageMarkdownFile("s", "p", store)
+    result = f.write_conditional("lost-update", etag, user_id="u1")
+    assert result is False
+    assert store.read("s/p/content.md") == "v1-modified"
+
+
+def test_wiki_page_write_conditional_emits_page_written_on_success(store):
+    store.write("s/p/content.md", "v1")
+    _, etag = store.read_with_etag("s/p/content.md")
+    f = WikiPageMarkdownFile("s", "p", store)
+    cap = CapturingHandler()
+    f.add_handler(cap)
+    f.write_conditional("v2", etag, user_id="u1")
+    assert len(cap.events) == 1
+    ev = cap.events[0]
+    assert ev.type == EventType.PAGE_WRITTEN
+    assert ev.payload["page_path"] == "p"
+    assert ev.payload["user_id"] == "u1"
+
+
+def test_wiki_page_write_conditional_no_event_on_conflict(store):
+    store.write("s/p/content.md", "v1")
+    _, etag = store.read_with_etag("s/p/content.md")
+    store.write("s/p/content.md", "v1-modified")
+    f = WikiPageMarkdownFile("s", "p", store)
+    cap = CapturingHandler()
+    f.add_handler(cap)
+    f.write_conditional("lost-update", etag, user_id="u1")
+    assert cap.events == []
+
+
+def test_wiki_page_write_conditional_no_etag_always_succeeds(store):
+    store.write("s/p/content.md", "old")
+    f = WikiPageMarkdownFile("s", "p", store)
+    result = f.write_conditional("new", etag=None)
+    assert result is True
+    assert store.read("s/p/content.md") == "new"
+
+
 # ── OnWriteEventHandler ───────────────────────────────────────────────────────
 
 def _agent_store(*agents: tuple[str, str]) -> LocalStorageBackend:
