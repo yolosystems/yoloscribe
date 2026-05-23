@@ -1,4 +1,4 @@
-"""Unit tests for overwrite protection on put_agent / put_skill (YOL-50, YOL-48)
+"""Unit tests for overwrite protection on create_agent / create_skill (YOL-50, YOL-48)
 and SQS payload size guard in the runner tool (YOL-57).
 """
 
@@ -9,9 +9,10 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from agents.base import S3Tools
+from yoloscribe_io import LocalStorageBackend
+from agents.base import SiteTools
 
 
 # ---------------------------------------------------------------------------
@@ -19,137 +20,143 @@ from agents.base import S3Tools
 # ---------------------------------------------------------------------------
 
 
-def _make_tools(user_site: str = "alice") -> S3Tools:
-    mock_s3 = MagicMock()
-    return S3Tools(s3=mock_s3, bucket="test-bucket", user_site=user_site)
-
-
-def _agent_exists(tools: S3Tools, agent_name: str, page_path: str = "") -> None:
-    """Configure the mock so that list_objects_v2 reports the agent key exists."""
-    tools.s3.list_objects_v2.return_value = {"KeyCount": 1}
-
-
-def _agent_absent(tools: S3Tools) -> None:
-    """Configure the mock so that list_objects_v2 reports no objects."""
-    tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
+def _site_tools(site: str = "alice") -> tuple[SiteTools, LocalStorageBackend]:
+    store = LocalStorageBackend()
+    return SiteTools(site, store, user_id="u1"), store
 
 
 # ---------------------------------------------------------------------------
-# put_agent overwrite protection (YOL-50 / YOL-53)
+# create_agent overwrite protection (YOL-50 / YOL-53)
 # ---------------------------------------------------------------------------
 
 
-class TestPutAgentOverwrite:
+class TestCreateAgentOverwrite:
     def test_new_agent_is_created_without_overwrite(self):
-        tools = _make_tools()
-        _agent_absent(tools)
-        result = tools.put_agent(
-            site="alice", agent_name="my-agent", description="Does stuff", skills=[]
+        st, store = _site_tools()
+        result = st.create_agent(
+            agent_name="my-agent", description="Does stuff", skills=[]
         )
         assert "created" in result
-        tools.s3.put_object.assert_called_once()
+        assert store.read("alice/.agents/my-agent/agent.md") is not None
 
     def test_existing_agent_blocked_by_default(self):
-        tools = _make_tools()
-        _agent_exists(tools, "my-agent")
-        result = tools.put_agent(
-            site="alice", agent_name="my-agent", description="Does stuff", skills=[]
+        st, store = _site_tools()
+        # Pre-create the agent file so create_agent sees it as existing
+        store.write("alice/.agents/my-agent/agent.md", "---\ntrigger: manual\n---\n")
+        result = st.create_agent(
+            agent_name="my-agent", description="Does stuff", skills=[]
         )
         assert "already exists" in result
-        # S3 write must NOT have been called
-        tools.s3.put_object.assert_not_called()
+        # File must remain unchanged (no overwrite)
+        assert store.read("alice/.agents/my-agent/agent.md") == "---\ntrigger: manual\n---\n"
 
     def test_existing_agent_replaced_with_overwrite_true(self):
-        tools = _make_tools()
-        # list_objects_v2 is called for the overwrite check — not needed when overwrite=True
-        result = tools.put_agent(
-            site="alice",
+        st, store = _site_tools()
+        store.write("alice/.agents/my-agent/agent.md", "---\ntrigger: manual\n---\n")
+        result = st.create_agent(
             agent_name="my-agent",
             description="Does stuff",
             skills=[],
             overwrite=True,
         )
         assert "created" in result
-        tools.s3.put_object.assert_called_once()
-        # list_objects_v2 should NOT be called when overwrite=True
-        tools.s3.list_objects_v2.assert_not_called()
+        # Content must have been rewritten
+        new_content = store.read("alice/.agents/my-agent/agent.md")
+        assert new_content != "---\ntrigger: manual\n---\n"
 
     def test_invalid_name_still_rejected_before_existence_check(self):
-        tools = _make_tools()
-        result = tools.put_agent(
-            site="alice", agent_name="INVALID NAME!", description="x", skills=[]
+        st, store = _site_tools()
+        result = st.create_agent(
+            agent_name="INVALID NAME!", description="x", skills=[]
         )
         assert "invalid agent name" in result
-        tools.s3.list_objects_v2.assert_not_called()
-        tools.s3.put_object.assert_not_called()
+        # Nothing should have been written
+        assert store.read("alice/.agents/INVALID NAME!/agent.md") is None
 
-    def test_overwrite_check_uses_correct_s3_key(self):
-        tools = _make_tools()
-        _agent_absent(tools)
-        tools.put_agent(
-            site="alice",
+    def test_agent_written_to_correct_key_with_page_path(self):
+        st, store = _site_tools()
+        result = st.create_agent(
             agent_name="my-agent",
             description="x",
             skills=[],
             page_path="child-page",
         )
-        # The key checked should include the page_path
-        call_kwargs = tools.s3.list_objects_v2.call_args
-        assert "alice/child-page/.agents/my-agent/agent.md" in call_kwargs[1]["Prefix"]
+        assert "created" in result
+        assert store.read("alice/child-page/.agents/my-agent/agent.md") is not None
+        # Must NOT be at the root agents path
+        assert store.read("alice/.agents/my-agent/agent.md") is None
 
     def test_agent_with_skills_and_schedule_created_correctly(self):
-        tools = _make_tools()
-        _agent_absent(tools)
-        result = tools.put_agent(
-            site="alice",
+        st, store = _site_tools()
+        result = st.create_agent(
             agent_name="daily-agent",
             description="Runs every day",
             skills=["summariser"],
+            trigger="schedule",
             schedule="0 9 * * *",
             timezone="Europe/London",
         )
         assert "created" in result
-        body = tools.s3.put_object.call_args[1]["Body"].decode()
+        body = store.read("alice/.agents/daily-agent/agent.md") or ""
         assert "schedule: 0 9 * * *" in body
-        assert "timezone: Europe/London" in body
+        assert "Europe/London" in body
 
 
 # ---------------------------------------------------------------------------
-# put_skill overwrite protection (YOL-48)
+# create_skill overwrite protection (YOL-48)
 # ---------------------------------------------------------------------------
 
 
-class TestPutSkillOverwrite:
+class TestCreateSkillOverwrite:
     def test_new_skill_is_created_without_overwrite(self):
-        tools = _make_tools()
-        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
-        tools.put_skill(site="alice", skill_name="my-skill", markdown="---\n---\n\nbody")
-        tools.s3.put_object.assert_called_once()
+        st, store = _site_tools()
+        result = st.create_skill(
+            name="my-skill",
+            description="Does stuff",
+            tools_list=[],
+            body="Instructions here.",
+        )
+        assert "created" in result
+        assert store.read("alice/.skills/my-skill/SKILL.md") is not None
 
     def test_existing_skill_blocked_by_default(self):
-        tools = _make_tools()
-        tools.s3.list_objects_v2.return_value = {"KeyCount": 1}
-        with pytest.raises(ValueError, match="already exists"):
-            tools.put_skill(site="alice", skill_name="my-skill", markdown="---\n---\n\nbody")
-        tools.s3.put_object.assert_not_called()
+        st, store = _site_tools()
+        store.write("alice/.skills/my-skill/SKILL.md", "---\ndescription: old\n---\n")
+        result = st.create_skill(
+            name="my-skill",
+            description="Does stuff",
+            tools_list=[],
+            body="Instructions here.",
+        )
+        assert "already exists" in result
+        # Content must remain unchanged
+        assert store.read("alice/.skills/my-skill/SKILL.md") == "---\ndescription: old\n---\n"
 
     def test_existing_skill_replaced_with_overwrite_true(self):
-        tools = _make_tools()
-        tools.put_skill(
-            site="alice",
-            skill_name="my-skill",
-            markdown="---\n---\n\nbody",
+        st, store = _site_tools()
+        store.write("alice/.skills/my-skill/SKILL.md", "---\ndescription: old\n---\n")
+        result = st.create_skill(
+            name="my-skill",
+            description="Does stuff",
+            tools_list=[],
+            body="New instructions.",
             overwrite=True,
         )
-        tools.s3.put_object.assert_called_once()
-        tools.s3.list_objects_v2.assert_not_called()
+        assert "created" in result
+        new_content = store.read("alice/.skills/my-skill/SKILL.md") or ""
+        assert "Does stuff" in new_content
 
-    def test_overwrite_check_uses_correct_s3_key(self):
-        tools = _make_tools()
-        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
-        tools.put_skill(site="alice", skill_name="my-skill", markdown="---\n---\n\nbody")
-        call_kwargs = tools.s3.list_objects_v2.call_args
-        assert "alice/.skills/my-skill/SKILL.md" in call_kwargs[1]["Prefix"]
+    def test_skill_written_to_correct_key(self):
+        st, store = _site_tools()
+        st.create_skill(
+            name="my-skill",
+            description="A skill",
+            tools_list=["linear"],
+            body="Body.",
+        )
+        assert store.read("alice/.skills/my-skill/SKILL.md") is not None
+        # Must NOT exist for a different site
+        assert store.read("bob/.skills/my-skill/SKILL.md") is None
 
 
 # ---------------------------------------------------------------------------

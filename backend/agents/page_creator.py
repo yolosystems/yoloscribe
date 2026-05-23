@@ -1,16 +1,13 @@
-"""PageCreatorAgent — creates new wiki pages (or child pages) in S3.
-
-YoloScribe page creation assistant.
-"""
+"""PageCreatorAgent — creates new wiki pages (or child pages)."""
 
 from __future__ import annotations
 
-from .base import BaseAgent, S3Tools
+from .base import BaseAgent, SiteTools
 from .models import resolve_model_key
 
 
 class PageCreatorAgent(BaseAgent):
-    """Creates a new wiki page or child page at the correct S3 location."""
+    """Creates a new wiki page or child page at the correct location."""
 
     SYSTEM_PROMPT = """\
 You are a wiki page creation assistant for YoloScribe.
@@ -39,11 +36,11 @@ Current context:
   Parent page: {page_path}
 """
 
-    def __init__(self, s3_tools: S3Tools, model_key: str = "", **kwargs) -> None:
+    def __init__(self, site_tools: SiteTools, model_key: str = "", **kwargs) -> None:
+        if "site" not in kwargs:
+            kwargs["site"] = site_tools.site
         super().__init__(
-            tools=[
-                s3_tools.create_page,
-            ],
+            tools=[site_tools.create_page],
             model_key=model_key or resolve_model_key("YOLOSCRIBE_CREATOR_MODEL", "YOLOSCRIBE_MODEL"),
             **kwargs,
         )

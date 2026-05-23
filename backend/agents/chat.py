@@ -1,13 +1,10 @@
-"""ChatAgent — main orchestrator; routes user requests to specialist sub-agents.
-
-YoloScribe wiki assistant.
-"""
+"""ChatAgent — main orchestrator; routes user requests to specialist sub-agents."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 from typing import TYPE_CHECKING
 
 from strands import tool
@@ -16,7 +13,8 @@ from strands_tools import http_request
 from .base import (
     AGENT_NAME_RE,
     BaseAgent,
-    S3Tools,
+    SiteTools,
+    WikiPageTools,
     _MAX_RUNNER_PROMPT_CHARS,
     _check_injection,
     agents_prefix,
@@ -26,6 +24,8 @@ from .models import build_strands_model, resolve_model_key
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent
+
+from yoloscribe_io import S3StorageBackend, WikiPageMarkdownFile
 
 if TYPE_CHECKING:
     import mypy_boto3_s3
@@ -64,8 +64,8 @@ You have access to the following tools:
                     skills or agents. Returns the MCP server tools installed
                     on this server that skills can reference.
 - list_skills     — call this whenever the user asks what skills are available
-                    for the site. It reads each skill's description from S3
-                    and returns a summary.
+                    for the site. It reads each skill's description and returns
+                    a summary.
 - list_agents     — call this to discover what agents are defined for the
                     current page before trying to run one.
 - http_request    — make HTTP requests to EXTERNAL websites only; use when
@@ -125,14 +125,13 @@ Current context:
         sqs_queue_url: str = "",
         secrets_store=None,
     ) -> None:
-        self._s3_tools = S3Tools(s3=s3, bucket=bucket)
+        self._s3 = s3
+        self._bucket = bucket
+        self._storage = S3StorageBackend(bucket, s3)
         self._model_key = resolve_model_key("YOLOSCRIBE_CHAT_MODEL", "YOLOSCRIBE_MODEL")
         self._sqs_client = sqs_client
         self._sqs_queue_url = sqs_queue_url
         self._secrets_store = secrets_store
-        # Sub-agent tools are created lazily per-request (each call gets fresh
-        # context injected via the prompt), so we set tools=[] here and override
-        # per run() call.
         super().__init__(tools=[], model_key=self._model_key)
 
     # ── public interface (called by FastAPI route) ────────────────────────────
@@ -147,33 +146,23 @@ Current context:
         user_id: str = "knuth",
         user_site: str = "",
     ) -> tuple[str, str | None, str | None]:
-        """Process a user message and return (reply, updated_content | None, navigate_to | None).
-
-        updated_content is non-None when ContentWriterAgent successfully edited
-        the page; the caller (FastAPI) can forward it to the frontend.
-        navigate_to is non-None when the SearchAgent ran; the caller should
-        update window.location.hash accordingly.
-        """
-        # Reject cross-site requests before any agent work begins.
-        # user_site is empty for internal/unauthenticated callers — skip the
-        # check in that case for backwards compatibility.
+        """Process a user message and return (reply, updated_content | None, navigate_to | None)."""
         if user_site and site != user_site:
             raise PermissionError(
                 f"Access denied: cannot act on site '{site}' as user of site '{user_site}'"
             )
 
-        # Derive page_path from file_path:
-        # "content.md"                       → ""
-        # ".agents/myagent/agent.md"         → ""  (root page agents file)
         page_path = _page_path_from_file(file_path)
-
-        # Shared mutable dict so sub-agent tools can pass updated_content back.
         shared: dict = {"updated_content": None, "navigate_to": None}
 
-        # Build fresh sub-agent @tool functions with current context baked in.
-        tools = self._make_tools(site=site, page_path=page_path, file_path=file_path, shared=shared, user_id=user_id, user_site=user_site)
+        tools = self._make_tools(
+            site=site,
+            page_path=page_path,
+            file_path=file_path,
+            shared=shared,
+            user_id=user_id,
+        )
 
-        # Rebuild the strands Agent with fresh prompt + tools for this request.
         from strands import Agent
 
         agent = Agent(
@@ -187,13 +176,6 @@ Current context:
             callback_handler=None,
             load_tools_from_directory=False,
         )
-
-        # Replay conversation history, then add current user message.
-        for turn in history:
-            if turn.get("role") == "user":
-                # We pass history as context in the message rather than
-                # replaying turns to keep things simple.
-                pass
 
         context_block = ""
         if history:
@@ -209,25 +191,29 @@ Current context:
         )
 
         response = agent(full_message)
-        reply = str(response)
-
-        return reply, shared.get("updated_content"), shared.get("navigate_to")
+        return str(response), shared.get("updated_content"), shared.get("navigate_to")
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 
-    def _make_tools(self, site: str, page_path: str, file_path: str = "content.md", shared: dict = None, user_id: str = "knuth", user_site: str = "") -> list:
+    def _make_tools(
+        self,
+        site: str,
+        page_path: str,
+        file_path: str = "content.md",
+        shared: dict | None = None,
+        user_id: str = "knuth",
+    ) -> list:
         if shared is None:
             shared = {}
-        # Create a per-request scoped S3Tools instance so the ownership check is
-        # bound to the authenticated user for this specific request.
-        s3_tools = S3Tools(
-            s3=self._s3_tools.s3,
-            bucket=self._s3_tools.bucket,
-            user_site=user_site or None,
-        )
+
+        storage = self._storage
+        bucket = self._bucket
+        s3 = self._s3
         sqs_client = self._sqs_client
         sqs_queue_url = self._sqs_queue_url
         secrets_store = self._secrets_store
+
+        site_tools = SiteTools(site, storage, user_id=user_id)
 
         @tool
         def content_writer(instruction: str) -> str:
@@ -244,31 +230,24 @@ Current context:
             _MAX_WRITE_RETRIES = 3
             result = ""
             for attempt in range(_MAX_WRITE_RETRIES):
-                s3_tools.write_conflict = False
-                agent = ContentWriterAgent(
-                    s3_tools=s3_tools,
-                    site=site,
-                    page_path=page_path,
-                )
+                wiki = WikiPageMarkdownFile(site, page_path, storage)
+                wiki_tools = WikiPageTools(wiki, user_id=user_id)
+                agent = ContentWriterAgent(wiki_tools=wiki_tools)
                 result = str(agent(
                     f"Site: {site}\nPage path: {page_path or '(root)'}\n\n{instruction}"
                 ))
-                if not s3_tools.write_conflict:
+                if not wiki_tools.write_conflict:
                     break
                 if attempt == _MAX_WRITE_RETRIES - 1:
                     return (
                         "Failed to save: the page is being frequently modified by "
                         "another writer. Please try again in a moment."
                     )
-            # Try to retrieve updated content for the API response.
             try:
-                updated = s3_tools.get_content(site=site, page_path=page_path)
+                updated = WikiPageMarkdownFile(site, page_path, storage).read()
                 shared["updated_content"] = updated
             except Exception:
                 pass
-            # Enqueue an indexing job after a successful content write so that
-            # edits made via the chat agent are reflected in semantic search.
-            # This is independent of whether get_content succeeded above.
             try:
                 from queue_helpers import enqueue_index_job as _enqueue_idx
                 _content_key = (
@@ -290,48 +269,39 @@ Current context:
                 instruction: The user's agent creation or editing request.
             """
             agent = CreatorAgent(
-                s3_tools=s3_tools,
-                site=site,
-                page_path=page_path,
+                site_tools=site_tools,
+                page_path=page_path or "(root)",
             )
             result = str(agent(f"Site: {site}\nPage: {page_path or '(root)'}\n\n{instruction}"))
 
-            # After the agent.md is written, validate that OAuth has been completed
-            # for every tool referenced by any skill the agent uses.
-            # Chain: agent.md → skills → tools → OAuth tokens.
             if secrets_store is not None:
-                import re as _re
-                match = _re.search(r"Agent '([^']+)' created", result)
+                match = re.search(r"Agent '([^']+)' created", result)
                 if match:
                     agent_name = match.group(1)
                     agent_md_key = f"{agents_prefix(site, page_path)}/{agent_name}/agent.md"
                     try:
-                        obj = s3_tools.s3.get_object(Bucket=s3_tools.bucket, Key=agent_md_key)
-                        agent_def = parse_agent_md(obj["Body"].read().decode("utf-8"))
-                        missing_tools: list[str] = []
-                        for skill_name in agent_def.skills:
-                            try:
-                                tool_names = s3_tools.get_skill_tools(site, skill_name)
-                            except Exception:
-                                # Skill doesn't exist yet — let creation succeed
-                                continue
-                            for tool_name in tool_names:
-                                if (
-                                    s3_tools.is_remote_tool(tool_name)
-                                    and not _oauth_token_exists(secrets_store, user_id, tool_name)
-                                ):
-                                    missing_tools.append(tool_name)
-                        if missing_tools:
-                            s3_tools.s3.delete_object(Bucket=s3_tools.bucket, Key=agent_md_key)
-                            tool_list = ", ".join(f"'{t}'" for t in missing_tools)
-                            return (
-                                f"Agent creation blocked: OAuth authentication has not been completed "
-                                f"for tool(s) {tool_list}. Please open the Tools panel and "
-                                f"click 'Authenticate via OAuth' for each of these tools, then try "
-                                f"creating the agent again."
-                            )
+                        raw = storage.read(agent_md_key)
+                        if raw:
+                            agent_def = parse_agent_md(raw)
+                            missing_tools: list[str] = []
+                            for skill_name in agent_def.skills:
+                                for tool_name in site_tools.get_skill_tools(skill_name):
+                                    if (
+                                        site_tools.is_remote_tool(tool_name)
+                                        and not _oauth_token_exists(secrets_store, user_id, tool_name)
+                                    ):
+                                        missing_tools.append(tool_name)
+                            if missing_tools:
+                                storage.delete(agent_md_key)
+                                tool_list = ", ".join(f"'{t}'" for t in missing_tools)
+                                return (
+                                    f"Agent creation blocked: OAuth authentication has not been completed "
+                                    f"for tool(s) {tool_list}. Please open the Tools panel and "
+                                    f"click 'Authenticate via OAuth' for each of these tools, then try "
+                                    f"creating the agent again."
+                                )
                     except Exception:
-                        pass  # Unexpected errors don't block creation
+                        pass
 
             return result
 
@@ -340,13 +310,11 @@ Current context:
             """Create a new wiki page or child page.
 
             Use this when the user asks to create a new page under the current site.
-            The new page will be created as a child of the current page.
 
             Args:
                 instruction: The user's page creation request (should include
                              the desired page name and what they want on it).
             """
-            import re as _re
             if (
                 file_path == ".user/search.md"
                 or "/.agents/" in file_path
@@ -357,16 +325,14 @@ Current context:
                     "Please navigate back to a wiki content page first, then ask me again."
                 )
             agent = PageCreatorAgent(
-                s3_tools=s3_tools,
-                site=site,
-                page_path=page_path,
+                site_tools=site_tools,
+                page_path=page_path or "(root)",
             )
             result = str(agent(f"Site: {site}\nParent page: {page_path or '(root)'}\n\n{instruction}"))
-            match = _re.search(r"Page '([^']+)' created", result)
+            match = re.search(r"Page '([^']+)' created", result)
             if match:
                 created_page = match.group(1)
                 shared["navigate_to"] = f"#/{created_page}"
-                # Enqueue an indexing job so the new page is discoverable via search.
                 try:
                     from queue_helpers import enqueue_index_job as _enqueue_idx
                     _enqueue_idx(f"{site}/{created_page}/content.md", user_id)
@@ -410,30 +376,24 @@ Current context:
             agent_md_key = f"{prefix}/{agent_name}/agent.md"
             content_key = f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
             payload = {
-                "bucket": s3_tools.bucket,
+                "bucket": bucket,
                 "content_key": content_key,
                 "agent_md_key": agent_md_key,
                 "prompt": prompt,
                 "user_id": user_id,
             }
-            # SQS hard limit is 256 KB.  If the payload is too large (e.g. a very
-            # long prompt), truncate the prompt field and retry once.  Structural
-            # fields (keys, bucket, user_id) are always preserved.
             _SQS_MAX_BYTES = 256 * 1024
             body_str = json.dumps(payload)
             if len(body_str.encode()) > _SQS_MAX_BYTES:
                 overhead = len(json.dumps({**payload, "prompt": ""}).encode())
-                max_prompt_bytes = _SQS_MAX_BYTES - overhead - 32  # 32-byte safety margin
+                max_prompt_bytes = _SQS_MAX_BYTES - overhead - 32
                 if max_prompt_bytes > 0:
                     truncated = prompt.encode()[:max_prompt_bytes].decode(errors="ignore")
                     payload["prompt"] = truncated + "\n...[truncated]"
                     body_str = json.dumps(payload)
                 else:
                     return "Error: SQS payload is too large even without a prompt. Check that the agent and content keys are not unusually long."
-            sqs_client.send_message(
-                QueueUrl=sqs_queue_url,
-                MessageBody=body_str,
-            )
+            sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=body_str)
             return f"Agent '{agent_name}' has been queued for execution."
 
         @tool
@@ -447,53 +407,13 @@ Current context:
                 query: The search query string.
             """
             from agents.search import SearchAgent as _SearchAgent
-            agent = _SearchAgent(s3=s3_tools.s3, bucket=s3_tools.bucket)
+            agent = _SearchAgent(s3=s3, bucket=bucket)
             reply, navigate_to = agent.run(query=query, user_site=site)
             shared["navigate_to"] = navigate_to
             return reply
 
-        @tool
-        def create_skill(name: str, description: str, tools_list: list[str], body: str, overwrite: bool = False) -> str:
-            """Write a new SKILL.md to the site's .skills directory.
-
-            Only call this after gathering all required information from the user
-            conversationally. See the system prompt for the required steps.
-
-            Args:
-                name: Skill name (lowercase, alphanumeric/hyphen/underscore).
-                description: One-line description shown in the UI.
-                tools_list: List of tool names (from the shared .tools directory) the skill uses.
-                body: The skill's instruction body — the system prompt text that will
-                      be injected when the skill is active.
-                overwrite: If False (default) and a skill with this name already exists,
-                           the call is rejected.  Pass True to intentionally replace it.
-            """
-            if not AGENT_NAME_RE.match(name):
-                return f"Error: invalid skill name {name!r}. Use lowercase letters, digits, hyphens, underscores."
-            tools_yaml = "\n".join(f"  - {t}" for t in tools_list)
-            markdown = f"---\ndescription: {description}\ntools:\n{tools_yaml}\n---\n\n{body}\n"
-            try:
-                s3_tools.put_skill(site, name, markdown, overwrite=overwrite)
-            except ValueError as exc:
-                return str(exc)
-            except Exception as exc:
-                return f"Error writing skill: {exc}"
-            return f"Skill '{name}' created. View/edit at #/.skills/{name}"
-
-        # Wrap list_skills to bake in the site parameter
-        def _list_skills_for_site() -> str:
-            return s3_tools.list_skills(site)
-
-        _list_skills_for_site.__name__ = "list_skills"
-        _list_skills_for_site.__doc__ = (
-            "List all skills available in the current site and summarise what each one does."
-        )
-        list_skills_tool = tool(_list_skills_for_site)
-
-        # Expose the MCP server tools from .tools/ so the agent can tell users
-        # which tools are available for skills/agents to reference.
         def _list_tools() -> str:
-            names = s3_tools.list_tool_names()
+            names = site_tools.list_tool_names()
             if not names:
                 return "No MCP server tools are currently installed on this server."
             return "Available MCP server tools: " + ", ".join(names)
@@ -504,21 +424,18 @@ Current context:
         )
         list_tools_tool = tool(_list_tools)
 
-        # When viewing an agent.md file, content_writer must not be offered —
-        # it always writes to content.md and would corrupt the page the agent
-        # belongs to. Agent edits go through creator (put_agent overwrite=True).
         is_agent_page = "/.agents/" in file_path or file_path.startswith(".agents/")
 
         tools_list = [
             list_tools_tool,
-            list_skills_tool,
-            s3_tools.list_agents,
+            site_tools.list_skills,
+            site_tools.list_agents,
             http_request,
             creator,
             page_creator,
             runner,
             search,
-            create_skill,
+            site_tools.create_skill,
         ]
         if not is_agent_page:
             tools_list.insert(4, content_writer)
@@ -538,14 +455,10 @@ def _oauth_token_exists(secrets_store, user_id: str, tool_name: str) -> bool:
 
 def _page_path_from_file(file_path: str) -> str:
     """Extract page_path from a file_path like 'content.md' or '.agents/x/agent.md'."""
-    # Root-page files:  "content.md"  or  ".agents/{name}/agent.md"
     if file_path == "content.md" or file_path.startswith(".agents/"):
         return ""
-    # Child-page content: "{page}/content.md"
     if file_path.endswith("/content.md"):
         return file_path[: -len("/content.md")]
-    # Child-page agent: "{page}/.agents/{name}/agent.md"
-    # Everything before the first "/.agents/" segment is the page path.
     agents_idx = file_path.find("/.agents/")
     if agents_idx != -1:
         return file_path[:agents_idx]

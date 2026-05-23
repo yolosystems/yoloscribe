@@ -1,257 +1,162 @@
-"""Unit tests for S3Tools cross-site ownership enforcement (YOL-39).
+"""Unit tests for cross-site ownership enforcement.
 
-Every method guarded by _require_site_ownership / _require_read_access is
-tested to confirm:
-  - Calls with the correct site succeed (S3 client is invoked).
-  - Calls with a *different* site raise PermissionError *before* any S3
-    client method is invoked (the mock should never be called).
-  - When user_site is None (internal / unauthenticated path), the check is
-    skipped and the S3 call proceeds normally.
+After the yoloscribe-io migration, site-scoping is enforced at two levels:
+
+1. WikiPageTools and SiteTools bind site at construction time — there are no
+   site parameters on individual tool methods, so the LLM cannot be injected
+   with a different target site.
+
+2. ChatAgent.run() guards against cross-site requests by checking
+   user_site == site before any tools are invoked.
+
+This file tests both levels.
 """
-
-from unittest.mock import MagicMock, patch
-import json
-import pytest
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 import sys
 import os
 
-# Ensure the backend package root is on the path so we can import agents.base
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agents.base import S3Tools
+import pytest
+from unittest.mock import MagicMock
+
+from yoloscribe_io import LocalStorageBackend, WikiPageMarkdownFile
+from agents.base import SiteTools, WikiPageTools
 
 
-def _make_tools(user_site: str | None = "alice", user_email: str | None = None) -> S3Tools:
-    mock_s3 = MagicMock()
-    return S3Tools(s3=mock_s3, bucket="test-bucket", user_site=user_site, user_email=user_email)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _site_tools(site: str = "alice") -> SiteTools:
+    store = LocalStorageBackend()
+    return SiteTools(site, store, user_id="u1")
 
 
-# ---------------------------------------------------------------------------
-# _require_site_ownership
-# ---------------------------------------------------------------------------
+def _wiki_tools(site: str = "alice", page_path: str = "") -> WikiPageTools:
+    store = LocalStorageBackend()
+    wiki = WikiPageMarkdownFile(site, page_path, store)
+    return WikiPageTools(wiki, user_id="u1")
 
 
-class TestRequireSiteOwnership:
-    def test_own_site_passes(self):
-        tools = _make_tools("alice")
-        tools._require_site_ownership("alice")  # must not raise
+# ── WikiPageTools: site is bound at construction ──────────────────────────────
 
-    def test_other_site_raises(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError, match="bob"):
-            tools._require_site_ownership("bob")
+class TestWikiPageToolsSiteBound:
+    def test_site_property_reflects_construction_site(self):
+        wt = _wiki_tools("alice")
+        assert wt.site == "alice"
 
-    def test_no_user_site_skips_check(self):
-        tools = _make_tools(user_site=None)
-        tools._require_site_ownership("anyone")  # must not raise
+    def test_page_path_property_reflects_construction_path(self):
+        wt = _wiki_tools("alice", "my-page")
+        assert wt.page_path == "my-page"
 
+    def test_read_page_reads_from_bound_site(self):
+        store = LocalStorageBackend()
+        store.write("alice/content.md", "# Alice root")
+        store.write("bob/content.md", "# Bob root")
+        wiki = WikiPageMarkdownFile("alice", "", store)
+        wt = WikiPageTools(wiki)
+        assert wt.read_page() == "# Alice root"
 
-# ---------------------------------------------------------------------------
-# _require_read_access
-# ---------------------------------------------------------------------------
-
-
-class TestRequireReadAccess:
-    def test_own_site_passes(self):
-        tools = _make_tools("alice")
-        tools._require_read_access("alice", "")  # must not raise; no S3 call needed
-        tools.s3.get_object.assert_not_called()
-
-    def test_no_user_site_skips_check(self):
-        tools = _make_tools(user_site=None)
-        tools._require_read_access("anyone", "")  # must not raise
-        tools.s3.get_object.assert_not_called()
-
-    def test_other_site_public_page_passes(self):
-        tools = _make_tools("alice")
-        tools.s3.get_object.return_value = {
-            "Body": MagicMock(read=lambda: json.dumps({"visibility": "public", "shared_with": []}).encode())
-        }
-        tools._require_read_access("bob", "")  # public — must not raise
-
-    def test_other_site_private_page_raises(self):
-        tools = _make_tools("alice")
-        tools.s3.get_object.return_value = {
-            "Body": MagicMock(read=lambda: json.dumps({"visibility": "private", "shared_with": []}).encode())
-        }
-        with pytest.raises(PermissionError):
-            tools._require_read_access("bob", "")
-
-    def test_other_site_shared_page_with_matching_email_passes(self):
-        tools = _make_tools("alice", user_email="alice@example.com")
-        tools.s3.get_object.return_value = {
-            "Body": MagicMock(read=lambda: json.dumps({
-                "visibility": "shared",
-                "shared_with": [{"email": "alice@example.com", "access": "view"}],
-            }).encode())
-        }
-        tools._require_read_access("bob", "page1")  # must not raise
-
-    def test_other_site_shared_page_without_email_raises(self):
-        tools = _make_tools("alice", user_email=None)
-        tools.s3.get_object.return_value = {
-            "Body": MagicMock(read=lambda: json.dumps({
-                "visibility": "shared",
-                "shared_with": [{"email": "alice@example.com", "access": "view"}],
-            }).encode())
-        }
-        with pytest.raises(PermissionError):
-            tools._require_read_access("bob", "page1")
-
-    def test_other_site_settings_missing_raises(self):
-        tools = _make_tools("alice")
-        tools.s3.get_object.side_effect = Exception("NoSuchKey")
-        with pytest.raises(PermissionError):
-            tools._require_read_access("bob", "")
+    def test_write_page_writes_to_bound_site(self):
+        store = LocalStorageBackend()
+        store.write("alice/content.md", "# Original")
+        wiki = WikiPageMarkdownFile("alice", "", store)
+        wt = WikiPageTools(wiki)
+        wt.read_page()
+        wt.write_page("# Updated")
+        assert store.read("alice/content.md") == "# Updated"
+        assert store.read("bob/content.md") is None
 
 
-# ---------------------------------------------------------------------------
-# get_content
-# ---------------------------------------------------------------------------
+# ── SiteTools: site is bound at construction ──────────────────────────────────
+
+class TestSiteToolsSiteBound:
+    def test_site_property_reflects_construction_site(self):
+        st = _site_tools("alice")
+        assert st.site == "alice"
+
+    def test_list_skills_reads_from_bound_site(self):
+        store = LocalStorageBackend()
+        store.write("alice/.skills/summariser/SKILL.md", "---\ndescription: Summarise pages\ntools:\n  - linear\n---\nBody.")
+        st = SiteTools("alice", store)
+        result = st.list_skills()
+        assert "summariser" in result
+        assert "Summarise pages" in result
+
+    def test_list_skills_does_not_see_other_site(self):
+        store = LocalStorageBackend()
+        store.write("bob/.skills/other/SKILL.md", "---\ndescription: Bob skill\n---\n")
+        st = SiteTools("alice", store)
+        result = st.list_skills()
+        assert "other" not in result
+        assert "bob" not in result
+
+    def test_create_agent_writes_to_bound_site(self):
+        store = LocalStorageBackend()
+        st = SiteTools("alice", store)
+        result = st.create_agent(
+            agent_name="my-agent",
+            description="Does stuff",
+            skills=[],
+        )
+        assert "created" in result
+        assert store.read("alice/.agents/my-agent/agent.md") is not None
+        assert store.read("bob/.agents/my-agent/agent.md") is None
+
+    def test_create_page_writes_to_bound_site(self):
+        store = LocalStorageBackend()
+        st = SiteTools("alice", store)
+        result = st.create_page("new-page")
+        assert "created" in result
+        assert store.read("alice/new-page/content.md") is not None
+        assert store.read("bob/new-page/content.md") is None
 
 
-class TestGetContent:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.s3.get_object.return_value = {"Body": MagicMock(read=lambda: b"# Hello")}
-        result = tools.get_content(site="alice")
-        tools.s3.get_object.assert_called_once()
-        assert result == "# Hello"
+# ── ChatAgent.run(): cross-site guard ─────────────────────────────────────────
 
-    def test_cross_site_raises_before_s3(self):
-        # get_object IS called once to read settings.json (for the visibility
-        # fallback check), but the content key must never be fetched.
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.get_content(site="bob")
-        # Verify the content key was never fetched — only the settings.json read.
-        calls = [str(c) for c in tools.s3.get_object.call_args_list]
-        assert not any("content.md" in c for c in calls)
+class TestChatAgentCrossSiteGuard:
+    def _make_chat_agent(self):
+        from agents.chat import ChatAgent
+        mock_s3 = MagicMock()
+        return ChatAgent(s3=mock_s3, bucket="test-bucket")
 
-    def test_no_user_site_calls_s3(self):
-        tools = _make_tools(user_site=None)
-        tools.s3.get_object.return_value = {"Body": MagicMock(read=lambda: b"# Hello")}
-        tools.get_content(site="anyone")
-        tools.s3.get_object.assert_called_once()
+    def test_mismatched_site_raises_permission_error(self):
+        agent = self._make_chat_agent()
+        with pytest.raises(PermissionError, match="alice"):
+            agent.run(
+                message="do something",
+                current_content="",
+                history=[],
+                site="eve",
+                user_site="alice",
+            )
 
+    def test_matching_site_passes_guard(self):
+        agent = self._make_chat_agent()
+        try:
+            agent.run(
+                message="hello",
+                current_content="",
+                history=[],
+                site="alice",
+                user_site="alice",
+            )
+        except PermissionError as exc:
+            pytest.fail(f"Should not raise PermissionError when sites match: {exc}")
+        except Exception:
+            pass  # Expected — no real LLM client in tests
 
-# ---------------------------------------------------------------------------
-# put_content
-# ---------------------------------------------------------------------------
-
-
-class TestPutContent:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.put_content(site="alice", content="# Hello")
-        tools.s3.put_object.assert_called_once()
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.put_content(site="bob", content="# Hello")
-        tools.s3.put_object.assert_not_called()
-
-    def test_no_user_site_calls_s3(self):
-        tools = _make_tools(user_site=None)
-        tools.put_content(site="anyone", content="# Hello")
-        tools.s3.put_object.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# list_skills
-# ---------------------------------------------------------------------------
-
-
-class TestListSkills:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.s3.list_objects_v2.return_value = {"CommonPrefixes": []}
-        tools.list_skills(site="alice")
-        tools.s3.list_objects_v2.assert_called_once()
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.list_skills(site="bob")
-        tools.s3.list_objects_v2.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# list_agents
-# ---------------------------------------------------------------------------
-
-
-class TestListAgents:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.s3.list_objects_v2.return_value = {"CommonPrefixes": []}
-        tools.list_agents(site="alice")
-        tools.s3.list_objects_v2.assert_called_once()
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.list_agents(site="bob")
-        tools.s3.list_objects_v2.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# put_agent
-# ---------------------------------------------------------------------------
-
-
-class TestPutAgent:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
-        tools.put_agent(site="alice", agent_name="my-agent", description="Test", skills=[])
-        tools.s3.put_object.assert_called_once()
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.put_agent(site="bob", agent_name="my-agent", description="Test", skills=[])
-        tools.s3.put_object.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# put_skill
-# ---------------------------------------------------------------------------
-
-
-class TestPutSkill:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.s3.list_objects_v2.return_value = {"KeyCount": 0}
-        tools.put_skill(site="alice", skill_name="my-skill", markdown="---\n---\n")
-        tools.s3.put_object.assert_called_once()
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.put_skill(site="bob", skill_name="my-skill", markdown="---\n---\n")
-        tools.s3.put_object.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# create_page
-# ---------------------------------------------------------------------------
-
-
-class TestCreatePage:
-    def test_own_site_calls_s3(self):
-        tools = _make_tools("alice")
-        tools.create_page(site="alice", page_path="new-page")
-        assert tools.s3.put_object.call_count >= 1
-
-    def test_cross_site_raises_before_s3(self):
-        tools = _make_tools("alice")
-        with pytest.raises(PermissionError):
-            tools.create_page(site="bob", page_path="new-page")
-        tools.s3.put_object.assert_not_called()
+    def test_empty_user_site_skips_check(self):
+        """Internal/unauthenticated callers pass user_site='' — should not raise."""
+        agent = self._make_chat_agent()
+        try:
+            agent.run(
+                message="hello",
+                current_content="",
+                history=[],
+                site="any-site",
+                user_site="",
+            )
+        except PermissionError as exc:
+            pytest.fail(f"Should not raise PermissionError for empty user_site: {exc}")
+        except Exception:
+            pass  # Expected — no real LLM client in tests
