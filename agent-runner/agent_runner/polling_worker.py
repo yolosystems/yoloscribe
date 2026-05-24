@@ -260,12 +260,13 @@ def main() -> None:
     _sqs_kwargs: dict = {"region_name": AWS_REGION}
     if SQS_ENDPOINT_URL:
         _sqs_kwargs["endpoint_url"] = SQS_ENDPOINT_URL
-        elasticmq_key = os.environ.get("ELASTICMQ_ACCESS_KEY_ID")
-        elasticmq_secret = os.environ.get("ELASTICMQ_SECRET_ACCESS_KEY")
-        if elasticmq_key and elasticmq_secret:
-            _sqs_kwargs["aws_access_key_id"] = elasticmq_key
-            _sqs_kwargs["aws_secret_access_key"] = elasticmq_secret
-    _s3_kwargs = {"region_name": AWS_REGION, **({"endpoint_url": S3_ENDPOINT_URL} if S3_ENDPOINT_URL else {})}
+        _sqs_kwargs["aws_access_key_id"] = os.environ.get("ELASTICMQ_ACCESS_KEY_ID", "test")
+        _sqs_kwargs["aws_secret_access_key"] = os.environ.get("ELASTICMQ_SECRET_ACCESS_KEY", "test")
+    _s3_kwargs: dict = {"region_name": AWS_REGION}
+    if S3_ENDPOINT_URL:
+        _s3_kwargs["endpoint_url"] = S3_ENDPOINT_URL
+        _s3_kwargs["aws_access_key_id"] = os.environ.get("MINIO_ACCESS_KEY_ID", "yoloscribe")
+        _s3_kwargs["aws_secret_access_key"] = os.environ.get("MINIO_SECRET_ACCESS_KEY", "yoloscribe")
     sqs = _session.client("sqs", **_sqs_kwargs)
     s3 = _session.client("s3", **_s3_kwargs)
 
