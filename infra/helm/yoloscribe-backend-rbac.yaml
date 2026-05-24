@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: yoloscribe-backend
+  namespace: yolo
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["create", "delete", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: yoloscribe-backend
+  namespace: yolo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: yoloscribe-backend
+subjects:
+- kind: ServiceAccount
+  name: yoloscribe-backend
+  namespace: yolo
