@@ -1,9 +1,14 @@
-import { Notice, TFile } from "obsidian";
+import { Notice, TFile, requestUrl } from "obsidian";
 import type YoloScribePlugin from "./main";
 import { handleConflict } from "./conflicts";
 import { vaultPathToPagePath } from "./sync";
 
 const DEBOUNCE_MS = 2000;
+
+/** Remove the %% yoloscribe-child-pages ... %% block appended by the backend. */
+function stripChildPagesBlock(content: string): string {
+	return content.replace(/\n+%% yoloscribe-child-pages\n[\s\S]*?\n%%/g, "").trimEnd();
+}
 const RETRY_DELAY_MS = 5000;
 
 // Pending debounce timers keyed by vault file path.
@@ -39,12 +44,15 @@ async function pushPage(
 	// Only push pages originally synced from YoloScribe (i.e. with a known etag).
 	if (etag === undefined) return;
 
-	const content = await plugin.app.vault.read(file);
+	const rawContent = await plugin.app.vault.read(file);
+	const content = stripChildPagesBlock(rawContent);
 	const { apiBaseUrl, apiToken } = plugin.settings;
 
-	let resp: Response;
+	let status: number;
+	let json: Record<string, unknown>;
 	try {
-		resp = await fetch(`${apiBaseUrl}/obsidian/pages/${pagePath}`, {
+		const resp = await requestUrl({
+			url: `${apiBaseUrl}/obsidian/pages/${pagePath}`,
 			method: "PUT",
 			headers: {
 				Authorization: `Bearer ${apiToken}`,
@@ -52,7 +60,10 @@ async function pushPage(
 				"If-Match": etag,
 			},
 			body: content,
+			throw: false,
 		});
+		status = resp.status;
+		json = resp.json as Record<string, unknown>;
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (isRetry) {
@@ -64,26 +75,24 @@ async function pushPage(
 		return;
 	}
 
-	if (resp.ok) {
-		const data = await resp.json();
-		plugin.settings.etagMap[pagePath] = data.etag;
+	if (status >= 200 && status < 300) {
+		plugin.settings.etagMap[pagePath] = json.etag as string;
 		plugin.settings.lastSyncedAt = new Date().toISOString();
 		await plugin.saveSettings();
 		return;
 	}
 
-	if (resp.status === 409) {
-		const data = await resp.json();
+	if (status === 409) {
 		await handleConflict(
 			plugin,
 			pagePath,
-			data.content ?? "",
-			data.etag ?? ""
+			(json.content as string) ?? "",
+			(json.etag as string) ?? ""
 		);
 		return;
 	}
 
 	new Notice(
-		`YoloScribe: failed to save "${file.basename}" (${resp.status})`
+		`YoloScribe: failed to save "${file.basename}" (${status})`
 	);
 }
