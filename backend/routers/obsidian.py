@@ -12,6 +12,7 @@ Auth: API token (as_-prefixed) or JWT, resolved via get_user_context.
 
 import asyncio
 import datetime
+import json
 import logging
 from typing import AsyncGenerator
 
@@ -23,7 +24,7 @@ from auth import get_user_context
 from config import S3_BUCKET, s3
 from rate_limit import limiter
 from path_safety import PAGE_PATH_RE
-from queue_helpers import enqueue_index_job
+from queue_helpers import enqueue_index_job, enqueue_on_write_agents
 
 router = APIRouter(prefix="/obsidian", tags=["obsidian"])
 
@@ -34,6 +35,47 @@ _log = logging.getLogger(__name__)
 
 def _s3_key(site: str, page_path: str) -> str:
     return f"{site}/{page_path}/content.md" if page_path else f"{site}/content.md"
+
+
+def _settings_key(site: str, page_path: str) -> str:
+    return f"{site}/{page_path}/settings.json" if page_path else f"{site}/settings.json"
+
+
+def _ensure_ancestor_pages(site: str, page_path: str) -> None:
+    """Create content.md + settings.json for any missing ancestor pages.
+
+    Called when a new page is created via the Obsidian ingest route so that
+    intermediate folder pages (e.g. "raw/") appear in the web frontend.
+    """
+    parts = page_path.split("/")
+    for i in range(1, len(parts)):  # skip the page itself, walk ancestors only
+        ancestor = "/".join(parts[:i])
+        ancestor_key = _s3_key(site, ancestor)
+        try:
+            s3.head_object(Bucket=S3_BUCKET, Key=ancestor_key)
+            continue  # already exists
+        except s3.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                raise
+        title = ancestor.split("/")[-1].replace("-", " ").title()
+        content = (
+            f"# {title}\n\n"
+            "Pages in this folder are ingested automatically from Obsidian.\n\n"
+            "Add an agent here with `trigger: on_write` to process incoming content.\n"
+        )
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=ancestor_key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=_settings_key(site, ancestor),
+            Body=json.dumps({"visibility": "private", "shared_with": []}).encode("utf-8"),
+            ContentType="application/json",
+        )
+        _log.info("Created missing ancestor page %s", ancestor_key)
 
 
 def _page_path_from_key(site: str, key: str) -> str:
@@ -68,8 +110,34 @@ def _list_content_objects(site: str, subtree: str = "") -> list[dict]:
     return objects
 
 
-def _fetch_page(site: str, obj: dict) -> dict | None:
-    """Fetch content + etag for one S3 object; returns None on error."""
+def _build_child_links_block(site: str, page_path: str, all_objects: list[dict]) -> str:
+    """Return a %% yoloscribe-child-pages ... %% block for direct children, or ''."""
+    children = []
+    for obj in all_objects:
+        child_path = _page_path_from_key(site, obj["Key"])
+        if not child_path:
+            continue
+        if page_path == "":
+            if "/" not in child_path:
+                children.append(child_path)
+        else:
+            prefix = page_path + "/"
+            if child_path.startswith(prefix):
+                remainder = child_path[len(prefix):]
+                if "/" not in remainder:
+                    children.append(child_path)
+    if not children:
+        return ""
+    links = "\n".join(f"[[{c}]]" for c in sorted(children))
+    return f"%% yoloscribe-child-pages\n{links}\n%%"
+
+
+def _fetch_page(site: str, obj: dict, all_objects: list[dict] | None = None) -> dict | None:
+    """Fetch content + etag for one S3 object; returns None on error.
+
+    If all_objects is provided, a child-page wikilinks block is appended so
+    Obsidian's graph view reflects the full wiki hierarchy.
+    """
     key = obj["Key"]
     page_path = _page_path_from_key(site, key)
     try:
@@ -80,6 +148,10 @@ def _fetch_page(site: str, obj: dict) -> dict | None:
         if last_modified.tzinfo is None:
             last_modified = last_modified.replace(tzinfo=datetime.timezone.utc)
         title = page_path.split("/")[-1].replace("-", " ").title() if page_path else "Home"
+        if all_objects is not None:
+            block = _build_child_links_block(site, page_path, all_objects)
+            if block:
+                content = content.rstrip("\n") + "\n\n" + block + "\n"
         return {
             "path": page_path,
             "title": title,
@@ -108,7 +180,8 @@ async def bootstrap(
         raise HTTPException(status_code=400, detail="Invalid subtree path")
 
     objects = _list_content_objects(site, subtree)
-    pages = [p for obj in objects if (p := _fetch_page(site, obj)) is not None]
+    all_objects = _list_content_objects(site) if subtree else objects
+    pages = [p for obj in objects if (p := _fetch_page(site, obj, all_objects)) is not None]
 
     return JSONResponse({
         "site": site,
@@ -140,7 +213,7 @@ async def changes(
         if last_modified.tzinfo is None:
             last_modified = last_modified.replace(tzinfo=datetime.timezone.utc)
         if last_modified > since_dt:
-            page = _fetch_page(site, obj)
+            page = _fetch_page(site, obj, objects)
             if page:
                 changed.append(page)
 
@@ -165,24 +238,37 @@ async def put_page(
         raise HTTPException(status_code=400, detail="Invalid page path")
 
     if_match = request.headers.get("If-Match")
-    if not if_match:
-        raise HTTPException(status_code=412, detail="If-Match header is required")
+    if_none_match = request.headers.get("If-None-Match")
+    if not if_match and not if_none_match:
+        raise HTTPException(status_code=412, detail="If-Match or If-None-Match header required")
 
     body = await request.body()
     content = body.decode("utf-8")
     key = _s3_key(site, page_path)
 
+    creating = if_none_match == "*"
+
     try:
-        s3.put_object(
-            Bucket=S3_BUCKET,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-            IfMatch=if_match,
-            Metadata={"updated-by": "obsidian"},
-        )
+        put_kwargs: dict = {
+            "Bucket": S3_BUCKET,
+            "Key": key,
+            "Body": content.encode("utf-8"),
+            "ContentType": "text/markdown; charset=utf-8",
+            "Metadata": {"updated-by": "obsidian"},
+        }
+        if creating:
+            put_kwargs["IfNoneMatch"] = "*"
+        else:
+            put_kwargs["IfMatch"] = if_match
+        s3.put_object(**put_kwargs)
     except s3.exceptions.ClientError as exc:
-        if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+        code = exc.response["Error"]["Code"]
+        if code in ("PreconditionFailed", "412"):
+            if creating:
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": "Page already exists"},
+                )
             try:
                 obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
                 current_content = obj["Body"].read().decode("utf-8")
@@ -195,13 +281,26 @@ async def put_page(
             )
         raise
 
+    if creating and page_path:
+        # Write default settings.json so the page is immediately private/accessible.
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=_settings_key(site, page_path),
+            Body=json.dumps({"visibility": "private", "shared_with": []}).encode("utf-8"),
+            ContentType="application/json",
+        )
+        # Create any missing ancestor folder pages so they appear in the frontend.
+        if "/" in page_path:
+            _ensure_ancestor_pages(site, page_path)
+
     head = s3.head_object(Bucket=S3_BUCKET, Key=key)
     new_etag = head["ETag"]
 
     sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "etag": new_etag, "updated_by": "obsidian"})
     enqueue_index_job(key, user_id)
+    enqueue_on_write_agents(site, key, user_id)
 
-    return JSONResponse({"etag": new_etag})
+    return JSONResponse({"etag": new_etag}, status_code=201 if creating else 200)
 
 
 @router.get("/events", summary="SSE stream of real-time page change events")

@@ -6,6 +6,7 @@ import {
 } from "./settings";
 import { bootstrapSync, deltaSync } from "./sync";
 import { registerSaveHandler } from "./save";
+import { registerIngestHandler } from "./ingest";
 import { SseClient } from "./events";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -53,6 +54,7 @@ export default class YoloScribePlugin extends Plugin {
 
 		await this.syncOnOpen();
 		registerSaveHandler(this);
+		registerIngestHandler(this);
 		this.sseClient = new SseClient(this);
 		this.sseClient.connect();
 	}

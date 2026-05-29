@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type YoloScribePlugin from "./main";
 
 export interface YoloScribeSettings {
@@ -6,6 +6,7 @@ export interface YoloScribeSettings {
 	apiToken: string;
 	site: string;
 	subtree: string;
+	ingestFolder: string;
 	syncIntervalSeconds: number;
 	lastSyncedAt: string;
 	etagMap: Record<string, string>;
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: YoloScribeSettings = {
 	apiToken: "",
 	site: "",
 	subtree: "",
+	ingestFolder: "raw/",
 	syncIntervalSeconds: 30,
 	lastSyncedAt: "",
 	etagMap: {},
@@ -101,6 +103,23 @@ export class YoloScribeSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Ingest folder")
+			.setDesc(
+				"New files created in this vault folder are automatically pushed " +
+				"to YoloScribe as new pages. Use with Obsidian Web Clipper pointed " +
+				"at this folder. Leave empty to disable."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("raw/")
+					.setValue(this.plugin.settings.ingestFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.ingestFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("Polling interval (seconds)")
 			.setDesc(
 				"How often to check for remote changes when the live " +
@@ -148,16 +167,18 @@ export class YoloScribeSettingTab extends PluginSettingTab {
 		}
 		statusEl.setText("Verifying…");
 		try {
-			const resp = await fetch(`${apiBaseUrl}/obsidian/status`, {
+			const resp = await requestUrl({
+				url: `${apiBaseUrl}/obsidian/status`,
 				headers: { Authorization: `Bearer ${apiToken}` },
+				throw: false,
 			});
-			if (!resp.ok) {
+			if (resp.status < 200 || resp.status >= 300) {
 				statusEl.setText(
 					`✗ Error ${resp.status} — check your token and base URL.`
 				);
 				return;
 			}
-			const data = await resp.json();
+			const data = resp.json;
 			this.plugin.settings.site = data.site ?? "";
 			await this.plugin.saveSettings();
 			statusEl.setText(

@@ -1,4 +1,4 @@
-import { App, Notice, TFile, normalizePath } from "obsidian";
+import { App, Notice, TFile, normalizePath, requestUrl } from "obsidian";
 import type YoloScribePlugin from "./main";
 
 // ── Path mapping ───────────────────────────────────────────────────────────────
@@ -12,12 +12,29 @@ export function pagePathToVaultPath(pagePath: string): string {
 	return normalizePath(`${pagePath}.md`);
 }
 
+function slugifySegment(seg: string): string {
+	return seg
+		.toLowerCase()
+		.replace(/\s+/g, "-")
+		.replace(/[^a-z0-9_-]/g, "")
+		.replace(/-+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
 /**
- * Convert a vault file path back to a YoloScribe page path.
+ * Convert a vault file path to a YoloScribe page path, slugifying each
+ * segment so that Obsidian note names with spaces or uppercase map to valid
+ * YoloScribe page paths.
  *   "projects/yoloscribe/ideas.md" → "projects/yoloscribe/ideas"
+ *   "raw/Another new note.md"      → "raw/another-new-note"
  */
 export function vaultPathToPagePath(vaultPath: string): string {
-	return vaultPath.replace(/\.md$/, "");
+	const withoutExt = vaultPath.replace(/\.md$/, "");
+	return withoutExt
+		.split("/")
+		.map(slugifySegment)
+		.filter((seg) => seg.length > 0)
+		.join("/");
 }
 
 // ── Vault helpers ──────────────────────────────────────────────────────────────
@@ -54,11 +71,14 @@ async function deletePage(app: App, vaultPath: string): Promise<void> {
 async function apiFetch(
 	plugin: YoloScribePlugin,
 	path: string
-): Promise<Response> {
+): Promise<{ status: number; json: unknown }> {
 	const { apiBaseUrl, apiToken } = plugin.settings;
-	return fetch(`${apiBaseUrl}${path}`, {
+	const resp = await requestUrl({
+		url: `${apiBaseUrl}${path}`,
 		headers: { Authorization: `Bearer ${apiToken}` },
+		throw: false,
 	});
+	return { status: resp.status, json: resp.json };
 }
 
 // ── Sync operations ────────────────────────────────────────────────────────────
@@ -73,24 +93,24 @@ export async function bootstrapSync(plugin: YoloScribePlugin): Promise<void> {
 	const qs = subtree ? `?subtree=${encodeURIComponent(subtree)}` : "";
 	const resp = await apiFetch(plugin, `/obsidian/bootstrap${qs}`);
 
-	if (!resp.ok) {
-		throw new Error(`${resp.status} ${resp.statusText}`);
+	if (resp.status < 200 || resp.status >= 300) {
+		throw new Error(`HTTP ${resp.status}`);
 	}
 
-	const data = await resp.json();
-	const pages: Array<{
-		path: string;
-		content: string;
-		etag: string;
-		updated_at: string;
-	}> = data.pages ?? [];
+	const data = resp.json as {
+		site?: string;
+		synced_at: string;
+		pages: Array<{ path: string; content: string; etag: string; updated_at: string }>;
+	};
+	const pages = data.pages ?? [];
 
 	let written = 0;
 	for (const page of pages) {
 		if (page.path === "") continue; // skip root page
+		// Set etag BEFORE writePage so vault.on('create') can detect sync-owned files.
+		plugin.settings.etagMap[page.path] = page.etag;
 		const vaultPath = pagePathToVaultPath(page.path);
 		await writePage(plugin.app, vaultPath, page.content);
-		plugin.settings.etagMap[page.path] = page.etag;
 		written++;
 	}
 
@@ -110,17 +130,16 @@ export async function deltaSync(plugin: YoloScribePlugin): Promise<void> {
 	const since = encodeURIComponent(plugin.settings.lastSyncedAt);
 	const resp = await apiFetch(plugin, `/obsidian/changes?since=${since}`);
 
-	if (!resp.ok) {
-		throw new Error(`${resp.status} ${resp.statusText}`);
+	if (resp.status < 200 || resp.status >= 300) {
+		throw new Error(`HTTP ${resp.status}`);
 	}
 
-	const data = await resp.json();
-	const changed: Array<{
-		path: string;
-		content: string;
-		etag: string;
-		updated_by?: string;
-	}> = data.changed ?? [];
+	const data = resp.json as {
+		synced_at: string;
+		changed: Array<{ path: string; content: string; etag: string; updated_by?: string }>;
+		deleted: string[];
+	};
+	const changed = data.changed ?? [];
 	const deleted: string[] = data.deleted ?? [];
 
 	let applied = 0;
@@ -128,9 +147,10 @@ export async function deltaSync(plugin: YoloScribePlugin): Promise<void> {
 		if (page.path === "") continue;
 		// Skip our own writes — etag already matches what we stored.
 		if (plugin.settings.etagMap[page.path] === page.etag) continue;
+		// Set etag BEFORE writePage so vault.on('create') can detect sync-owned files.
+		plugin.settings.etagMap[page.path] = page.etag;
 		const vaultPath = pagePathToVaultPath(page.path);
 		await writePage(plugin.app, vaultPath, page.content);
-		plugin.settings.etagMap[page.path] = page.etag;
 		applied++;
 	}
 
