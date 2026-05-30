@@ -36,8 +36,6 @@ from .log_setup import configure_logging
 log = logging.getLogger(__name__)
 
 import boto3
-from strands import Agent, ModelRetryStrategy
-from strands_tools import http_request
 
 from yoloscribe_io import (
     AgentDefinitionError,
@@ -49,6 +47,13 @@ from yoloscribe_io import (
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
+)
+from .agents import (
+    IngestAgent,
+    NotificationAgent,
+    NullSearchBackend,
+    PageAgent,
+    SearchBackend,
 )
 
 BUCKET = os.environ["BUCKET"]
@@ -66,6 +71,8 @@ SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
+S3_VECTORS_BUCKET: str = os.environ.get("S3_VECTORS_BUCKET", "")
+S3_VECTORS_INDEX_NAME: str = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -555,6 +562,89 @@ def _apply_read_limit(tools: list, max_reads: int) -> list:
     return result
 
 
+def _make_search_backend(s3) -> SearchBackend:
+    """Build the search backend from environment configuration.
+
+    Returns NullSearchBackend when S3_VECTORS_BUCKET is not set so agents that
+    don't need search still work in environments where search isn't configured.
+    """
+    if not S3_VECTORS_BUCKET:
+        return NullSearchBackend()
+    from .agents.search import BedrockS3VectorsSearchBackend
+    try:
+        bedrock = _session.client("bedrock-runtime", region_name=AWS_REGION)
+        s3vectors = _session.client("s3vectors", region_name=AWS_REGION)
+        return BedrockS3VectorsSearchBackend(
+            bedrock_client=bedrock,
+            s3vectors_client=s3vectors,
+            s3_client=s3,
+            bucket=BUCKET,
+            vectors_bucket=S3_VECTORS_BUCKET,
+            index_name=S3_VECTORS_INDEX_NAME,
+        )
+    except Exception as exc:
+        log.warning("Could not build search backend, falling back to null: %s", exc)
+        return NullSearchBackend()
+
+
+def _make_agent(
+    agent_def,
+    site: str,
+    page_path: str,
+    wiki: WikiPageMarkdownFile,
+    storage: S3StorageBackend,
+    mcp_tools: list,
+    model,
+    search: SearchBackend,
+    user_id: str,
+    notify_fn,
+    content_key: str = "",
+):
+    """Select and instantiate the appropriate agent subclass for this run."""
+    if agent_def.trigger == "on_notify":
+        return NotificationAgent(
+            agent_def=agent_def,
+            site=site,
+            page_path=page_path,
+            storage=storage,
+            mcp_tools=mcp_tools,
+            model=model,
+            user_id=user_id,
+            notify_fn=notify_fn,
+            search=search,
+            max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+        )
+
+    if page_path == ".user/ingest":
+        return IngestAgent(
+            agent_def=agent_def,
+            site=site,
+            page_path=page_path,
+            storage=storage,
+            mcp_tools=mcp_tools,
+            model=model,
+            user_id=user_id,
+            notify_fn=notify_fn,
+            search=search,
+            max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+        )
+
+    return PageAgent(
+        agent_def=agent_def,
+        site=site,
+        page_path=page_path,
+        wiki=wiki,
+        storage=storage,
+        mcp_tools=mcp_tools,
+        model=model,
+        user_id=user_id,
+        notify_fn=notify_fn,
+        search=search,
+        max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+        content_key=content_key,
+    )
+
+
 def _write_run_log(
     storage: S3StorageBackend,
     run_log_key: str,
@@ -679,8 +769,8 @@ def main() -> None:
             )
             return
 
-        # 3. Build agent once — MCP tools, model, and system prompt are stable across retries
-        tools = [http_request]
+        # 3. Open MCP clients, collect tools, build model and agent
+        mcp_tools: list = []
         log.info("Starting %d MCP client(s)", len(mcp_clients))
         with contextlib.ExitStack() as stack:
             for i, client in enumerate(mcp_clients):
@@ -692,15 +782,23 @@ def main() -> None:
                     log.warning("MCP client failed to start (%s): %s", client_repr, exc)
                     continue
                 try:
-                    mcp_tools = client.list_tools_sync()
-                    _sanitize_tool_names(mcp_tools)
-                    tool_names_loaded = [getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "?") for t in mcp_tools]
-                    tools.extend(mcp_tools)
-                    log.info("Loaded %d tool(s) from %s: %s", len(mcp_tools), client_repr, tool_names_loaded)
+                    client_tools = client.list_tools_sync()
+                    _sanitize_tool_names(client_tools)
+                    tool_names_loaded = [
+                        getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "?")
+                        for t in client_tools
+                    ]
+                    mcp_tools.extend(client_tools)
+                    log.info(
+                        "Loaded %d tool(s) from %s: %s",
+                        len(client_tools), client_repr, tool_names_loaded,
+                    )
                 except Exception as exc:
                     log.warning("Failed to list tools from MCP client (%s): %s", client_repr, exc)
 
-            tools = _apply_read_limit(tools, AGENT_RUNNER_MAX_PAGE_READS)
+            # Apply read limit to any MCP wiki_read tools (backward-compat for
+            # agents that use the yoloscribe skill directly).
+            mcp_tools = _apply_read_limit(mcp_tools, AGENT_RUNNER_MAX_PAGE_READS)
             log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
 
             model_key = agent_def.model or _resolve_model_key(
@@ -708,126 +806,24 @@ def main() -> None:
             )
             model = _build_model(model_key)
             log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
-            if agent_def.trigger == "on_notify":
-                system_prompt = (
-                    agent_def.description
-                    + "\n\n"
-                    + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
-                    f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
-                    + "Use your tools to dispatch this notification. "
-                    "When done, output a brief confirmation of what was dispatched."
-                )
-            else:
-                system_prompt = (
-                    agent_def.description
-                    + "\n\n"
-                    + f"You may read at most {AGENT_RUNNER_MAX_PAGE_READS} wiki pages per run "
-                    f"(enforced by the runtime). Prioritise the pages most relevant to your task.\n\n"
-                    + "IMPORTANT: When you have finished your work, your final message must contain "
-                    "ONLY the complete updated markdown content — no preamble, no explanation, no "
-                    "summary, no commentary. Output the raw markdown and nothing else."
-                )
-            agent = Agent(
-                system_prompt=system_prompt,
+
+            search = _make_search_backend(s3)
+
+            # 4. Create the typed agent and run it.
+            agent = _make_agent(
+                agent_def=agent_def,
+                site=_site,
+                page_path=_page_path,
+                wiki=wiki,
+                storage=storage,
+                mcp_tools=mcp_tools,
                 model=model,
-                tools=tools,
-                callback_handler=None,
-                load_tools_from_directory=False,
-                retry_strategy=ModelRetryStrategy(
-                    max_attempts=8,
-                    initial_delay=10,
-                    max_delay=120,
-                ),
+                search=search,
+                user_id=USER_ID,
+                notify_fn=_notify,
+                content_key=CONTENT_KEY,
             )
-
-            # 4. Run the agent — on_notify agents dispatch via tools only (no write-back).
-            if agent_def.trigger == "on_notify":
-                prompt = AGENT_PROMPT.strip() or "Process this notification according to your instructions."
-                agent(prompt)
-                updated = ""  # no content written back; set for uniform success logging
-            elif agent_def.confirm_before_write:
-                # Propose mode: write to .proposed.content.md instead of content.md.
-                # A single run is sufficient — no retry loop needed.
-                proposed_key = CONTENT_KEY[: -len("content.md")] + ".proposed.content.md"
-                content = wiki.read()
-
-                task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
-                full_prompt = (
-                    f"{task}\n\n"
-                    f"Current content:\n```markdown\n{content}\n```\n\n"
-                    "When done, reply with ONLY the updated markdown. No explanations."
-                )
-                response = agent(full_prompt)
-
-                raw = str(response)
-                lines = raw.splitlines()
-                for idx, line in enumerate(lines):
-                    if line.startswith("#"):
-                        raw = "\n".join(lines[idx:])
-                        break
-                updated = raw
-
-                storage.write(proposed_key, updated)
-                log.info("Propose mode: wrote %d chars to s3://%s/%s", len(updated), BUCKET, proposed_key)
-                _notify(
-                    "confirm_page_change",
-                    {
-                        "agent": AGENT_MD_KEY,
-                        "content_key": CONTENT_KEY,
-                        "proposed_key": proposed_key,
-                    },
-                    user_id=USER_ID,
-                )
-            else:
-                # Read → run → conditional write, retrying on write conflict
-                _MAX_WRITE_RETRIES = 3
-                for attempt in range(_MAX_WRITE_RETRIES):
-                    # Read fresh content + ETag on every attempt
-                    content, etag = wiki.read_with_etag()
-
-                    task = AGENT_PROMPT.strip() or "Run your task as defined in your instructions."
-                    full_prompt = (
-                        f"{task}\n\n"
-                        f"Current content:\n```markdown\n{content}\n```\n\n"
-                        "When done, reply with ONLY the updated markdown. No explanations."
-                    )
-                    response = agent(full_prompt)
-
-                    # 5. Strip any preamble the model emitted before the markdown heading
-                    raw = str(response)
-                    lines = raw.splitlines()
-                    for idx, line in enumerate(lines):
-                        if line.startswith("#"):
-                            raw = "\n".join(lines[idx:])
-                            break
-                    updated = raw
-
-                    if wiki.write_conditional(updated, etag, user_id=USER_ID):
-                        break
-
-                    if attempt == _MAX_WRITE_RETRIES - 1:
-                        log.error(
-                            "Write conflict after %d attempts for %s — giving up",
-                            _MAX_WRITE_RETRIES, CONTENT_KEY,
-                        )
-                        _write_run_log(
-                            storage, _run_log_key, agent_def.name, "failed",
-                            agent_def.trigger, time.monotonic() - _run_start,
-                            f"Write conflict after {_MAX_WRITE_RETRIES} attempts.",
-                        )
-                        _notify(
-                            "agent_failure",
-                            {
-                                "agent": AGENT_MD_KEY,
-                                "reason": f"Write conflict: could not save {CONTENT_KEY} after {_MAX_WRITE_RETRIES} attempts",
-                            },
-                        )
-                        return
-
-                    log.warning(
-                        "Write conflict on attempt %d for %s — retrying with fresh content",
-                        attempt + 1, CONTENT_KEY,
-                    )
+            agent.run(AGENT_PROMPT)
 
     except Exception as exc:
         log.error("Agent execution failed: %s", exc, exc_info=True)
@@ -846,7 +842,7 @@ def main() -> None:
     elif agent_def.confirm_before_write:
         log.info("Agent run complete (propose mode): pending review for %s", CONTENT_KEY)
     else:
-        log.info("Agent run complete: wrote %d chars to s3://%s/%s", len(updated), BUCKET, CONTENT_KEY)
+        log.info("Agent run complete for %s", CONTENT_KEY)
         _enqueue_index_job(CONTENT_KEY)
     _write_run_log(
         storage, _run_log_key, agent_def.name, "success",
