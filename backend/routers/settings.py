@@ -1,15 +1,14 @@
-import json
-
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.requests import Request
 
 from auth import JWTClaims, get_jwt_claims, get_user_context, require_site_owner
 from rate_limit import limiter
 from config import S3_BUCKET, s3
-from models import AccessRequest, PageSettings
+from models import AccessRequest, PageSettings as PageSettingsModel
 from notifications import write_notification
 from s3_storage import storage
 from settings_cache import get_page_settings, invalidate_settings_cache, page_path_from_file_path
+from yoloscribe_io import PageSettings, SettingsData, SharedUser
 
 router = APIRouter()
 
@@ -29,7 +28,7 @@ async def get_settings(
 
 @router.put("/settings", tags=["settings"], summary="Update page access-control settings")
 async def put_settings(
-    settings: PageSettings,
+    settings: PageSettingsModel,
     site: str = "default",
     path: str = "content.md",
     ctx: tuple[str, str | None] = Depends(get_user_context),
@@ -49,8 +48,12 @@ async def put_settings(
     page_path = page_path_from_file_path(path)
     old = get_page_settings(site, page_path)
 
-    s3_path = "settings.json" if not page_path else f"{page_path}/settings.json"
-    storage.write(f"{site}/{s3_path}", json.dumps(settings.model_dump()), content_type="application/json")
+    page_settings = PageSettings(site, page_path, storage)
+    new_data = SettingsData(
+        visibility=settings.visibility,
+        shared_with=[SharedUser(email=su.email, access=su.access) for su in settings.shared_with],
+    )
+    page_settings.save(new_data)
     invalidate_settings_cache(site, page_path)
 
     _emit_visibility_notifications(site, page_path or "(root)", old, settings.model_dump(), user_id)

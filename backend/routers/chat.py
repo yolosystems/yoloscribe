@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 from agents import ChatAgent
 from auth import get_user_context, require_site_owner
-from config import S3_BUCKET, SQS_QUEUE_URL, s3, secrets_store, sqs
+from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs
 from models import ChatRequest, ChatResponse
 from rate_limit import limiter
 from path_safety import is_safe_path
@@ -20,6 +20,7 @@ _chat_agent = ChatAgent(
     sqs_client=sqs,
     sqs_queue_url=SQS_QUEUE_URL,
     secrets_store=secrets_store,
+    api_token_repo=api_token_repo,
 )
 
 
