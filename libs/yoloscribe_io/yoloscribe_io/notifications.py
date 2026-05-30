@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Callable
 
+from .agent_page import AgentDefinitionError, parse_agent_md
 from .markdown_file import MarkdownFile
 from .storage import StorageBackend
 
+log = logging.getLogger(__name__)
 
 _ON_NOTIFY_PATTERN = re.compile(r"^trigger:\s*on_notify", re.MULTILINE)
 
@@ -59,9 +62,9 @@ class NotificationsMarkdownFile(MarkdownFile):
         self._raw_content = updated
 
         if event_type not in NO_DISPATCH_EVENTS:
-            self._dispatch(entry, user_id)
+            self._dispatch(entry, event_type, user_id)
 
-    def _dispatch(self, entry: str, user_id: str) -> None:
+    def _dispatch(self, entry: str, event_type: str, user_id: str) -> None:
         if self._enqueue is None:
             return
 
@@ -77,6 +80,17 @@ class NotificationsMarkdownFile(MarkdownFile):
                 continue
             text = self._storage.read(agent_key) or ""
             if not _ON_NOTIFY_PATTERN.search(text):
+                continue
+            try:
+                agent_def = parse_agent_md(text)
+            except AgentDefinitionError:
+                log.warning(
+                    "Skipping invalid on_notify agent %s — "
+                    "likely missing required 'events' list",
+                    agent_key,
+                )
+                continue
+            if agent_def.events and event_type not in agent_def.events:
                 continue
             self._enqueue(agent_key, self.key, prompt, user_id)
 

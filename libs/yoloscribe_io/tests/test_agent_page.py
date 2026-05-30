@@ -33,6 +33,7 @@ def _new_format(
     ref="",
     scope_include=None,
     scope_exclude=None,
+    events=None,
     body="Does something useful.",
 ) -> str:
     lines = ["---", f"trigger: {trigger}"]
@@ -52,6 +53,10 @@ def _new_format(
         lines.append(f"model: {model}")
     if confirm:
         lines.append("confirm_before_write: true")
+    if events:
+        lines.append("events:")
+        for e in events:
+            lines.append(f"  - {e}")
     if scope_include or scope_exclude:
         lines.append("scope:")
         if scope_include:
@@ -147,7 +152,7 @@ def test_parse_trigger_on_write():
 
 
 def test_parse_trigger_on_notify():
-    d = parse_agent_md(_new_format(trigger="on_notify"))
+    d = parse_agent_md(_new_format(trigger="on_notify", events=["page_shared"]))
     assert d.trigger == "on_notify"
 
 
@@ -410,3 +415,83 @@ def test_agent_file_create_content_parseable(store):
     assert parsed.name == "nightly"
     assert parsed.description == "Runs every night."
     assert parsed.schedule == "0 2 * * *"
+
+
+# ── events field ──────────────────────────────────────────────────────────────
+
+def test_on_notify_without_events_raises():
+    text = "---\ntrigger: on_notify\nname: n\n---\n"
+    with pytest.raises(AgentDefinitionError, match="events"):
+        parse_agent_md(text)
+
+
+def test_on_notify_with_empty_events_list_raises():
+    text = "---\ntrigger: on_notify\nname: n\nevents: []\n---\n"
+    with pytest.raises(AgentDefinitionError, match="events"):
+        parse_agent_md(text)
+
+
+def test_on_notify_with_events_parses():
+    text = "---\ntrigger: on_notify\nname: n\nevents:\n  - page_shared\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.events == ["page_shared"]
+    assert defn.trigger == "on_notify"
+
+
+def test_on_notify_with_multiple_events():
+    text = "---\ntrigger: on_notify\nname: n\nevents:\n  - page_shared\n  - access_requested\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.events == ["page_shared", "access_requested"]
+
+
+def test_manual_trigger_events_not_required():
+    text = "---\ntrigger: manual\nname: n\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.events == []
+
+
+def test_on_write_trigger_events_not_required():
+    text = "---\ntrigger: on_write\nname: n\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.events == []
+
+
+def test_build_agent_md_includes_events():
+    defn = AgentDefinition(
+        name="n", trigger="on_notify", events=["page_shared", "access_requested"]
+    )
+    text = build_agent_md(defn)
+    assert "events:" in text
+    assert "  - page_shared" in text
+    assert "  - access_requested" in text
+
+
+def test_build_agent_md_omits_events_when_empty():
+    defn = AgentDefinition(name="n", trigger="manual")
+    text = build_agent_md(defn)
+    assert "events:" not in text
+
+
+def test_events_roundtrip():
+    defn = AgentDefinition(
+        name="n", trigger="on_notify", events=["page_shared", "confirm_page_change"]
+    )
+    parsed = parse_agent_md(build_agent_md(defn))
+    assert parsed.events == ["page_shared", "confirm_page_change"]
+
+
+def test_ref_agent_events_optional():
+    text = "---\ntrigger: on_notify\nname: ptr\nref: .agents/target/agent.md\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.ref == ".agents/target/agent.md"
+    assert defn.events == []
+
+
+def test_ref_agent_events_preserved_when_set():
+    text = (
+        "---\ntrigger: on_notify\nname: ptr\n"
+        "ref: .agents/target/agent.md\n"
+        "events:\n  - page_shared\n---\n"
+    )
+    defn = parse_agent_md(text)
+    assert defn.events == ["page_shared"]

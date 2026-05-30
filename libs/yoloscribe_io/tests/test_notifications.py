@@ -17,7 +17,10 @@ def _agent_store(*agents: tuple[str, str]) -> LocalStorageBackend:
     return LocalStorageBackend({key: content for key, content in agents})
 
 
-_ON_NOTIFY_AGENT = "---\ntrigger: on_notify\nname: notifier\n---\nHandles notifications."
+_ON_NOTIFY_AGENT = (
+    "---\ntrigger: on_notify\nname: notifier\n"
+    "events:\n  - page_shared\n  - confirm_page_change\n---\nHandles notifications."
+)
 _ON_WRITE_AGENT = "---\ntrigger: on_write\nname: writer\n---\nHandles page writes."
 _MANUAL_AGENT = "---\ntrigger: manual\nname: manual\n---\nManual only."
 
@@ -145,7 +148,7 @@ def test_notify_passes_user_id_to_enqueue(store):
     store.write("s/.agents/n/agent.md", _ON_NOTIFY_AGENT)
     enqueue = MagicMock()
     f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
-    f.notify("x", {}, user_id="user-42")
+    f.notify("page_shared", {}, user_id="user-42")
     _, _, _, user_id = enqueue.call_args[0]
     assert user_id == "user-42"
 
@@ -172,7 +175,7 @@ def test_notify_dispatches_multiple_on_notify_agents(store):
     store.write("s/.agents/c/agent.md", _ON_WRITE_AGENT)
     enqueue = MagicMock()
     f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
-    f.notify("x", {})
+    f.notify("page_shared", {})
     assert enqueue.call_count == 2
 
 
@@ -180,7 +183,7 @@ def test_notify_skips_non_agent_md_files(store):
     store.write("s/.agents/n/other.txt", "trigger: on_notify")
     enqueue = MagicMock()
     f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
-    f.notify("x", {})
+    f.notify("page_shared", {})
     enqueue.assert_not_called()
 
 
@@ -231,3 +234,63 @@ def test_no_enqueue_does_not_raise(store):
     store.write("s/.agents/n/agent.md", _ON_NOTIFY_AGENT)
     f = NotificationsMarkdownFile("s", store, enqueue=None)
     f.notify("page_shared", {})  # must not raise
+
+
+# ── event type filtering ──────────────────────────────────────────────────────
+
+def test_dispatch_skips_agent_when_event_not_in_events_list(store):
+    agent = (
+        "---\ntrigger: on_notify\nname: n\n"
+        "events:\n  - page_shared\n---\n"
+    )
+    store.write("s/.agents/n/agent.md", agent)
+    enqueue = MagicMock()
+    f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
+    f.notify("access_requested", {})
+    enqueue.assert_not_called()
+
+
+def test_dispatch_includes_agent_when_event_in_events_list(store):
+    agent = (
+        "---\ntrigger: on_notify\nname: n\n"
+        "events:\n  - access_requested\n---\n"
+    )
+    store.write("s/.agents/n/agent.md", agent)
+    enqueue = MagicMock()
+    f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
+    f.notify("access_requested", {})
+    enqueue.assert_called_once()
+
+
+def test_dispatch_skips_invalid_agent_md_without_raising(store):
+    store.write("s/.agents/n/agent.md", "---\ntrigger: on_notify\nname: n\n---\n")
+    enqueue = MagicMock()
+    f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
+    f.notify("page_shared", {})  # must not raise
+    enqueue.assert_not_called()
+
+
+def test_dispatch_ref_agent_without_events_dispatches_for_all_events(store):
+    ref_agent = (
+        "---\ntrigger: on_notify\nname: ptr\n"
+        "ref: .agents/target/agent.md\n---\n"
+    )
+    store.write("s/.agents/ptr/agent.md", ref_agent)
+    enqueue = MagicMock()
+    f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
+    f.notify("any_event_type", {})
+    enqueue.assert_called_once()
+
+
+def test_dispatch_agent_with_multiple_events_fires_on_match(store):
+    agent = (
+        "---\ntrigger: on_notify\nname: n\n"
+        "events:\n  - page_shared\n  - confirm_page_change\n---\n"
+    )
+    store.write("s/.agents/n/agent.md", agent)
+    enqueue = MagicMock()
+    f = NotificationsMarkdownFile("s", store, enqueue=enqueue)
+    f.notify("confirm_page_change", {})
+    enqueue.assert_called_once()
+    f.notify("access_requested", {})
+    assert enqueue.call_count == 1  # still only one — second event not in list

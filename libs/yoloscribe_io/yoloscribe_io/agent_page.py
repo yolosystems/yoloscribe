@@ -73,6 +73,7 @@ class AgentDefinition:
     confirm_before_write: bool = False
     ref: str = ""
     scope: Scope = field(default_factory=Scope)
+    events: list[str] = field(default_factory=list)
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
@@ -105,7 +106,12 @@ def parse_agent_md(text: str) -> AgentDefinition:
     if ref:
         name = str(fm.get("name", "")).strip()
         trigger = str(fm.get("trigger", "on_write")).strip()
-        return AgentDefinition(name=name, trigger=trigger, ref=ref)
+        events_raw = fm.get("events", [])
+        ref_events: list[str] = (
+            [str(events_raw)] if isinstance(events_raw, str)
+            else [str(e) for e in events_raw]
+        )
+        return AgentDefinition(name=name, trigger=trigger, ref=ref, events=ref_events)
 
     trigger = str(fm.get("trigger", "manual")).strip()
     if trigger not in _VALID_TRIGGERS:
@@ -133,6 +139,18 @@ def parse_agent_md(text: str) -> AgentDefinition:
 
     scope_raw = fm.get("scope", {})
     scope = Scope.from_dict(scope_raw) if isinstance(scope_raw, dict) else Scope()
+
+    events_raw = fm.get("events", [])
+    events: list[str] = (
+        [str(events_raw)] if isinstance(events_raw, str)
+        else [str(e) for e in events_raw]
+    )
+    if trigger == "on_notify" and not events:
+        raise AgentDefinitionError(
+            "trigger: on_notify requires an 'events' list — "
+            "specify which notification event types this agent should handle "
+            "(e.g. events: [page_shared, access_requested])."
+        )
 
     # Parse legacy body sections (## Description, ## Skills, ## Model)
     sections: dict[str, list[str]] = {}
@@ -180,6 +198,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         model=model,
         confirm_before_write=confirm_before_write,
         scope=scope,
+        events=events,
     )
 
 
@@ -204,6 +223,10 @@ def build_agent_md(defn: AgentDefinition) -> str:
         lines.append(f"model: {defn.model}")
     if defn.confirm_before_write:
         lines.append("confirm_before_write: true")
+    if defn.events:
+        lines.append("events:")
+        for e in defn.events:
+            lines.append(f"  - {e}")
     scope_d = defn.scope.to_dict()
     if scope_d:
         lines.append("scope:")

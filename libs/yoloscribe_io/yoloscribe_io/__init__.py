@@ -1,4 +1,5 @@
 from .notifications import NO_DISPATCH_EVENTS, NotificationsMarkdownFile
+from .kb_index import KnowledgeBaseIndexMarkdownFile
 from .skill_page import (
     SKILL_NAME_RE,
     SkillDefinition,
@@ -54,6 +55,7 @@ from .media_asset import (
 __all__ = [
     "NO_DISPATCH_EVENTS",
     "NotificationsMarkdownFile",
+    "KnowledgeBaseIndexMarkdownFile",
     "SKILL_NAME_RE",
     "AgentDefinition",
     "AgentDefinitionError",
