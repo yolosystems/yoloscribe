@@ -23,8 +23,14 @@ test-local-mcp = "agent_runner.test_local_mcp:main"
 [tool.uv]
 package = true
 
+
 [tool.uv.sources]
 mcp-oauth = {path = "../libs/mcp_oauth"}
 yolo-secrets = {path = "../libs/yolo_secrets"}
 yoloscribe-io = {path = "../libs/yoloscribe_io"}
 yoloscribe-notification-mcp = {path = "../notification-mcp"}
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
