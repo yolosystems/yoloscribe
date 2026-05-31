@@ -28,7 +28,7 @@ def _make_agent(storage: LocalStorageBackend, max_page_reads: int = 10, **def_kw
 
 def _storage_with_kb(topics: list[str], extra: dict | None = None) -> LocalStorageBackend:
     kb_content = "".join(f"- {t}\n" for t in topics)
-    data = {f"{SITE}/.user/kb-index.md": kb_content}
+    data = {f"{SITE}/.user/ingest/content.md": kb_content}
     if extra:
         data.update(extra)
     return LocalStorageBackend(data)

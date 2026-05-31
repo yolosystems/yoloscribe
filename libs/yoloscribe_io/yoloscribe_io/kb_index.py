@@ -5,21 +5,21 @@ from .storage import StorageBackend
 
 
 class KnowledgeBaseIndexMarkdownFile(MarkdownFile):
-    """The site's knowledge base topic index at {site}/.user/kb-index.md.
+    """The site's knowledge base topic index at {site}/.user/ingest/content.md.
 
-    The file is a simple markdown list of topic names. Topics map to
-    top-level wiki pages (children of the site root). Example content:
+    The ingest page doubles as the topic index: bullet list items in the page
+    are treated as topic names that map to top-level wiki pages. Example:
 
         - jazz
         - cooking
         - technology
 
-    Site owners may edit this file freely. The path is hardcoded so agents
-    cannot be coerced into reading a different index.
+    Site owners edit the ingest page directly to manage topics. The path is
+    hardcoded so agents cannot be coerced into reading a different index.
     """
 
     def __init__(self, site: str, storage: StorageBackend) -> None:
-        super().__init__(site, ".user/kb-index.md", storage)
+        super().__init__(site, ".user/ingest/content.md", storage)
 
     @property
     def topics(self) -> list[str]:
