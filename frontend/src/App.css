@@ -352,6 +352,12 @@ body {
   border-color: var(--accent);
 }
 
+.chat-token-budget {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 /* ── Agents panel ── */
 .agents-panel {
   width: 180px;

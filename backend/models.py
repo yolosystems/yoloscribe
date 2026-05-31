@@ -37,10 +37,17 @@ class ChatRequest(BaseModel):
         return v
 
 
+class TokenBudgetInfo(BaseModel):
+    used: int
+    limit: int
+    resets_at: str  # ISO-8601 UTC midnight
+
+
 class ChatResponse(BaseModel):
     reply: str
     updated_content: str | None = None
     navigate_to: str | None = None
+    token_budget: TokenBudgetInfo | None = None
 
 
 class UserCreatedEvent(BaseModel):

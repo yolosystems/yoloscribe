@@ -60,8 +60,9 @@ class NotificationAgent(BaseAgent):
             "When done, output a brief confirmation of what was dispatched."
         )
 
-    def run(self, prompt: str) -> None:
+    def run(self, prompt: str) -> int:
         tools = [http_request] + self._mcp_tools
         agent = self._make_strands_agent(tools)
         task = prompt.strip() or "Process this notification according to your instructions."
-        agent(task)
+        result = agent(task)
+        return result.metrics.accumulated_usage.get("totalTokens", 0)

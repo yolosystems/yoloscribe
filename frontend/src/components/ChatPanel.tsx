@@ -12,6 +12,12 @@ interface Message {
   proposedContent?: string
 }
 
+interface TokenBudget {
+  used: number
+  limit: number
+  resets_at: string
+}
+
 interface Props {
   content: string
   onContentUpdate: (newContent: string) => void
@@ -45,12 +51,23 @@ export default function ChatPanel({
   const [agentsOpen, setAgentsOpen] = useState(true)
   const [expanded, setExpanded] = useState(true)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
+  const [tokenBudget, setTokenBudget] = useState<TokenBudget | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (!token) return
+    fetch(`${apiBase}/token-budget`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setTokenBudget(data) })
+      .catch(() => {})
+  }, [apiBase, token])
 
   const onMouseMove = useCallback((e: MouseEvent) => {
     if (!dragRef.current) return
@@ -95,8 +112,16 @@ export default function ChatPanel({
           file_path: filePath,
         }),
       })
-      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      if (!res.ok) {
+        if (res.status === 429) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.detail ?? 'Daily token budget exhausted. Try again tomorrow.')
+        }
+        throw new Error(`Server error: ${res.status}`)
+      }
       const data = await res.json()
+
+      if (data.token_budget) setTokenBudget(data.token_budget)
 
       setMessages((prev) => {
         const without = prev.filter((m) => !m.thinking)
@@ -231,6 +256,11 @@ export default function ChatPanel({
         <button className="btn btn-primary" onClick={send} disabled={loading}>
           {loading ? 'Sending…' : 'Send'}
         </button>
+        {tokenBudget && (
+          <div className="chat-token-budget">
+            {tokenBudget.used.toLocaleString()} / {tokenBudget.limit.toLocaleString()} tokens today
+          </div>
+        )}
       </div>
     </div>
   )

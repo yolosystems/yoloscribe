@@ -56,8 +56,8 @@ class BaseAgent(ABC):
         ...
 
     @abstractmethod
-    def run(self, prompt: str) -> None:
-        """Execute the agent.  Raises on fatal errors."""
+    def run(self, prompt: str) -> int:
+        """Execute the agent.  Returns total tokens consumed.  Raises on fatal errors."""
         ...
 
     def _make_strands_agent(self, tools: list):

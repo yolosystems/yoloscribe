@@ -94,15 +94,15 @@ class PageAgent(BaseAgent):
         )
         return base
 
-    def run(self, prompt: str) -> None:
+    def run(self, prompt: str) -> int:
         tools = [http_request, self.page_read, self.page_write, self.wiki_search] + self._mcp_tools
 
         if self.agent_def.confirm_before_write:
-            self._run_propose_mode(prompt, tools)
+            return self._run_propose_mode(prompt, tools)
         else:
-            self._run_write_mode(prompt, tools)
+            return self._run_write_mode(prompt, tools)
 
-    def _run_propose_mode(self, prompt: str, tools: list) -> None:
+    def _run_propose_mode(self, prompt: str, tools: list) -> int:
         agent = self._make_strands_agent(tools)
         content = self._wiki.read()
         full_prompt = (
@@ -125,8 +125,9 @@ class PageAgent(BaseAgent):
             },
             self._user_id,
         )
+        return response.metrics.accumulated_usage.get("totalTokens", 0)
 
-    def _run_write_mode(self, prompt: str, tools: list) -> None:
+    def _run_write_mode(self, prompt: str, tools: list) -> int:
         agent = self._make_strands_agent(tools)
 
         for attempt in range(_MAX_WRITE_RETRIES):
@@ -140,7 +141,7 @@ class PageAgent(BaseAgent):
             updated = _strip_preamble(str(response))
 
             if self._wiki.write_conditional(updated, etag, user_id=self._user_id):
-                return
+                return response.metrics.accumulated_usage.get("totalTokens", 0)
 
             if attempt == _MAX_WRITE_RETRIES - 1:
                 raise RuntimeError(
@@ -150,6 +151,7 @@ class PageAgent(BaseAgent):
             log.warning(
                 "Write conflict on attempt %d — retrying with fresh content", attempt + 1
             )
+        return 0  # unreachable; satisfies type checker
 
 
 def _strip_preamble(raw: str) -> str:

@@ -33,6 +33,7 @@ from routers import (
     pages_router,
     settings_router,
     site_router,
+    token_budget_router,
     tokens_router,
     tools_router,
     webhooks_router,
@@ -68,6 +69,7 @@ _OPENAPI_TAGS = [
     {"name": "site", "description": "Provision, inspect, and delete user sites."},
     {"name": "secrets", "description": "Manage per-user credentials stored in AWS Secrets Manager."},
     {"name": "oauth", "description": "OAuth 2.0 + PKCE flow for remote MCP skills."},
+    {"name": "token-budget", "description": "Read per-user daily token usage and budget."},
     {"name": "tokens", "description": "Create, list, and revoke site-scoped API tokens."},
     {"name": "obsidian", "description": "Purpose-built sync API for the YoloScribe Obsidian plugin."},
     {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems, and outbound webhook management."},
@@ -177,6 +179,7 @@ app.include_router(oauth_router)
 if not LOCAL_MODE:
     app.include_router(mcp_oauth_router)
 app.include_router(site_router)
+app.include_router(token_budget_router)
 app.include_router(tokens_router)
 app.include_router(outbound_webhooks_router)
 app.include_router(webhooks_router)
