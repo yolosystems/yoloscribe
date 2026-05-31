@@ -3,19 +3,19 @@ from yoloscribe_io.kb_index import KnowledgeBaseIndexMarkdownFile
 
 
 def _store(content: str) -> LocalStorageBackend:
-    return LocalStorageBackend({"s/.user/kb-index.md": content})
+    return LocalStorageBackend({"s/.user/ingest/content.md": content})
 
 
 # ── construction ──────────────────────────────────────────────────────────────
 
 def test_key():
     f = KnowledgeBaseIndexMarkdownFile("mysite", LocalStorageBackend())
-    assert f.key == "mysite/.user/kb-index.md"
+    assert f.key == "mysite/.user/ingest/content.md"
 
 
 def test_path():
     f = KnowledgeBaseIndexMarkdownFile("mysite", LocalStorageBackend())
-    assert f.path == ".user/kb-index.md"
+    assert f.path == ".user/ingest/content.md"
 
 
 # ── topics property ───────────────────────────────────────────────────────────
@@ -71,21 +71,21 @@ def test_update_topics_writes_list():
     store = LocalStorageBackend()
     f = KnowledgeBaseIndexMarkdownFile("s", store)
     f.update_topics(["jazz", "cooking"])
-    assert store.read("s/.user/kb-index.md") == "- jazz\n- cooking\n"
+    assert store.read("s/.user/ingest/content.md") == "- jazz\n- cooking\n"
 
 
 def test_update_topics_empty_list_writes_empty_string():
     store = LocalStorageBackend()
     f = KnowledgeBaseIndexMarkdownFile("s", store)
     f.update_topics([])
-    assert store.read("s/.user/kb-index.md") == ""
+    assert store.read("s/.user/ingest/content.md") == ""
 
 
 def test_update_topics_replaces_existing_content():
-    store = LocalStorageBackend({"s/.user/kb-index.md": "- old\n"})
+    store = LocalStorageBackend({"s/.user/ingest/content.md": "- old\n"})
     f = KnowledgeBaseIndexMarkdownFile("s", store)
     f.update_topics(["new"])
-    assert store.read("s/.user/kb-index.md") == "- new\n"
+    assert store.read("s/.user/ingest/content.md") == "- new\n"
 
 
 def test_topics_reflects_after_update():

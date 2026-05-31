@@ -27,12 +27,12 @@ class IngestAgent(BaseAgent):
     - kb_index_read(): read the knowledge base topic index
     - wiki_search(query): semantic search across the site
     - wiki_read(page_path): read any wiki page (topic-scoped validation)
-    - wiki_write(page_path, content): write to a wiki page that matches a kb-index topic
+    - wiki_write(page_path, content): write to a wiki page that matches a ingest page topic
     - http_request + any injected MCP tools
 
     IngestAgent is always associated with .user/ingest and fires on schedule.
     It enforces that wiki writes are limited to pages whose top-level path
-    segment matches a topic defined in .user/kb-index.md.
+    segment matches a topic defined in .user/the ingest page.
     """
 
     def __init__(
@@ -136,7 +136,7 @@ class IngestAgent(BaseAgent):
         return wiki.read()
 
     def wiki_write(self, page_path: str, content: str) -> str:
-        """Write content to a wiki page. The page must match a topic in the kb-index."""
+        """Write content to a wiki page. The page must match a topic in the ingest page."""
         page_path = page_path.strip().strip("/")
         error = self._check_scope(page_path)
         if error:
@@ -156,15 +156,15 @@ class IngestAgent(BaseAgent):
                 f"Access denied: {page_path} is excluded by this agent's scope settings."
             )
 
-        # Must match a kb-index topic (top-level segment of the page path).
+        # Must match a ingest page topic (top-level segment of the page path).
         topics = self._kb_index.topics
         if topics:
             top_level = page_path.split("/")[0]
             if top_level not in topics:
                 return (
-                    f"Access denied: '{top_level}' is not a topic in kb-index.md. "
+                    f"Access denied: '{top_level}' is not a topic in the ingest page. "
                     f"Available topics: {', '.join(topics)}. "
-                    "Add the topic to kb-index.md first, or use an existing topic."
+                    "Add the topic to the ingest page first, or use an existing topic."
                 )
         return None
 
@@ -176,20 +176,20 @@ class IngestAgent(BaseAgent):
             + "\n\n"
             + "You process files that arrive in the ingest queue (.user/ingest/) "
             "and route them to the appropriate wiki pages based on topics defined "
-            "in the knowledge base index (kb-index.md).\n\n"
+            "in the knowledge base index (the ingest page).\n\n"
             "Workflow for each run:\n"
             "1. Call ingest_list_pending() to find files to process.\n"
             "2. For each file: call ingest_read(filename) to get its content.\n"
             "3. Call kb_index_read() to see available topics.\n"
             "4. Determine which topic(s) the content belongs to. "
-            "If the topic does not exist yet, add it to kb-index.md "
+            "If the topic does not exist yet, add it to the ingest page "
             "and create the new wiki page.\n"
             "5. Use wiki_search(query) to find similar existing pages.\n"
             "6. Use wiki_read(page_path) to read relevant pages for context.\n"
             "7. Use wiki_write(page_path, content) to update or create wiki pages.\n"
             "8. Call ingest_mark_processed(filename) to archive the file.\n\n"
             "wiki_write is restricted to pages whose top-level path matches a "
-            "kb-index topic. You cannot write to arbitrary wiki pages."
+            "ingest page topic. You cannot write to arbitrary wiki pages."
         )
 
     def run(self, prompt: str) -> int:
