@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Pencil, Plus, Save, Settings, X } from 'lucide-react'
+import { Inbox, Pencil, Plus, Save, Settings, X } from 'lucide-react'
 import { authClient, type AuthSession } from './auth'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
@@ -98,6 +98,8 @@ function getFilePath(): string {
   if (path === '.user/search') return '.user/search.md'
   // .user/notifications
   if (path === '.user/notifications') return '.user/notifications.md'
+  // .user/ingest
+  if (path === '.user/ingest') return '.user/ingest/content.md'
   // .skills/{name}
   const skillMatch = path.match(/^\.skills\/([a-z0-9][a-z0-9_-]*)$/)
   if (skillMatch) return `.skills/${skillMatch[1]}/SKILL.md`
@@ -112,6 +114,7 @@ function filePathToHash(fp: string): string {
   if (fp === 'content.md') return ''
   if (fp === '.user/search.md') return '#/.user/search'
   if (fp === '.user/notifications.md') return '#/.user/notifications'
+  if (fp === '.user/ingest/content.md') return '#/.user/ingest'
   const skillMatch = fp.match(/^\.skills\/([a-z0-9][a-z0-9_-]*)\/SKILL\.md$/)
   if (skillMatch) return `#/.skills/${skillMatch[1]}`
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
@@ -132,6 +135,11 @@ function getBreadcrumbs(fp: string): BreadcrumbSegment[] {
 
   if (fp === '.user/notifications.md') {
     crumbs.push({ label: 'Notifications', filePath: fp })
+    return crumbs
+  }
+
+  if (fp === '.user/ingest/content.md') {
+    crumbs.push({ label: 'Ingest', filePath: fp })
     return crumbs
   }
 
@@ -598,6 +606,15 @@ export default function App() {
               onClick={() => { setMode('view'); setSkillsOpen(false); setTokensOpen(false) }}
             >
               <X size={16} />
+            </button>
+          )}
+          {isOwner && (
+            <button
+              className="btn btn-icon"
+              onClick={() => navigate('.user/ingest/content.md')}
+              title="Ingest queue"
+            >
+              <Inbox size={16} />
             </button>
           )}
           {isOwner && (
