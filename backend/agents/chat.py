@@ -181,8 +181,8 @@ Current context:
         file_path: str = "content.md",
         user_id: str = "knuth",
         user_site: str = "",
-    ) -> tuple[str, str | None, str | None]:
-        """Process a user message and return (reply, updated_content | None, navigate_to | None)."""
+    ) -> tuple[str, str | None, str | None, int]:
+        """Process a user message and return (reply, updated_content | None, navigate_to | None, tokens_used)."""
         if user_site and site != user_site:
             raise PermissionError(
                 f"Access denied: cannot act on site '{site}' as user of site '{user_site}'"
@@ -227,7 +227,8 @@ Current context:
         )
 
         response = agent(full_message)
-        return str(response), shared.get("updated_content"), shared.get("navigate_to")
+        tokens_used = response.metrics.accumulated_usage.get("totalTokens", 0)
+        return str(response), shared.get("updated_content"), shared.get("navigate_to"), tokens_used
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 

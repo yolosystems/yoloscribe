@@ -192,7 +192,7 @@ class IngestAgent(BaseAgent):
             "kb-index topic. You cannot write to arbitrary wiki pages."
         )
 
-    def run(self, prompt: str) -> None:
+    def run(self, prompt: str) -> int:
         tools = [
             http_request,
             self.ingest_list_pending,
@@ -206,4 +206,5 @@ class IngestAgent(BaseAgent):
 
         agent = self._make_strands_agent(tools)
         task = prompt.strip() or "Process all pending ingest files according to your instructions."
-        agent(task)
+        result = agent(task)
+        return result.metrics.accumulated_usage.get("totalTokens", 0)

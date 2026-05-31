@@ -91,6 +91,14 @@ from auth_providers import create_providers  # noqa: E402
 
 auth_provider, user_site_repo, api_token_repo = create_providers()
 
+from token_budget import TokenBudgetRepository  # noqa: E402
+
+token_budget_repo: TokenBudgetRepository | None = (
+    TokenBudgetRepository(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    if not LOCAL_MODE and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+    else None
+)
+
 # ── AWS clients ────────────────────────────────────────────────────────────────
 
 _aws_profile = os.environ.get("AWS_PROFILE")

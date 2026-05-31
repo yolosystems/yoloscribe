@@ -5,11 +5,12 @@ from starlette.requests import Request
 
 from agents import ChatAgent
 from auth import get_user_context, require_site_owner
-from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs
-from models import ChatRequest, ChatResponse
+from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs, token_budget_repo
+from models import ChatRequest, ChatResponse, TokenBudgetInfo
 from rate_limit import limiter
 from path_safety import is_safe_path
 from queue_helpers import enqueue_index_job
+from token_budget import _resets_at_utc
 
 router = APIRouter()
 
@@ -48,6 +49,22 @@ async def chat(
     if not is_safe_path(req.file_path):
         raise HTTPException(status_code=400, detail="Invalid file_path")
 
+    # Pre-flight budget check — reject before touching the LLM if exhausted.
+    budget_used = 0
+    budget_limit = 0
+    if token_budget_repo is not None:
+        budget_used = token_budget_repo.get_used(user_id)
+        budget_limit = token_budget_repo.get_limit(user_id)
+        if budget_used >= budget_limit:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily token budget exhausted "
+                    f"({budget_used:,} / {budget_limit:,} tokens used). "
+                    f"Resets at UTC midnight."
+                ),
+            )
+
     history = [
         {"role": m.role, "content": m.content}
         for m in req.history
@@ -55,7 +72,7 @@ async def chat(
     ]
 
     try:
-        reply, updated_content, navigate_to = _chat_agent.run(
+        reply, updated_content, navigate_to, tokens_used = _chat_agent.run(
             message=req.message,
             current_content=req.current_content,
             history=history,
@@ -74,4 +91,21 @@ async def chat(
         if req.file_path == "content.md" or req.file_path.endswith("/content.md"):
             enqueue_index_job(content_key, user_id)
 
-    return ChatResponse(reply=reply, updated_content=updated_content, navigate_to=navigate_to)
+    # Record usage and build budget response.
+    token_budget: TokenBudgetInfo | None = None
+    if token_budget_repo is not None:
+        if tokens_used > 0:
+            token_budget_repo.record_usage(user_id, tokens_used)
+        new_used = budget_used + tokens_used
+        token_budget = TokenBudgetInfo(
+            used=new_used,
+            limit=budget_limit,
+            resets_at=_resets_at_utc(),
+        )
+
+    return ChatResponse(
+        reply=reply,
+        updated_content=updated_content,
+        navigate_to=navigate_to,
+        token_budget=token_budget,
+    )

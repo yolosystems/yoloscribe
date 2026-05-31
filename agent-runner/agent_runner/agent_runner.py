@@ -19,6 +19,9 @@ Environment variables:
     AGENT_RUNNER_MAX_PAGE_READS  max wiki_read calls per agent run (default: 10)
     SQS_QUEUE_URL  (optional) SQS dispatch queue; required to trigger on_notify agents
                    from confirm_page_change notifications
+    SUPABASE_URL   (optional) Supabase project URL; enables token budget enforcement
+    SUPABASE_SERVICE_ROLE_KEY  (optional) Supabase service role key
+    TOKEN_BUDGET_DEFAULT_DAILY_LIMIT  (optional) default daily token limit (default: 500000)
 """
 
 from __future__ import annotations
@@ -73,6 +76,9 @@ LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
 S3_VECTORS_BUCKET: str = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME: str = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
+SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+TOKEN_BUDGET_DEFAULT_DAILY_LIMIT: int = int(os.environ.get("TOKEN_BUDGET_DEFAULT_DAILY_LIMIT", "500000"))
 
 # ── Inline model registry ─────────────────────────────────────────────────────
 
@@ -114,6 +120,79 @@ def _build_model(model_key: str):
     else:
         from strands.models.bedrock import BedrockModel
         return BedrockModel(model_id=model_id, max_tokens=16384)
+
+# ── Inline token budget client ────────────────────────────────────────────────
+
+
+class _SupabaseBudget:
+    """Lightweight Supabase token budget client for the agent runner."""
+
+    def __init__(self, url: str, key: str) -> None:
+        self._url = url.rstrip("/")
+        self._headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+
+    @staticmethod
+    def _today() -> str:
+        import datetime
+        return datetime.date.today().isoformat()
+
+    def get_limit(self, user_id: str) -> int:
+        import urllib.parse
+        import urllib.request
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/token_budgets?select=daily_limit"
+            f"&user_id=eq.{urllib.parse.quote(user_id)}",
+            headers={**self._headers, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                rows = json.loads(resp.read())
+                if rows:
+                    return int(rows[0]["daily_limit"])
+        except Exception as exc:
+            log.warning("Failed to fetch token budget limit for %s: %s", user_id, exc)
+        return TOKEN_BUDGET_DEFAULT_DAILY_LIMIT
+
+    def get_used(self, user_id: str) -> int:
+        import urllib.parse
+        import urllib.request
+        today = self._today()
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/token_usage?select=total_tokens"
+            f"&user_id=eq.{urllib.parse.quote(user_id)}&usage_date=eq.{today}",
+            headers={**self._headers, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                rows = json.loads(resp.read())
+                if rows:
+                    return int(rows[0]["total_tokens"])
+        except Exception as exc:
+            log.warning("Failed to fetch token usage for %s: %s", user_id, exc)
+        return 0
+
+    def record_usage(self, user_id: str, tokens: int) -> None:
+        import urllib.request
+        if tokens <= 0:
+            return
+        today = self._today()
+        body = json.dumps({"p_user_id": user_id, "p_date": today, "p_tokens": tokens}).encode()
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/rpc/increment_token_usage",
+            data=body,
+            headers={**self._headers, "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5):
+                pass
+        except Exception as exc:
+            log.warning("Failed to record token usage for %s: %s", user_id, exc)
+
 
 _session = boto3.Session(profile_name=AWS_PROFILE or None)
 
@@ -689,6 +768,13 @@ def main() -> None:
     storage = S3StorageBackend(BUCKET, s3)
     store = _make_secrets_store(s3)
 
+    _budget: _SupabaseBudget | None = (
+        _SupabaseBudget(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        if not LOCAL_MODE and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+        else None
+    )
+    tokens_used = 0
+
     _run_start = time.monotonic()
     _site = AGENT_MD_KEY.split("/")[0]
     _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
@@ -754,6 +840,29 @@ def main() -> None:
             log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
             _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"})
             return
+
+        # 1b. Pre-flight token budget check
+        if _budget is not None:
+            _used = _budget.get_used(USER_ID)
+            _limit = _budget.get_limit(USER_ID)
+            if _used >= _limit:
+                log.error(
+                    "Token budget exhausted for user %s (%d / %d tokens used)",
+                    USER_ID, _used, _limit,
+                )
+                _notify(
+                    "agent_failure",
+                    {
+                        "agent": AGENT_MD_KEY,
+                        "reason": (
+                            f"Daily token budget exhausted "
+                            f"({_used:,} / {_limit:,} tokens used). "
+                            "Resets at UTC midnight."
+                        ),
+                    },
+                    USER_ID,
+                )
+                return
 
         # 2. Build MCP clients once — not repeated on write-conflict retries
         site = AGENT_MD_KEY.split("/")[0]
@@ -823,7 +932,7 @@ def main() -> None:
                 notify_fn=_notify,
                 content_key=CONTENT_KEY,
             )
-            agent.run(AGENT_PROMPT)
+            tokens_used = agent.run(AGENT_PROMPT)
 
     except Exception as exc:
         log.error("Agent execution failed: %s", exc, exc_info=True)
@@ -844,6 +953,11 @@ def main() -> None:
     else:
         log.info("Agent run complete for %s", CONTENT_KEY)
         _enqueue_index_job(CONTENT_KEY)
+
+    if _budget is not None and tokens_used > 0:
+        _budget.record_usage(USER_ID, tokens_used)
+        log.info("Recorded %d tokens for user %s", tokens_used, USER_ID)
+
     _write_run_log(
         storage, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
