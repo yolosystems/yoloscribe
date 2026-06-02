@@ -234,14 +234,13 @@ async def put_page(
     user_id, site = ctx
     if not site:
         raise HTTPException(status_code=403, detail="No site associated with this token")
-    if page_path and page_path != ".user/ingest" and not PAGE_PATH_RE.match(page_path):
+    _ingest_child = page_path.startswith(".user/ingest/")
+    if page_path and not _ingest_child and not PAGE_PATH_RE.match(page_path):
         raise HTTPException(status_code=400, detail="Invalid page path")
 
     if_match = request.headers.get("If-Match")
     if_none_match = request.headers.get("If-None-Match")
-    # .user/ingest is a write-always queue; etag concurrency is not required.
-    ingest_queue = page_path == ".user/ingest"
-    if not ingest_queue and not if_match and not if_none_match:
+    if not if_match and not if_none_match:
         raise HTTPException(status_code=412, detail="If-Match or If-None-Match header required")
 
     body = await request.body()
@@ -260,9 +259,8 @@ async def put_page(
         }
         if creating:
             put_kwargs["IfNoneMatch"] = "*"
-        elif if_match:
+        else:
             put_kwargs["IfMatch"] = if_match
-        # else: unconditional overwrite (ingest queue)
         s3.put_object(**put_kwargs)
     except s3.exceptions.ClientError as exc:
         code = exc.response["Error"]["Code"]
@@ -284,7 +282,7 @@ async def put_page(
             )
         raise
 
-    if creating and page_path and not ingest_queue:
+    if creating and page_path:
         # Write default settings.json so the page is immediately private/accessible.
         s3.put_object(
             Bucket=S3_BUCKET,

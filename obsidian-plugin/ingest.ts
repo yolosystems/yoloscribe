@@ -39,9 +39,12 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 	const isInFolder = pagePath === folder || pagePath.startsWith(folder + "/");
 	if (!isInFolder) return;
 
-	// Ingest always lands at the single .user/ingest queue page — the local
-	// filename is irrelevant to the remote destination.
-	const remotePath = ".user/ingest";
+	// Each ingested file becomes a child page under .user/ingest/.
+	const relative = pagePath === folder ? "" : pagePath.slice(folder.length + 1);
+	const remotePath = relative ? `.user/ingest/${relative}` : ".user/ingest";
+
+	// Skip files already tracked — prevents double-ingest on repeated create events.
+	if (plugin.settings.etagMap[remotePath] !== undefined) return;
 
 	// Guard: slugification may reduce a name to nothing (e.g. all special chars).
 	if (!pagePath || !/^[a-z0-9]/.test(pagePath)) {
@@ -63,6 +66,7 @@ async function pushIngestPage(
 	const { apiBaseUrl, apiToken } = plugin.settings;
 
 	let status: number;
+	let json: Record<string, unknown>;
 	try {
 		const resp = await requestUrl({
 			url: `${apiBaseUrl}/obsidian/pages/${pagePath}`,
@@ -70,11 +74,13 @@ async function pushIngestPage(
 			headers: {
 				Authorization: `Bearer ${apiToken}`,
 				"Content-Type": "text/markdown",
+				"If-None-Match": "*",
 			},
 			body: content,
 			throw: false,
 		});
 		status = resp.status;
+		json = resp.json as Record<string, unknown>;
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		new Notice(`YoloScribe: failed to ingest "${file.basename}" — ${msg}`);
@@ -82,7 +88,16 @@ async function pushIngestPage(
 	}
 
 	if (status >= 200 && status < 300) {
-		new Notice(`YoloScribe: ingested "${file.basename}"`);
+		plugin.settings.etagMap[pagePath] = json.etag as string;
+		await plugin.saveSettings();
+		new Notice(`YoloScribe: ingested "${file.basename}" → ${pagePath}`);
+		return;
+	}
+
+	if (status === 409) {
+		new Notice(
+			`YoloScribe: "${file.basename}" already exists in the ingest queue — skipped`
+		);
 		return;
 	}
 
