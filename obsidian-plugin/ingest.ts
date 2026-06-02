@@ -39,9 +39,14 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 	const isInFolder = pagePath === folder || pagePath.startsWith(folder + "/");
 	if (!isInFolder) return;
 
+	// Ingest always lands at .user/ingest/ in YoloScribe regardless of the
+	// local folder name — the local folder is a routing hint only.
+	const relative = pagePath === folder ? "" : pagePath.slice(folder.length + 1);
+	const remotePath = relative ? `.user/ingest/${relative}` : ".user/ingest";
+
 	// Skip files already tracked by sync — etagMap is set before writePage
 	// so this reliably excludes pages written during bootstrap/delta sync.
-	if (plugin.settings.etagMap[pagePath] !== undefined) return;
+	if (plugin.settings.etagMap[remotePath] !== undefined) return;
 
 	// Guard: slugification may reduce a name to nothing (e.g. all special chars).
 	if (!pagePath || !/^[a-z0-9]/.test(pagePath)) {
@@ -51,7 +56,7 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 		return;
 	}
 
-	pushNewPage(plugin, file, pagePath);
+	pushNewPage(plugin, file, remotePath);
 }
 
 async function pushNewPage(
