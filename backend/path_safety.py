@@ -21,6 +21,8 @@ SAFE_PATH = re.compile(
     r"|\.user/search\.md"
     r"|\.user/notifications\.md"
     r"|\.user/ingest/content\.md"
+    rf"|\.user/ingest/{_AGENT_NAME_SEG}/content\.md"
+    rf"|\.user/ingest/{_AGENT_NAME_SEG}/settings\.json"
     r")$"
 )
 
