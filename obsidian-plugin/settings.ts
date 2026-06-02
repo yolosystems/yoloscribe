@@ -106,7 +106,7 @@ export class YoloScribeSettingTab extends PluginSettingTab {
 			.setName("Ingest folder")
 			.setDesc(
 				"New files created in this vault folder are automatically pushed " +
-				"to YoloScribe as new pages. Use with Obsidian Web Clipper pointed " +
+				"to YoloScribe at .user/ingest/. Use with Obsidian Web Clipper pointed " +
 				"at this folder. Leave empty to disable."
 			)
 			.addText((text) =>
