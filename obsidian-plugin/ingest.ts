@@ -43,10 +43,6 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 	// filename is irrelevant to the remote destination.
 	const remotePath = ".user/ingest";
 
-	// Skip files already tracked by sync — etagMap is set before writePage
-	// so this reliably excludes pages written during bootstrap/delta sync.
-	if (plugin.settings.etagMap[remotePath] !== undefined) return;
-
 	// Guard: slugification may reduce a name to nothing (e.g. all special chars).
 	if (!pagePath || !/^[a-z0-9]/.test(pagePath)) {
 		new Notice(
@@ -55,10 +51,10 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 		return;
 	}
 
-	pushNewPage(plugin, file, remotePath);
+	pushIngestPage(plugin, file, remotePath);
 }
 
-async function pushNewPage(
+async function pushIngestPage(
 	plugin: YoloScribePlugin,
 	file: TFile,
 	pagePath: string
@@ -67,7 +63,6 @@ async function pushNewPage(
 	const { apiBaseUrl, apiToken } = plugin.settings;
 
 	let status: number;
-	let json: Record<string, unknown>;
 	try {
 		const resp = await requestUrl({
 			url: `${apiBaseUrl}/obsidian/pages/${pagePath}`,
@@ -75,13 +70,11 @@ async function pushNewPage(
 			headers: {
 				Authorization: `Bearer ${apiToken}`,
 				"Content-Type": "text/markdown",
-				"If-None-Match": "*",
 			},
 			body: content,
 			throw: false,
 		});
 		status = resp.status;
-		json = resp.json as Record<string, unknown>;
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		new Notice(`YoloScribe: failed to ingest "${file.basename}" — ${msg}`);
@@ -89,17 +82,7 @@ async function pushNewPage(
 	}
 
 	if (status >= 200 && status < 300) {
-		plugin.settings.etagMap[pagePath] = json.etag as string;
-		plugin.settings.lastSyncedAt = new Date().toISOString();
-		await plugin.saveSettings();
-		new Notice(`YoloScribe: ingested "${file.basename}" → ${pagePath}`);
-		return;
-	}
-
-	if (status === 409) {
-		new Notice(
-			`YoloScribe: "${file.basename}" already exists in YoloScribe — skipped`
-		);
+		new Notice(`YoloScribe: ingested "${file.basename}"`);
 		return;
 	}
 
