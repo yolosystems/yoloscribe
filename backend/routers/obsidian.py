@@ -234,7 +234,7 @@ async def put_page(
     user_id, site = ctx
     if not site:
         raise HTTPException(status_code=403, detail="No site associated with this token")
-    if page_path and not PAGE_PATH_RE.match(page_path):
+    if page_path and page_path != ".user/ingest" and not PAGE_PATH_RE.match(page_path):
         raise HTTPException(status_code=400, detail="Invalid page path")
 
     if_match = request.headers.get("If-Match")

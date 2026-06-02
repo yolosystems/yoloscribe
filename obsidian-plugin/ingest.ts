@@ -39,10 +39,9 @@ function maybeIngest(plugin: YoloScribePlugin, file: TFile): void {
 	const isInFolder = pagePath === folder || pagePath.startsWith(folder + "/");
 	if (!isInFolder) return;
 
-	// Ingest always lands at .user/ingest/ in YoloScribe regardless of the
-	// local folder name — the local folder is a routing hint only.
-	const relative = pagePath === folder ? "" : pagePath.slice(folder.length + 1);
-	const remotePath = relative ? `.user/ingest/${relative}` : ".user/ingest";
+	// Ingest always lands at the single .user/ingest queue page — the local
+	// filename is irrelevant to the remote destination.
+	const remotePath = ".user/ingest";
 
 	// Skip files already tracked by sync — etagMap is set before writePage
 	// so this reliably excludes pages written during bootstrap/delta sync.
