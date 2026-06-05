@@ -126,7 +126,7 @@ def fts_remove_pages(s3, bucket: str, site: str, page_paths: list[str]) -> None:
             conn.close()
 
         s3.upload_file(db_path, bucket, key, ExtraArgs={"ContentType": "application/x-sqlite3"})
-        log.debug("Removed %d pages from FTS index for site=%s", len(page_paths), site)
+        log.info("Removed %d pages from FTS index for site=%s", len(page_paths), site)
 
         with _lock:
             _cache.pop(site, None)
