@@ -132,6 +132,36 @@ def archive_page(
         except Exception:
             pass
 
+        # Copy .agents/ definitions to archive, then delete originals
+        agents_prefix = f"{page_dir}/.agents/"
+        agents_to_delete = []
+        paginator = s3.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=agents_prefix):
+            for obj in s3_page.get("Contents", []):
+                src_key = obj["Key"]
+                # Preserve path structure relative to page_dir
+                relative = src_key[len(f"{site}/"):]  # e.g. "{pp}/.agents/name/agent.md"
+                dst_key = f"{site}/{_ARCHIVE_PREFIX}/{relative}"
+                try:
+                    s3.copy_object(
+                        CopySource={"Bucket": bucket, "Key": src_key},
+                        Bucket=bucket,
+                        Key=dst_key,
+                    )
+                    agents_to_delete.append({"Key": src_key})
+                except Exception as exc:
+                    log.warning("Could not archive agent %s: %s", src_key, exc)
+        if agents_to_delete:
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": agents_to_delete, "Quiet": True})
+            log.info("Archived %d agent files for %s", len(agents_to_delete), pp)
+
+        # Discard any pending proposed change
+        proposed_key = f"{page_dir}/.proposed.content.md"
+        try:
+            s3.delete_object(Bucket=bucket, Key=proposed_key)
+        except Exception:
+            pass
+
         # Collect and delete chunks + vectors
         chunk_keys = []
         vector_ids = []
