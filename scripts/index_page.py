@@ -5,21 +5,24 @@
 """Index a single page — useful for testing the hybrid search indexer.
 
 Usage:
-    uv run --env-file .env python scripts/index_page.py <site> <page_path>
+    uv run --env-file .env scripts/index_page.py <site> [<page_path>] [--enqueue]
+
+    NOTE: omit the `python` keyword — uv needs to see the script path directly
+    to pick up the inline dependency block above.
 
 Examples:
-    # Root page
-    uv run --env-file .env python scripts/index_page.py knuth ""
+    # Child page (inline — runs the indexer in a subprocess via the indexer venv)
+    uv run --env-file .env scripts/index_page.py knuth cross-page-agent-test
 
-    # Child page
-    uv run --env-file .env python scripts/index_page.py knuth projects/yoloscribe/feature-backlog
+    # Root page
+    uv run --env-file .env scripts/index_page.py knuth
+
+    # Enqueue to SQS instead of running inline (production mode)
+    uv run --env-file .env scripts/index_page.py knuth cross-page-agent-test --enqueue
 
 Options:
-    --enqueue   Send to SQS queue rather than running inline (production mode).
+    --enqueue   Send to SQS queue rather than running inline.
                 Requires SQS_INDEXING_QUEUE_URL to be set.
-
-In local mode (S3_ENDPOINT_URL set) the indexer runs inline by default.
-In production mode (no S3_ENDPOINT_URL) use --enqueue to queue the job.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ import argparse
 import json
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -40,6 +44,10 @@ SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_USER_ID = os.environ.get("LOCAL_USER_ID", "index-test")
+
+_REPO_ROOT = Path(__file__).parent.parent
+_INDEXER_DIR = _REPO_ROOT / "indexer"
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 def _make_clients():
@@ -105,13 +113,18 @@ def main() -> None:
         )
         log.info("Enqueued indexing job for %s", content_key)
     else:
-        log.info("Running indexer inline...")
-        sys.path.insert(0, str(Path(__file__).parent.parent / "indexer"))
-        os.environ["BUCKET"] = S3_BUCKET
-        os.environ["CONTENT_KEY"] = content_key
-        os.environ["USER_ID"] = LOCAL_USER_ID
-        from indexer.index_runner import main as index_main
-        index_main()
+        # Run the indexer via subprocess so it uses the indexer's own venv
+        # (which has langchain-text-splitters and all other indexer deps).
+        log.info("Running indexer inline via indexer venv...")
+        env_args = ["--env-file", str(_ENV_FILE)] if _ENV_FILE.exists() else []
+        result = subprocess.run(
+            ["uv"] + env_args + ["run", "index-runner",
+               "--bucket", S3_BUCKET,
+               "--content-key", content_key,
+               "--user-id", LOCAL_USER_ID],
+            cwd=str(_INDEXER_DIR),
+        )
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
