@@ -3,7 +3,8 @@ import { Inbox, Pencil, Plus, Save, Settings, X } from 'lucide-react'
 import { authClient, type AuthSession } from './auth'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
-import ChatPanel from './components/ChatPanel'
+import ChatPanel, { type VersionMeta } from './components/ChatPanel'
+import VersionDiffView from './components/VersionDiffView'
 import Breadcrumb, { type BreadcrumbSegment } from './components/Breadcrumb'
 import ToolsPanel from './components/ToolsPanel'
 import SkillsPanel from './components/SkillsPanel'
@@ -221,6 +222,7 @@ export default function App() {
   const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [hasNotifications, setHasNotifications] = useState(false)
   const [proposedContent, setProposedContent] = useState<string | null>(null)
+  const [selectedVersion, setSelectedVersion] = useState<VersionMeta | null>(null)
 
   // Subscribe to auth state changes (skipped in LOCAL_MODE).
   useEffect(() => {
@@ -348,6 +350,7 @@ export default function App() {
     setMode('view')
     setEtag(null)
     setSaveConflict(false)
+    setSelectedVersion(null)
     const headers: Record<string, string> = {}
     if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
     fetch(`${API_BASE}/content?site=${encodeURIComponent(SITE)}&path=${encodeURIComponent(filePath)}`, {
@@ -779,6 +782,9 @@ export default function App() {
                     .then((data) => setAgents(data.agents ?? []))
                     .catch(() => setAgents([]))
                 }}
+                showVersions={isContentPage}
+                selectedVersionId={selectedVersion?.version_id ?? null}
+                onVersionSelect={setSelectedVersion}
               />
             )}
 
@@ -804,6 +810,22 @@ export default function App() {
                 <div className="state-center">{error}</div>
               ) : content === null ? (
                 <div className="state-center">Loading…</div>
+              ) : selectedVersion !== null && isContentPage ? (
+                <VersionDiffView
+                  apiBase={API_BASE}
+                  site={SITE}
+                  pagePath={getPagePath(filePath)}
+                  token={session!.access_token}
+                  version={selectedVersion}
+                  currentContent={content}
+                  onClose={() => setSelectedVersion(null)}
+                  onRestored={(newContent) => {
+                    setContent(newContent)
+                    setSavedContent(newContent)
+                    setSelectedVersion(null)
+                    setReloadKey((k) => k + 1)
+                  }}
+                />
               ) : mode === 'view' ? (
                 <div className="view-scroll">
                   <MarkdownViewer content={content} site={SITE} apiBase={API_BASE} pagePath={getPagePath(filePath)} />
