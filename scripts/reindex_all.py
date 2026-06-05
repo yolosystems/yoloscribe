@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["boto3>=1.35.0"]
+# ///
 """One-time migration: re-index all content pages for all sites.
 
 Re-chunks every content.md using the new markdown-aware chunking strategy,

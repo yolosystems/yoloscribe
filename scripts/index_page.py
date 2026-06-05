@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["boto3>=1.35.0"]
+# ///
 """Index a single page — useful for testing the hybrid search indexer.
 
 Usage:
