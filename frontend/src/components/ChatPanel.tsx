@@ -3,7 +3,13 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import AgentsList from './AgentsList'
+import VersionsPanel from './VersionsPanel'
 import type { AgentMeta } from '../App'
+
+export interface VersionMeta {
+  version_id: string
+  last_modified: string
+}
 
 interface Message {
   role: 'user' | 'assistant'
@@ -31,6 +37,9 @@ interface Props {
   activeFilePath?: string
   pagePath?: string
   onAgentsChanged?: () => void
+  showVersions?: boolean
+  selectedVersionId?: string | null
+  onVersionSelect?: (version: VersionMeta | null) => void
 }
 
 const MIN_WIDTH = 220
@@ -41,6 +50,7 @@ export default function ChatPanel({
   content, onContentUpdate, onApplyProposedContent,
   apiBase, site, filePath, token,
   showAgents = true, agents = [], activeFilePath = '', pagePath = '', onAgentsChanged,
+  showVersions = false, selectedVersionId = null, onVersionSelect,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([{
     role: 'assistant',
@@ -49,6 +59,7 @@ export default function ChatPanel({
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(true)
+  const [versionsOpen, setVersionsOpen] = useState(false)
   const [expanded, setExpanded] = useState(true)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [tokenBudget, setTokenBudget] = useState<TokenBudget | null>(null)
@@ -212,6 +223,30 @@ export default function ChatPanel({
                 token={token}
                 onAgentsChanged={onAgentsChanged ?? (() => {})}
                 embedded
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {showVersions && (
+        <div className="chat-agents-accordion">
+          <button
+            className="chat-agents-accordion-header"
+            onClick={() => setVersionsOpen((o) => !o)}
+          >
+            {versionsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>Versions</span>
+          </button>
+          {versionsOpen && (
+            <div className="chat-agents-list">
+              <VersionsPanel
+                apiBase={apiBase}
+                site={site}
+                pagePath={pagePath}
+                token={token}
+                selectedVersionId={selectedVersionId}
+                onVersionSelect={onVersionSelect ?? (() => {})}
               />
             </div>
           )}

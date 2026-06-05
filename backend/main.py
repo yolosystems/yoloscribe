@@ -31,6 +31,7 @@ from routers import (
     obsidian_router,
     outbound_webhooks_router,
     pages_router,
+    versions_router,
     settings_router,
     site_router,
     token_budget_router,
@@ -182,4 +183,5 @@ app.include_router(site_router)
 app.include_router(token_budget_router)
 app.include_router(tokens_router)
 app.include_router(outbound_webhooks_router)
+app.include_router(versions_router)
 app.include_router(webhooks_router)

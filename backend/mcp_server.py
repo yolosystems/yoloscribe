@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import difflib
 import json
 import logging
 import re
@@ -314,6 +315,27 @@ def create_mcp_app(
         if include_metadata:
             result["size_bytes"] = resp["ContentLength"]
             result["children"] = _list_immediate_children(user.site, page_path, s3_client, bucket)
+
+        # Include proposed diff if a pending proposal exists (YOL-244).
+        proposed_key = (
+            f"{user.site}/{page_path}/.proposed.content.md"
+            if page_path
+            else f"{user.site}/.proposed.content.md"
+        )
+        try:
+            proposed_resp = s3_client.get_object(Bucket=bucket, Key=proposed_key)
+            proposed_content = proposed_resp["Body"].read().decode("utf-8")
+            diff_lines = list(difflib.unified_diff(
+                content.splitlines(keepends=True),
+                proposed_content.splitlines(keepends=True),
+                fromfile=f"{page_path or '(root)'}/content.md (current)",
+                tofile=f"{page_path or '(root)'}/.proposed.content.md",
+            ))
+            result["has_proposal"] = True
+            result["proposed_diff"] = "".join(diff_lines) or "(no changes)"
+        except Exception:
+            result["has_proposal"] = False
+
         return result
 
     @mcp.tool()
@@ -441,6 +463,105 @@ def create_mcp_app(
                 break
 
         return {"pages": pages}
+
+    @mcp.tool()
+    async def wiki_versions(
+        page_path: str,
+        limit: int = 20,
+        ctx: Context = None,
+    ) -> dict:
+        """List available versions of a wiki page.
+
+        Args:
+            page_path: Path of the page. Empty string for root page.
+            limit: Maximum number of versions to return (default 20, max 50).
+        """
+        if page_path:
+            _validate_page_path(page_path)
+        user = _user(ctx)
+        key = _content_key(user.site, page_path)
+        limit = max(1, min(limit, 50))
+
+        try:
+            resp = s3_client.list_object_versions(Bucket=bucket, Prefix=key)
+        except Exception as exc:
+            log.warning("list_object_versions failed for %s: %s", key, exc)
+            return {"page_path": page_path, "versions": []}
+
+        versions = []
+        for v in resp.get("Versions", []):
+            if v["Key"] != key:
+                continue
+            versions.append({
+                "version_id": v["VersionId"],
+                "last_modified": v["LastModified"].isoformat(),
+                "size_bytes": v["Size"],
+                "is_latest": v["IsLatest"],
+            })
+            if len(versions) >= limit:
+                break
+
+        return {"page_path": page_path, "versions": versions}
+
+    @mcp.tool()
+    async def wiki_diff(
+        page_path: str,
+        version_id: str,
+        other_version_id: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Get a unified diff between two versions of a wiki page.
+
+        Returns a markdown-renderable unified diff. Suitable for display directly
+        in Claude Code or Claude Desktop tool output.
+
+        Args:
+            page_path: Path of the page. Empty string for root page.
+            version_id: The version to diff from (the older / reference version).
+            other_version_id: The version to diff to. If omitted, diffs against the current content.
+        """
+        if page_path:
+            _validate_page_path(page_path)
+        user = _user(ctx)
+        key = _content_key(user.site, page_path)
+
+        try:
+            resp_a = s3_client.get_object(Bucket=bucket, Key=key, VersionId=version_id)
+            content_a = resp_a["Body"].read().decode("utf-8")
+            from_label = f"{page_path or '(root)'} @ {version_id[:8]}"
+        except Exception:
+            raise ValueError(f"Version not found: {version_id}")
+
+        if other_version_id:
+            try:
+                resp_b = s3_client.get_object(Bucket=bucket, Key=key, VersionId=other_version_id)
+                content_b = resp_b["Body"].read().decode("utf-8")
+                to_label = f"{page_path or '(root)'} @ {other_version_id[:8]}"
+            except Exception:
+                raise ValueError(f"Version not found: {other_version_id}")
+        else:
+            try:
+                resp_b = s3_client.get_object(Bucket=bucket, Key=key)
+                content_b = resp_b["Body"].read().decode("utf-8")
+                to_label = f"{page_path or '(root)'} (current)"
+            except Exception:
+                raise ValueError(f"Page not found: '{page_path or '(root)'}'")
+
+        diff_lines = list(difflib.unified_diff(
+            content_a.splitlines(keepends=True),
+            content_b.splitlines(keepends=True),
+            fromfile=from_label,
+            tofile=to_label,
+        ))
+        diff = "".join(diff_lines)
+
+        return {
+            "page_path": page_path,
+            "version_id": version_id,
+            "other_version_id": other_version_id or "current",
+            "diff": diff or "(no changes)",
+            "changed_lines": len([l for l in diff_lines if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]),
+        }
 
     # ── Search ────────────────────────────────────────────────────────────────
 
