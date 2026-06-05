@@ -203,3 +203,32 @@ async def list_skills(
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix + "/", Delimiter="/")
     names = [p["Prefix"].split("/")[-2] for p in resp.get("CommonPrefixes", [])]
     return {"skills": names}
+
+
+@router.delete("/skill", tags=["skills"], summary="Delete a skill")
+async def delete_skill(
+    site: str = "default",
+    skill_name: str = "",
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+) -> dict:
+    """Permanently delete a skill and all its files (.SKILL.md, mcp.json, etc.).
+    Requires site ownership.
+    """
+    user_id, user_site = ctx
+    require_site_owner(site, user_site)
+
+    if not skill_name or not re.match(r"^[a-z0-9][a-z0-9_-]*$", skill_name):
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+
+    prefix = f"{skills_prefix(site)}/{skill_name}/"
+    paginator = s3.get_paginator("list_objects_v2")
+    to_delete = []
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            to_delete.append({"Key": obj["Key"]})
+
+    if not to_delete:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": to_delete, "Quiet": True})
+    return {"skill_name": skill_name, "deleted": True}

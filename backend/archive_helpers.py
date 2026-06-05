@@ -97,6 +97,8 @@ def archive_page(
     """
     if not page_path:
         raise ValueError("Cannot archive the root page")
+    if page_path.startswith("."):
+        raise ValueError(f"Cannot archive internal path: '{page_path}'")
 
     pages = _list_pages_under(s3, bucket, site, page_path)
     if not pages:

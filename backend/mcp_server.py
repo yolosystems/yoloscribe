@@ -1003,6 +1003,29 @@ def create_mcp_app(
         )
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
+    @mcp.tool()
+    async def skill_delete(
+        skill_name: str,
+        ctx: Context = None,
+    ) -> dict:
+        """Permanently delete a skill and all its files (SKILL.md, mcp.json, etc.).
+
+        Args:
+            skill_name: Name of the skill to delete.
+        """
+        _validate_skill_name(skill_name)
+        user = _user(ctx)
+        prefix = _skill_key(user.site, skill_name).rsplit("/", 1)[0] + "/"
+        paginator = s3_client.get_paginator("list_objects_v2")
+        to_delete = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                to_delete.append({"Key": obj["Key"]})
+        if not to_delete:
+            raise ValueError(f"Skill '{skill_name}' not found")
+        s3_client.delete_objects(Bucket=bucket, Delete={"Objects": to_delete, "Quiet": True})
+        return {"skill_name": skill_name, "deleted": True}
+
     # ── Introspection ─────────────────────────────────────────────────────────
 
     @mcp.tool()
