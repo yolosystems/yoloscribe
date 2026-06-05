@@ -33,6 +33,16 @@
       "Resource": "arn:aws:s3:::__S3_BUCKET__/*/.chunks/*"
     },
     {
+      "Sid": "S3WriteFTSIndex",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:HeadObject"
+      ],
+      "Resource": "arn:aws:s3:::__S3_BUCKET__/*/.search/index.db"
+    },
+    {
       "Sid": "BedrockEmbed",
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",

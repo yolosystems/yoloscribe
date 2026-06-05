@@ -57,48 +57,43 @@ class SearchAgent:
 
         navigate_to is always '#/.user/search'.
         """
-        if not self._s3_vectors_bucket:
-            return (
-                "Search is not configured on this server (S3_VECTORS_BUCKET not set).",
-                "#/.user/search",
+        from hybrid_search import hybrid_search
+
+        # 1. Run hybrid search
+        try:
+            fused = hybrid_search(
+                s3=self._s3,
+                bucket=self._bucket,
+                site=user_site,
+                query=query,
+                s3vectors_client=boto3.client("s3vectors", region_name=self._aws_region) if self._s3_vectors_bucket else None,
+                vectors_bucket=self._s3_vectors_bucket,
+                vectors_index=self._s3_vectors_index_name,
+                limit=_TOP_K,
+                expand=False,
             )
-
-        # 1. Embed query
-        try:
-            embedding = self._embed(query)
         except Exception as exc:
-            log.error("Failed to embed search query: %s", exc)
-            return f"Search failed: could not create embedding ({exc}).", "#/.user/search"
+            log.error("Hybrid search failed: %s", exc)
+            return f"Search failed: {exc}.", "#/.user/search"
 
-        # 2. Query S3 Vectors
-        try:
-            results = self._query_vectors(embedding)
-        except Exception as exc:
-            log.error("Failed to query S3 Vectors: %s", exc)
-            return f"Search failed: vector query error ({exc}).", "#/.user/search"
-
-        if not results:
+        if not fused:
             summary = f'No results found for "{query}".'
             self._append_search_entry(user_site, query, summary)
             return summary, "#/.user/search"
 
-        # 3. Fetch chunk text for each result
-        chunks = []
-        for r in results:
-            vector_id = r.get("key", "")
-            metadata = r.get("metadata", {})
-            path = metadata.get("path", "")
-            site = path.split("/")[0] if path else ""
-            text = self._fetch_chunk(path, vector_id)
-            if text:
-                chunks.append({"vector_id": vector_id, "path": path, "site": site, "text": text})
+        # 2. Build chunks list for summary generation (reuse excerpt as text)
+        chunks = [
+            {"path": f"{user_site}/{r['page_path']}/content.md", "text": r.get("excerpt", "")}
+            for r in fused
+            if r.get("excerpt")
+        ]
 
         if not chunks:
             summary = f'No readable results found for "{query}".'
             self._append_search_entry(user_site, query, summary)
             return summary, "#/.user/search"
 
-        # 4. Generate markdown summary via Anthropic
+        # 3. Generate markdown summary via Anthropic
         try:
             summary_md = self._generate_summary(query, chunks)
         except Exception as exc:

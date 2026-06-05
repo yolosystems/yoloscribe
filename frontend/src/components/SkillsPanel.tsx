@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import MarkdownEditor from './MarkdownEditor'
 import ChatPanel from './ChatPanel'
 
@@ -74,6 +75,22 @@ export default function SkillsPanel({ apiBase, site, token }: Props) {
     setContent(savedContent)
   }
 
+  async function deleteSkill(name: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!window.confirm(`Delete skill "${name}"? This cannot be undone.`)) return
+    const res = await fetch(
+      `${apiBase}/skill?site=${encodeURIComponent(site)}&skill_name=${encodeURIComponent(name)}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+    )
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert(`Failed to delete skill: ${body.detail ?? res.status}`)
+      return
+    }
+    if (selected === name) setSelected(null)
+    setSkills((prev) => prev.filter((s) => s !== name))
+  }
+
   const isDirty = content !== savedContent
   const filePath = selected ? `.skills/${selected}/SKILL.md` : 'content.md'
 
@@ -86,13 +103,20 @@ export default function SkillsPanel({ apiBase, site, token }: Props) {
             <div className="agents-empty">No skills yet. Create one via chat.</div>
           ) : (
             skills.map((name) => (
-              <button
-                key={name}
-                className={`agents-item${selected === name ? ' active' : ''}`}
-                onClick={() => selectSkill(name)}
-              >
-                {name}
-              </button>
+              <div key={name} className={`agents-item-row${selected === name ? ' active' : ''}`}>
+                <div className="agents-item-main" onClick={() => selectSkill(name)}>
+                  <span className="agents-item-name">{name}</span>
+                </div>
+                <div className="agents-item-actions">
+                  <button
+                    className="agents-delete-btn"
+                    title={`Delete ${name}`}
+                    onClick={(e) => deleteSkill(name, e)}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
             ))
           )}
         </div>
