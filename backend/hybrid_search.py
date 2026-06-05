@@ -166,7 +166,7 @@ def semantic_search(
     for vec in raw.get("vectors", []):
         metadata = vec.get("metadata", {})
         path = metadata.get("path", "")
-        vec_tags: list[str] = metadata.get("tags", [])
+        vec_tags: list[str] = metadata.get("tags") or []
 
         if not path.startswith(site_prefix):
             continue

@@ -145,17 +145,16 @@ def main() -> None:
             log.error("Failed to embed chunk %s: %s — skipping", chunk_id, exc)
             continue
         try:
+            metadata: dict = {"user_id": user_id, "path": content_key}
+            if chunk["tags"]:
+                metadata["tags"] = chunk["tags"]
             s3vectors.put_vectors(
                 vectorBucketName=S3_VECTORS_BUCKET,
                 indexName=S3_VECTORS_INDEX_NAME,
                 vectors=[{
                     "key": chunk_id,
                     "data": {"float32": embedding},
-                    "metadata": {
-                        "user_id": user_id,
-                        "path": content_key,
-                        "tags": chunk["tags"],
-                    },
+                    "metadata": metadata,
                 }],
             )
             stored += 1
