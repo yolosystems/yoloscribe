@@ -370,43 +370,6 @@ def create_mcp_app(
         }
 
     @mcp.tool()
-    async def wiki_delete(
-        page_path: str,
-        reason: str = "",
-        ctx: Context = None,
-    ) -> dict:
-        """Soft-delete a wiki page (archived under .archive/ prefix).
-
-        Args:
-            page_path: Path to delete.
-            reason: Optional deletion reason for audit trail.
-        """
-        _validate_page_path(page_path)
-        user = _user(ctx)
-        key = _content_key(user.site, page_path)
-        archive_key = (
-            f"{user.site}/.archive/{page_path}/content.md"
-            if page_path
-            else f"{user.site}/.archive/_root/content.md"
-        )
-        try:
-            s3_client.copy_object(
-                CopySource={"Bucket": bucket, "Key": key},
-                Bucket=bucket,
-                Key=archive_key,
-            )
-        except Exception:
-            raise ValueError(f"Page not found: '{page_path or '(root)'}'")
-        s3_client.delete_object(Bucket=bucket, Key=key)
-        deleted_at = _now_iso()
-        return {
-            "page_path": page_path,
-            "deleted_at": deleted_at,
-            "archived": True,
-            "reason": reason,
-        }
-
-    @mcp.tool()
     async def wiki_archive(
         page_path: str,
         ctx: Context = None,
