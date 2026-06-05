@@ -407,6 +407,47 @@ def create_mcp_app(
         }
 
     @mcp.tool()
+    async def wiki_archive(
+        page_path: str,
+        ctx: Context = None,
+    ) -> dict:
+        """Archive a page and all its descendants.
+
+        Copies content to .user/archive/, removes all search indexes (FTS5 + S3
+        Vectors chunks), and deletes the originals. Cannot be used on the root page.
+
+        Args:
+            page_path: Page to archive (and all its descendants).
+        """
+        from archive_helpers import archive_page as _archive
+
+        _validate_page_path(page_path)
+        user = _user(ctx)
+        result = _archive(
+            s3=s3_client,
+            bucket=bucket,
+            site=user.site,
+            page_path=page_path,
+            s3vectors_client=s3vectors_client,
+            vectors_bucket=vectors_bucket,
+            vectors_index=vectors_index,
+        )
+        return {"page_path": page_path, **result}
+
+    @mcp.tool()
+    async def empty_archive(
+        ctx: Context = None,
+    ) -> dict:
+        """Permanently delete all pages in the archive (.user/archive/).
+
+        This is irreversible. Use with caution.
+        """
+        from archive_helpers import empty_archive as _empty
+
+        user = _user(ctx)
+        return _empty(s3=s3_client, bucket=bucket, site=user.site)
+
+    @mcp.tool()
     async def wiki_list(
         page_path: str = "",
         recursive: bool = True,

@@ -103,3 +103,35 @@ def fts_query(
 
 def _escape(s: str) -> str:
     return s.replace('"', '""')
+
+
+def fts_remove_pages(s3, bucket: str, site: str, page_paths: list[str]) -> None:
+    """Remove pages from the FTS index, re-upload, and invalidate the local cache."""
+    import tempfile
+    key = f"{site}/.search/index.db"
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    try:
+        try:
+            s3.download_file(bucket, key, db_path)
+        except Exception:
+            return  # No index yet — nothing to remove
+
+        conn = sqlite3.connect(db_path)
+        try:
+            for pp in page_paths:
+                conn.execute("DELETE FROM fts WHERE page_path = ?", (pp,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        s3.upload_file(db_path, bucket, key, ExtraArgs={"ContentType": "application/x-sqlite3"})
+        log.debug("Removed %d pages from FTS index for site=%s", len(page_paths), site)
+
+        with _lock:
+            _cache.pop(site, None)
+    finally:
+        try:
+            os.unlink(db_path)
+        except OSError:
+            pass

@@ -223,6 +223,7 @@ export default function App() {
   const [hasNotifications, setHasNotifications] = useState(false)
   const [proposedContent, setProposedContent] = useState<string | null>(null)
   const [selectedVersion, setSelectedVersion] = useState<VersionMeta | null>(null)
+  const [archiving, setArchiving] = useState(false)
 
   // Subscribe to auth state changes (skipped in LOCAL_MODE).
   useEffect(() => {
@@ -444,6 +445,33 @@ export default function App() {
     setMode('view')
   }
 
+  async function archivePage() {
+    const pagePath = getPagePath(filePath)
+    const msg = `Archive "${pagePath || 'this page'}" and all its sub-pages?\n\nThis moves content to the archive and removes all search indexes. You can empty the archive later to permanently delete.`
+    if (!window.confirm(msg)) return
+    setArchiving(true)
+    try {
+      const res = await fetch(
+        `${API_BASE}/archive?site=${encodeURIComponent(SITE)}&page_path=${encodeURIComponent(pagePath)}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session!.access_token}` } },
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail ?? `${res.status}`)
+      }
+      await res.json()
+      // Navigate to parent page
+      const parentPath = pagePath.includes('/')
+        ? pagePath.slice(0, pagePath.lastIndexOf('/')) + '/content.md'
+        : 'content.md'
+      navigate(parentPath)
+    } catch (err) {
+      alert(`Archive failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setArchiving(false)
+    }
+  }
+
   const isDirty = content !== savedContent
 
   function navigate(fp: string) {
@@ -595,6 +623,15 @@ export default function App() {
                         onClick={() => { setSettingsOpen((o) => !o); setGearOpen(false) }}
                       >
                         Page Settings
+                      </button>
+                    )}
+                    {isContentPage && getPagePath(filePath) && (
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => { setGearOpen(false); archivePage() }}
+                        disabled={archiving}
+                      >
+                        {archiving ? 'Archiving…' : 'Archive Page'}
                       </button>
                     )}
                   </div>

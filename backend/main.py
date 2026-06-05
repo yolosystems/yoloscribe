@@ -22,6 +22,7 @@ from config import MAX_REQUEST_BYTES
 from rate_limit import limiter
 from mcp_server import create_mcp_app
 from routers import (
+    archive_router,
     assets_router,
     chat_router,
     content_router,
@@ -183,6 +184,7 @@ if not LOCAL_MODE:
 app.include_router(site_router)
 app.include_router(token_budget_router)
 app.include_router(tokens_router)
+app.include_router(archive_router)
 app.include_router(outbound_webhooks_router)
 app.include_router(search_router)
 app.include_router(versions_router)

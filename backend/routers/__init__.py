@@ -1,3 +1,4 @@
+from .archive import router as archive_router
 from .assets import router as assets_router
 from .chat import router as chat_router
 from .content import router as content_router
@@ -30,6 +31,7 @@ __all__ = [
     "token_budget_router",
     "tokens_router",
     "tools_router",
+    "archive_router",
     "outbound_webhooks_router",
     "search_router",
     "versions_router",
