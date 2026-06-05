@@ -12,6 +12,7 @@ from .token_budget import router as token_budget_router
 from .tokens import router as tokens_router
 from .tools import router as tools_router
 from .outbound_webhooks import router as outbound_webhooks_router
+from .search import router as search_router
 from .versions import router as versions_router
 from .webhooks import router as webhooks_router
 
@@ -30,6 +31,7 @@ __all__ = [
     "tokens_router",
     "tools_router",
     "outbound_webhooks_router",
+    "search_router",
     "versions_router",
     "webhooks_router",
 ]

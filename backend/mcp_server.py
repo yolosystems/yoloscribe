@@ -566,149 +566,43 @@ def create_mcp_app(
     # ── Search ────────────────────────────────────────────────────────────────
 
     @mcp.tool()
-    async def search_wiki(
+    async def search(
         query: str,
-        page_path_prefix: str = "",
+        tags: list[str] | None = None,
         limit: int = 20,
+        expand: bool = False,
         ctx: Context = None,
     ) -> dict:
-        """Keyword search across wiki pages in the user's site.
+        """Search wiki pages using hybrid keyword + semantic search with RRF fusion.
+
+        Combines SQLite FTS5 (BM25 keyword) and S3 Vectors (semantic similarity)
+        results via Reciprocal Rank Fusion into a single ranked list.
 
         Args:
-            query: Search term or phrase (case-insensitive).
-            page_path_prefix: Limit search to pages under this path prefix.
+            query: Search query (natural language or keywords).
+            tags: Optional list of frontmatter tags to filter by (e.g. ["deployment", "ops"]).
             limit: Maximum results to return (default 20).
+            expand: When True, uses Claude Haiku to generate 2-3 query variants
+                    before searching, improving recall on paraphrased queries.
         """
+        from hybrid_search import hybrid_search as _hybrid
+
         user = _user(ctx)
         limit = min(max(1, limit), 100)
-        prefix = (
-            f"{user.site}/{page_path_prefix}/"
-            if page_path_prefix
-            else f"{user.site}/"
+
+        results = _hybrid(
+            s3=s3_client,
+            bucket=bucket,
+            site=user.site,
+            query=query,
+            s3vectors_client=s3vectors_client,
+            vectors_bucket=vectors_bucket,
+            vectors_index=vectors_index,
+            tags=tags,
+            limit=limit,
+            expand=expand,
         )
-        query_lower = query.lower()
-        results: list[dict] = []
-
-        paginator = s3_client.get_paginator("list_objects_v2")
-        for s3_page in paginator.paginate(
-            Bucket=bucket,
-            Prefix=prefix,
-            PaginationConfig={"MaxItems": 300},
-        ):
-            for obj in s3_page.get("Contents", []):
-                key = obj["Key"]
-                if not key.endswith("/content.md"):
-                    continue
-                relative = key[len(f"{user.site}/"):]
-                if _is_internal(relative):
-                    continue
-
-                try:
-                    content_obj = s3_client.get_object(Bucket=bucket, Key=key)
-                    text = content_obj["Body"].read().decode("utf-8")
-                except Exception:
-                    continue
-
-                if query_lower not in text.lower():
-                    continue
-
-                idx = text.lower().find(query_lower)
-                start = max(0, idx - 100)
-                end = min(len(text), idx + 200)
-                excerpt = text[start:end].strip()
-                path = "" if relative == "content.md" else relative[: -len("/content.md")]
-                results.append(
-                    {
-                        "page_path": path,
-                        "score": 1.0,
-                        "excerpt": excerpt,
-                        "updated_at": obj["LastModified"].isoformat(),
-                    }
-                )
-                if len(results) >= limit:
-                    break
-            if len(results) >= limit:
-                break
-
         return {"results": results, "total_hits": len(results)}
-
-    @mcp.tool()
-    async def search_semantic(
-        query: str,
-        limit: int = 20,
-        min_score: float = 0.0,
-        ctx: Context = None,
-    ) -> dict:
-        """Semantic vector search across wiki pages using embeddings.
-
-        Args:
-            query: Natural language query.
-            limit: Number of results (default 20).
-            min_score: Minimum similarity score threshold (0.0-1.0).
-        """
-        import boto3
-
-        if not s3vectors_client or not vectors_bucket:
-            raise ValueError(
-                "Semantic search is not configured on this server (S3_VECTORS_BUCKET not set)."
-            )
-
-        user = _user(ctx)
-        limit = min(max(1, limit), 50)
-
-        # Embed the query
-        bedrock = boto3.client("bedrock-runtime", region_name=bedrock_region)
-        embed_resp = bedrock.invoke_model(
-            modelId=bedrock_embedding_model,
-            body=json.dumps({"inputText": query}),
-        )
-        embedding: list[float] = json.loads(embed_resp["body"].read())["embedding"]
-
-        # Over-fetch so we have enough results after filtering by site
-        raw = s3vectors_client.query_vectors(
-            vectorBucketName=vectors_bucket,
-            indexName=vectors_index,
-            queryVector={"float32": embedding},
-            topK=min(limit * 5, 100),
-            returnMetadata=True,
-        )
-
-        results: list[dict] = []
-        site_prefix = f"{user.site}/"
-        for vec in raw.get("vectors", []):
-            metadata = vec.get("metadata", {})
-            path = metadata.get("path", "")
-            score = float(vec.get("score", 0.0))
-
-            if not path.startswith(site_prefix):
-                continue
-            if score < min_score:
-                continue
-
-            # Fetch the chunk text for a content preview
-            preview = ""
-            try:
-                page_dir = path.rsplit("/", 1)[0]
-                chunk_key = f"{page_dir}/.chunks/{vec['key']}"
-                chunk_obj = s3_client.get_object(Bucket=bucket, Key=chunk_key)
-                chunk_data = json.loads(chunk_obj["Body"].read())
-                preview = chunk_data.get("text", "")[:500]
-            except Exception:
-                pass
-
-            relative = path[len(site_prefix):]
-            page_path_val = "" if relative == "content.md" else relative[: -len("/content.md")]
-            results.append(
-                {
-                    "page_path": page_path_val,
-                    "similarity_score": score,
-                    "content_preview": preview,
-                }
-            )
-            if len(results) >= limit:
-                break
-
-        return {"results": results}
 
     # ── Agent management ──────────────────────────────────────────────────────
     # Agent definitions are stored as agent.md files in S3:
