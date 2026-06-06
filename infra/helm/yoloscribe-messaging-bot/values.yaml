@@ -1,0 +1,39 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: Always
+
+# ── GitHub Container Registry credentials ────────────────────────────────────
+ghcr:
+  username: ""
+  pat: ""               # pass via --set; never commit a real value
+
+# ── Application config ────────────────────────────────────────────────────────
+config:
+  # Full URL of the YoloScribe backend API (e.g. https://api.runyolo.dev)
+  yoloscribeApiUrl: ""
+  # Supabase project URL
+  supabaseUrl: ""
+  # Comma-separated list of enabled adapters (e.g. "discord" or "discord,slack")
+  enabledAdapters: "discord"
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Pass all secret values via --set; never commit real values here.
+#
+# messagingAesKey          — base64-encoded 32-byte key for AES-256-GCM token encryption
+#                            Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+# supabaseServiceRoleKey   — Supabase service role key (bypasses RLS)
+# discordBotToken          — Discord bot token (required when discord adapter is enabled)
+messagingAesKey: ""
+supabaseServiceRoleKey: ""
+discordBotToken: ""
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi

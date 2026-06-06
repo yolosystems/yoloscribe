@@ -28,6 +28,7 @@ from routers import (
     content_router,
     health_router,
     mcp_oauth_router,
+    messaging_router,
     oauth_router,
     obsidian_router,
     outbound_webhooks_router,
@@ -185,6 +186,7 @@ app.include_router(site_router)
 app.include_router(token_budget_router)
 app.include_router(tokens_router)
 app.include_router(archive_router)
+app.include_router(messaging_router)
 app.include_router(outbound_webhooks_router)
 app.include_router(search_router)
 app.include_router(versions_router)

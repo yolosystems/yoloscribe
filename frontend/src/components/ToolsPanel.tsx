@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import OutboundWebhooksPanel from './OutboundWebhooksPanel'
+import MessagingConnectionsPanel from './MessagingConnectionsPanel'
 
 // ── API response types ────────────────────────────────────────────────────────
 
@@ -569,6 +570,7 @@ export default function ToolsPanel({ apiBase, token, site }: Props) {
           </div>
         ))}
         <OutboundWebhooksPanel apiBase={apiBase} token={token} />
+        <MessagingConnectionsPanel apiBase={apiBase} token={token} site={site} />
       </div>
     </div>
   )
