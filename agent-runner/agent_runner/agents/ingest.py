@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Callable
 
 from strands import tool
@@ -15,6 +16,9 @@ log = logging.getLogger(__name__)
 
 _INGEST_PREFIX = ".user/ingest/"
 _PROCESSED_PREFIX = ".user/ingest/processed/"
+
+# Matches markdown links with absolute HTTP(S) URLs: [label](https://host/path)
+_ABS_LINK_RE = re.compile(r'\[([^\]]+)\]\(https?://[^/\s)]+(/[^)]*)\)')
 
 
 class IngestAgent(BaseAgent):
@@ -179,10 +183,56 @@ class IngestAgent(BaseAgent):
         error = self._check_scope(page_path)
         if error:
             return error
+        content = self._rewrite_internal_links(content)
+        self._ensure_parent_pages(page_path)
         wiki = WikiPageMarkdownFile(site=self._site, page_path=page_path, storage=self._storage)
         wiki.write(content)
         log.info("IngestAgent wrote to %s/%s", self._site, page_path)
         return f"Written to {page_path}."
+
+    # ── Content helpers ───────────────────────────────────────────────────────
+
+    def _ensure_parent_pages(self, page_path: str) -> None:
+        """Create content.md stubs for any intermediate path segments that lack one.
+
+        e.g. writing to cooking/recipes/heritage-pork will create
+        cooking/recipes/content.md if it doesn't exist (cooking/content.md
+        is assumed to already exist as the routing target).
+        """
+        parts = page_path.split("/")
+        for i in range(1, len(parts)):
+            parent_path = "/".join(parts[:i])
+            parent_key = f"{self._site}/{parent_path}/content.md"
+            if self._storage.read(parent_key) is None:
+                title = parts[i - 1].replace("-", " ").title()
+                stub = f"# {title}\n"
+                self._storage.write(parent_key, stub)
+                log.info("IngestAgent created parent page stub: %s", parent_path)
+
+    def _rewrite_internal_links(self, content: str) -> str:
+        """Rewrite absolute URLs that look like internal wiki links to # notation.
+
+        Converts [label](https://any-host/page/path) to [label](#page/path),
+        stripping a leading site-name segment if present. Only rewrites paths
+        that look like wiki page paths (lowercase slugs, no file extension).
+        """
+        site_prefix = f"/{self._site}/"
+
+        def rewrite(m: re.Match) -> str:
+            label = m.group(1)
+            url_path = m.group(2)  # includes leading slash
+            # Strip leading site prefix if present
+            if url_path.startswith(site_prefix):
+                url_path = url_path[len(site_prefix):]
+            else:
+                url_path = url_path.lstrip("/")
+            # Only rewrite if path looks like a wiki page path
+            last_seg = url_path.split("/")[-1] if url_path else ""
+            if last_seg and "." not in last_seg and re.match(r"^[a-z0-9][a-z0-9/_-]*$", url_path):
+                return f"[{label}](#{url_path})"
+            return m.group(0)
+
+        return _ABS_LINK_RE.sub(rewrite, content)
 
     # ── Scope validation ──────────────────────────────────────────────────────
 
