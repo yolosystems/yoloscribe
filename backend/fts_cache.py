@@ -61,10 +61,13 @@ def fts_query(
     query: str,
     limit: int = 50,
     tags: list[str] | None = None,
+    doc_type: str = "content",
 ) -> list[dict]:
     """Run an FTS5 query and return ranked results.
 
-    Returns list of {"page_path": str, "excerpt": str, "rank": float}.
+    Returns list of {"page_path": str, "excerpt": str, "rank": float,
+                      "doc_type": str, "agent_name": str}.
+    doc_type: "content" (default), "agent", or "all".
     """
     if not query.strip() and not tags:
         return []
@@ -75,6 +78,8 @@ def fts_query(
     if tags:
         for tag in tags:
             parts.append(f'tags : "{_escape(tag)}"')
+    if doc_type != "all":
+        parts.append(f'doc_type : "{_escape(doc_type)}"')
 
     match_expr = " ".join(parts)
 
@@ -84,8 +89,10 @@ def fts_query(
             rows = conn.execute(
                 """
                 SELECT page_path,
-                       snippet(fts, 2, '', '', '...', 20) AS excerpt,
-                       rank
+                       snippet(fts, 4, '', '', '...', 20) AS excerpt,
+                       rank,
+                       doc_type,
+                       agent_name
                 FROM fts
                 WHERE fts MATCH ?
                 ORDER BY rank
@@ -93,7 +100,10 @@ def fts_query(
                 """,
                 (match_expr, limit),
             ).fetchall()
-            return [{"page_path": r[0], "excerpt": r[1], "rank": r[2]} for r in rows]
+            return [
+                {"page_path": r[0], "excerpt": r[1], "rank": r[2], "doc_type": r[3], "agent_name": r[4]}
+                for r in rows
+            ]
         finally:
             conn.close()
     except Exception as exc:

@@ -29,12 +29,15 @@ async def search_route(
     tags: str = "",
     limit: int = 20,
     expand: bool = False,
+    doc_type: str = "content",
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> JSONResponse:
     _, user_site = get_user_context(credentials)
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
     limit = max(1, min(limit, 100))
+    if doc_type not in ("content", "agent", "all"):
+        doc_type = "content"
 
     results = hybrid_search(
         s3=s3,
@@ -47,6 +50,7 @@ async def search_route(
         tags=tag_list,
         limit=limit,
         expand=expand,
+        doc_type=doc_type,
     )
 
     return JSONResponse({"results": results, "total_hits": len(results)})

@@ -22,11 +22,13 @@ _FTS_KEY_SUFFIX = ".search/index.db"
 
 _CREATE_FTS = """
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
-    page_path UNINDEXED,
-    chunk_id  UNINDEXED,
+    page_path  UNINDEXED,
+    chunk_id   UNINDEXED,
+    doc_type   UNINDEXED,
+    agent_name UNINDEXED,
     content,
     tags,
-    tokenize  = 'porter unicode61'
+    tokenize   = 'porter unicode61'
 );
 """
 
@@ -48,6 +50,7 @@ def download_or_create(s3, bucket: str, site: str, local_path: str) -> None:
     try:
         s3.download_file(bucket, key, local_path)
         log.info("Downloaded FTS index from s3://%s/%s", bucket, key)
+        _migrate_schema(local_path)
     except Exception:
         log.info("No existing FTS index — creating fresh at s3://%s/%s", bucket, key)
         _init_db(local_path)
@@ -61,21 +64,68 @@ def _init_db(path: str) -> None:
     conn.close()
 
 
-def update_page(db_path: str, page_path: str, chunks: list[dict]) -> None:
-    """Replace all FTS rows for page_path with the new chunks."""
+def _migrate_schema(path: str) -> None:
+    """Detect old FTS schema (no doc_type column) and rebuild if needed.
+
+    FTS5 virtual tables cannot be altered after creation, so we drop and
+    recreate. Existing content rows are lost and will be rebuilt on next write.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("SELECT doc_type FROM fts LIMIT 1")
+        conn.close()
+        return  # Schema is current
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+
+    log.info("Migrating FTS index to new schema (adding doc_type, agent_name columns)")
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("DROP TABLE IF EXISTS fts")
+        conn.execute(_CREATE_FTS)
+        conn.execute(_CREATE_META)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_page(
+    db_path: str,
+    page_path: str,
+    chunks: list[dict],
+    doc_type: str = "content",
+    agent_name: str = "",
+) -> None:
+    """Replace all FTS rows for (page_path, doc_type, agent_name) with the new chunks."""
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(_CREATE_FTS)
         conn.execute(_CREATE_META)
-        conn.execute("DELETE FROM fts WHERE page_path = ?", (page_path,))
+        conn.execute(
+            "DELETE FROM fts WHERE page_path = ? AND doc_type = ? AND agent_name = ?",
+            (page_path, doc_type, agent_name),
+        )
         for i, chunk in enumerate(chunks):
             tags_str = " ".join(chunk.get("tags", []))
             conn.execute(
-                "INSERT INTO fts(page_path, chunk_id, content, tags) VALUES (?, ?, ?, ?)",
-                (page_path, f"{page_path}#{i}", chunk["text"], tags_str),
+                "INSERT INTO fts(page_path, chunk_id, doc_type, agent_name, content, tags)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (page_path, f"{page_path}#{doc_type}#{agent_name}#{i}", doc_type, agent_name, chunk["text"], tags_str),
             )
         conn.commit()
-        log.info("Updated FTS index: page=%s chunks=%d", page_path, len(chunks))
+        log.info("Updated FTS index: page=%s doc_type=%s agent=%s chunks=%d", page_path, doc_type, agent_name or "-", len(chunks))
+    finally:
+        conn.close()
+
+
+def delete_agents_for_page(db_path: str, page_path: str) -> None:
+    """Remove all agent FTS rows for a page (called before re-indexing agents)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("DELETE FROM fts WHERE page_path = ? AND doc_type = 'agent'", (page_path,))
+        conn.commit()
     finally:
         conn.close()
 

@@ -577,9 +577,10 @@ def create_mcp_app(
         tags: list[str] | None = None,
         limit: int = 20,
         expand: bool = False,
+        doc_type: str = "content",
         ctx: Context = None,
     ) -> dict:
-        """Search wiki pages using hybrid keyword + semantic search with RRF fusion.
+        """Search wiki pages and/or agent definitions using hybrid keyword + semantic search with RRF fusion.
 
         Combines SQLite FTS5 (BM25 keyword) and S3 Vectors (semantic similarity)
         results via Reciprocal Rank Fusion into a single ranked list.
@@ -590,11 +591,16 @@ def create_mcp_app(
             limit: Maximum results to return (default 20).
             expand: When True, uses Claude Haiku to generate 2-3 query variants
                     before searching, improving recall on paraphrased queries.
+            doc_type: What to search — "content" (wiki pages, default), "agent" (agent
+                      definitions only), or "all" (both). Agent results include
+                      "agent_name" and "page_path" so you can navigate to the definition.
         """
         from hybrid_search import hybrid_search as _hybrid
 
         user = _user(ctx)
         limit = min(max(1, limit), 100)
+        if doc_type not in ("content", "agent", "all"):
+            doc_type = "content"
 
         results = _hybrid(
             s3=s3_client,
@@ -607,6 +613,7 @@ def create_mcp_app(
             tags=tags,
             limit=limit,
             expand=expand,
+            doc_type=doc_type,
         )
         return {"results": results, "total_hits": len(results)}
 
@@ -614,6 +621,12 @@ def create_mcp_app(
     # Agent definitions are stored as agent.md files in S3:
     #   {site}/{page_path}/.agents/{agent_name}/agent.md   (page-scoped)
     #   {site}/.agents/{agent_name}/agent.md               (root page)
+
+    def _agent_page_content_key(site: str, page_path: str) -> str:
+        """Return the content.md key for the page an agent lives on."""
+        if page_path:
+            return f"{site}/{page_path}/content.md"
+        return f"{site}/content.md"
 
     def _agent_key(site: str, page_path: str, agent_name: str) -> str:
         if page_path:
@@ -732,6 +745,7 @@ def create_mcp_app(
         )
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -810,6 +824,7 @@ def create_mcp_app(
                              ContentType="text/markdown; charset=utf-8")
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
@@ -883,6 +898,7 @@ def create_mcp_app(
                              ContentType="text/markdown; charset=utf-8")
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
@@ -957,6 +973,7 @@ def create_mcp_app(
         content = build_agent_md(defn)
         s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
                              ContentType="text/markdown; charset=utf-8")
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
                 "events": list(events), "created_at": _now_iso()}
 
@@ -1056,6 +1073,7 @@ def create_mcp_app(
             enqueue_schedule_bootstrap(key, user.user_id)
         elif defn.trigger == "schedule" and updated.trigger != "schedule":
             delete_agent_cronjob(user.site, agent_name, user.user_id)
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
     @mcp.tool()
