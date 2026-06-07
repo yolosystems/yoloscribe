@@ -1102,19 +1102,38 @@ def create_mcp_app(
 
         prefix = f"{_agents_prefix(user.site, page_path)}{agent_name}/"
         paginator = s3_client.get_paginator("list_objects_v2")
-        keys_deleted = 0
+        all_objects = []
+        vector_ids = []
         for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            objects = [{"Key": obj["Key"]} for obj in s3_page.get("Contents", [])]
-            if objects:
-                s3_client.delete_objects(Bucket=bucket, Delete={"Objects": objects})
-                keys_deleted += len(objects)
-        if keys_deleted == 0:
+            for obj in s3_page.get("Contents", []):
+                all_objects.append({"Key": obj["Key"]})
+                if "/.chunks/" in obj["Key"]:
+                    vector_ids.append(obj["Key"].split("/")[-1])
+
+        if not all_objects:
             raise ValueError(
                 f"Agent '{agent_name}' not found on page '{page_path or '(root)'}'."
             )
 
+        # Delete S3 Vectors entries for this agent's chunks before removing S3 objects.
+        if vector_ids and s3vectors_client and vectors_bucket:
+            try:
+                for i in range(0, len(vector_ids), 100):
+                    s3vectors_client.delete_vectors(
+                        vectorBucketName=vectors_bucket,
+                        indexName=vectors_index,
+                        keys=vector_ids[i:i + 100],
+                    )
+            except Exception as exc:
+                log.warning("Failed to delete agent vectors for %s: %s", agent_name, exc)
+
+        s3_client.delete_objects(Bucket=bucket, Delete={"Objects": all_objects})
+
         if was_scheduled:
             delete_agent_cronjob(user.site, agent_name, user.user_id)
+
+        # Enqueue index job so the FTS entry for this agent is removed on next run.
+        _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
 
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
