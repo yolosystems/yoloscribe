@@ -635,6 +635,7 @@ def create_mcp_app(
             "timezone": defn.timezone,
             "model": defn.model,
             "confirm_before_write": defn.confirm_before_write,
+            "events": defn.events,
         }
 
     @mcp.tool()
@@ -648,16 +649,24 @@ def create_mcp_app(
         timezone: str = "",
         model: str = "",
         confirm_before_write: bool = False,
+        agent_type: str = "",
+        events: list[str] | None = None,
         overwrite: bool = False,
         ctx: Context = None,
     ) -> dict:
         """Create an agent.md definition on a wiki page.
+
+        Prefer the type-specific tools (agent_create_page, agent_create_ingest,
+        agent_create_notification) when the agent type is known — they enforce
+        correct placement and required fields automatically.
 
         Args:
             agent_name: Agent name (lowercase letters, digits, hyphens, underscores).
             description: Agent purpose / system prompt instructions.
             skills: List of skill names the agent should use.
             page_path: Page to attach the agent to; empty string for the root page.
+                       Overridden automatically for ingest (→ .user/ingest) and
+                       notification (→ root) types.
             trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for scheduled agents (e.g. "America/New_York").
@@ -665,21 +674,26 @@ def create_mcp_app(
             confirm_before_write: When true the agent writes proposed changes to
                 .proposed.content.md instead of content.md directly. The owner
                 must accept or reject the proposal via the UI or API.
+            agent_type: Agent class — "page", "ingest", or "notification". Leave
+                        empty to use heuristic dispatch in the runner.
+            events: Event types to watch — required when trigger is "on_notify".
+                    E.g. ["page_shared", "access_requested"].
             overwrite: Set True to replace an existing agent with the same name.
         """
         user = _user(ctx)
-        if page_path:
-            _validate_page_path(page_path)
         if not AGENT_NAME_RE.match(agent_name):
             raise ValueError(
                 f"Invalid agent name '{agent_name}'. "
                 "Use lowercase letters, digits, hyphens, underscores."
             )
 
-        # on_notify agents must always live at site root — enqueue_on_notify_agents
-        # only searches {site}/.agents/ regardless of which page triggered creation.
-        if trigger == "on_notify":
+        # Enforce canonical paths per type.
+        if agent_type == "ingest":
+            page_path = ".user/ingest"
+        elif agent_type == "notification" or trigger == "on_notify":
             page_path = ""
+        elif page_path:
+            _validate_page_path(page_path)
 
         defn = AgentDefinition(
             name=agent_name,
@@ -690,6 +704,8 @@ def create_mcp_app(
             timezone=timezone,
             model=model,
             confirm_before_write=confirm_before_write,
+            type=agent_type,
+            events=list(events) if events else [],
         )
         try:
             build_agent_md(defn)  # validates before writing
@@ -715,6 +731,232 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
+
+    @mcp.tool()
+    async def agent_create_page(
+        agent_name: str,
+        description: str,
+        skills: list[str],
+        page_path: str = "",
+        trigger: str = "manual",
+        schedule: str = "",
+        timezone: str = "",
+        model: str = "",
+        confirm_before_write: bool = False,
+        overwrite: bool = False,
+        ctx: Context = None,
+    ) -> dict:
+        """Create a page agent — reads and writes content on a specific wiki page.
+
+        Page agents are the most common type. They watch or update a single wiki
+        page and are placed under that page's .agents/ directory.
+
+        Args:
+            agent_name: Agent name (lowercase letters, digits, hyphens, underscores).
+            description: Agent purpose / system prompt instructions.
+            skills: List of skill names the agent should use.
+            page_path: Wiki page to attach the agent to; empty string for the root page.
+            trigger: "manual", "schedule", or "on_write".
+            schedule: Cron expression — required when trigger is "schedule".
+            timezone: Timezone for scheduled agents (e.g. "America/New_York").
+            model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
+            confirm_before_write: When true the agent stages changes for owner review
+                instead of writing directly to content.md.
+            overwrite: Set True to replace an existing agent with the same name.
+        """
+        user = _user(ctx)
+        if not AGENT_NAME_RE.match(agent_name):
+            raise ValueError(
+                f"Invalid agent name '{agent_name}'. "
+                "Use lowercase letters, digits, hyphens, underscores."
+            )
+        if page_path:
+            _validate_page_path(page_path)
+        if trigger == "on_notify":
+            raise ValueError(
+                "Page agents cannot use trigger 'on_notify'. "
+                "Use agent_create_notification for notification agents."
+            )
+
+        defn = AgentDefinition(
+            name=agent_name,
+            description=description,
+            skills=skills or [],
+            trigger=trigger,
+            schedule=schedule,
+            timezone=timezone,
+            model=model,
+            confirm_before_write=confirm_before_write,
+            type="page",
+        )
+        try:
+            build_agent_md(defn)
+        except AgentDefinitionError as exc:
+            raise ValueError(str(exc)) from exc
+
+        key = _agent_key(user.site, page_path, agent_name)
+        if not overwrite:
+            existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+            if existing.get("KeyCount", 0) > 0:
+                raise ValueError(
+                    f"Agent '{agent_name}' already exists on page '{page_path or '(root)'}'. "
+                    "Pass overwrite=True to replace it."
+                )
+
+        content = build_agent_md(defn)
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
+                             ContentType="text/markdown; charset=utf-8")
+        if defn.trigger == "schedule":
+            enqueue_schedule_bootstrap(key, user.user_id)
+        return {"agent_name": agent_name, "page_path": page_path, "type": "page",
+                "created_at": _now_iso()}
+
+    @mcp.tool()
+    async def agent_create_ingest(
+        agent_name: str,
+        description: str,
+        skills: list[str],
+        trigger: str = "on_write",
+        schedule: str = "",
+        timezone: str = "",
+        model: str = "",
+        overwrite: bool = False,
+        ctx: Context = None,
+    ) -> dict:
+        """Create an ingest agent — processes content staged in .user/ingest/ into wiki pages.
+
+        Ingest agents always live at .user/ingest (enforced automatically). They
+        consume uploaded or external content and write it into the wiki.
+
+        Args:
+            agent_name: Agent name (lowercase letters, digits, hyphens, underscores).
+            description: Agent purpose / system prompt instructions.
+            skills: List of skill names the agent should use.
+            trigger: "on_write" (default, runs when content is staged) or "schedule"
+                     for periodic batch processing, or "manual".
+            schedule: Cron expression — required when trigger is "schedule".
+            timezone: Timezone for scheduled agents (e.g. "America/New_York").
+            model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
+            overwrite: Set True to replace an existing agent with the same name.
+        """
+        user = _user(ctx)
+        if not AGENT_NAME_RE.match(agent_name):
+            raise ValueError(
+                f"Invalid agent name '{agent_name}'. "
+                "Use lowercase letters, digits, hyphens, underscores."
+            )
+        if trigger == "on_notify":
+            raise ValueError(
+                "Ingest agents cannot use trigger 'on_notify'. "
+                "Use agent_create_notification for notification agents."
+            )
+
+        page_path = ".user/ingest"
+        defn = AgentDefinition(
+            name=agent_name,
+            description=description,
+            skills=skills or [],
+            trigger=trigger,
+            schedule=schedule,
+            timezone=timezone,
+            model=model,
+            type="ingest",
+        )
+        try:
+            build_agent_md(defn)
+        except AgentDefinitionError as exc:
+            raise ValueError(str(exc)) from exc
+
+        key = _agent_key(user.site, page_path, agent_name)
+        if not overwrite:
+            existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+            if existing.get("KeyCount", 0) > 0:
+                raise ValueError(
+                    f"Agent '{agent_name}' already exists at .user/ingest. "
+                    "Pass overwrite=True to replace it."
+                )
+
+        content = build_agent_md(defn)
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
+                             ContentType="text/markdown; charset=utf-8")
+        if defn.trigger == "schedule":
+            enqueue_schedule_bootstrap(key, user.user_id)
+        return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
+                "created_at": _now_iso()}
+
+    @mcp.tool()
+    async def agent_create_notification(
+        agent_name: str,
+        description: str,
+        skills: list[str],
+        events: list[str],
+        model: str = "",
+        overwrite: bool = False,
+        ctx: Context = None,
+    ) -> dict:
+        """Create a notification agent — reacts to site events in the notifications log.
+
+        Notification agents always live at the site root and use trigger=on_notify
+        (both enforced automatically). They fire when specific event types are appended
+        to the site's .user/notifications.md file.
+
+        Available event types:
+          access_requested      — a user requested access to a private page
+          page_shared           — a page was shared with a user
+          page_unshared         — a user was removed from a shared page
+          page_access_changed   — a shared user's access level changed
+          page_visibility_changed — a page's visibility setting changed
+          confirm_page_change   — an agent proposed a change awaiting owner review
+
+        Args:
+            agent_name: Agent name (lowercase letters, digits, hyphens, underscores).
+            description: Agent purpose / system prompt instructions.
+            skills: List of skill names the agent should use.
+            events: Event types this agent should handle (at least one required).
+            model: Model registry key (e.g. "sonnet", "opus"). Omit to use server default.
+            overwrite: Set True to replace an existing agent with the same name.
+        """
+        user = _user(ctx)
+        if not AGENT_NAME_RE.match(agent_name):
+            raise ValueError(
+                f"Invalid agent name '{agent_name}'. "
+                "Use lowercase letters, digits, hyphens, underscores."
+            )
+        if not events:
+            raise ValueError(
+                "Notification agents require at least one event type in 'events'. "
+                "E.g. [\"page_shared\", \"access_requested\"]."
+            )
+
+        page_path = ""
+        defn = AgentDefinition(
+            name=agent_name,
+            description=description,
+            skills=skills or [],
+            trigger="on_notify",
+            model=model,
+            type="notification",
+            events=list(events),
+        )
+        try:
+            build_agent_md(defn)
+        except AgentDefinitionError as exc:
+            raise ValueError(str(exc)) from exc
+
+        key = _agent_key(user.site, page_path, agent_name)
+        if not overwrite:
+            existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+            if existing.get("KeyCount", 0) > 0:
+                raise ValueError(
+                    f"Agent '{agent_name}' already exists at the site root. "
+                    "Pass overwrite=True to replace it."
+                )
+
+        content = build_agent_md(defn)
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
+                             ContentType="text/markdown; charset=utf-8")
+        return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
+                "events": list(events), "created_at": _now_iso()}
 
     @mcp.tool()
     async def agent_read(
@@ -794,6 +1036,8 @@ def create_mcp_app(
             timezone=timezone if timezone is not None else defn.timezone,
             model=model if model is not None else defn.model,
             confirm_before_write=confirm_before_write if confirm_before_write is not None else defn.confirm_before_write,
+            type=defn.type,
+            events=defn.events,
         )
         try:
             content = build_agent_md(updated)

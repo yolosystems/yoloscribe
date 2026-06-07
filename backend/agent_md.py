@@ -30,6 +30,7 @@ class AgentDefinition:
     model: str = ""
     confirm_before_write: bool = False
     type: str = ""
+    events: list[str] = dataclasses.field(default_factory=list)
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -100,6 +101,15 @@ def parse_agent_md(text: str) -> AgentDefinition:
             f"Must be one of: {', '.join(sorted(_VALID_AGENT_TYPES))}."
         )
 
+    events_raw = fm.get("events", [])
+    events: list[str] = [events_raw] if isinstance(events_raw, str) else list(events_raw)
+    if trigger == "on_notify" and not events:
+        raise AgentDefinitionError(
+            "trigger: on_notify requires an 'events' list — "
+            "specify which notification event types this agent should handle "
+            "(e.g. events: [page_shared, access_requested])."
+        )
+
     # name and skills may come from frontmatter (new format) or body sections (old format)
     name = fm.get("name", "")
     fm_skills_raw = fm.get("skills", [])
@@ -166,6 +176,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         model=model,
         confirm_before_write=confirm_before_write,
         type=agent_type,
+        events=events,
     )
 
 
@@ -188,6 +199,10 @@ def build_agent_md(defn: AgentDefinition) -> str:
         fm_lines.append(f"model: {defn.model}")
     if defn.confirm_before_write:
         fm_lines.append("confirm_before_write: true")
+    if defn.events:
+        fm_lines.append("events:")
+        for e in defn.events:
+            fm_lines.append(f"  - {e}")
     fm_lines.append("---")
     fm_block = "\n".join(fm_lines) + "\n"
     body = (defn.description or "").strip()
