@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from strands import tool
 from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
 
 from .base import BaseAgent
@@ -61,6 +62,7 @@ class IngestAgent(BaseAgent):
 
     # ── Tool surface ──────────────────────────────────────────────────────────
 
+    @tool
     def ingest_list_pending(self) -> str:
         """List unprocessed files waiting in the ingest queue."""
         prefix = f"{self._site}/{_INGEST_PREFIX}"
@@ -79,6 +81,7 @@ class IngestAgent(BaseAgent):
             return "No pending files."
         return "\n".join(pending)
 
+    @tool
     def ingest_read(self, filename: str) -> str:
         """Read the content of a pending ingest file by its filename."""
         filename = filename.strip().lstrip("/")
@@ -88,6 +91,7 @@ class IngestAgent(BaseAgent):
             return f"File not found: {filename}"
         return content
 
+    @tool
     def ingest_mark_processed(self, filename: str) -> str:
         """Move a processed ingest file to the processed archive."""
         filename = filename.strip().lstrip("/")
@@ -101,6 +105,7 @@ class IngestAgent(BaseAgent):
         log.info("Marked as processed: %s → %s", src_key, dst_key)
         return f"Marked as processed: {filename}"
 
+    @tool
     def wiki_list_pages(self) -> str:
         """List all wiki page paths in this site."""
         prefix = f"{self._site}/"
@@ -127,6 +132,7 @@ class IngestAgent(BaseAgent):
             return "No wiki pages found."
         return "Wiki pages:\n" + "\n".join(f"- {p}" for p in sorted(pages))
 
+    @tool
     def notify_owner(self, message: str) -> str:
         """Notify the site owner that a file could not be routed automatically.
 
@@ -141,6 +147,7 @@ class IngestAgent(BaseAgent):
         log.info("IngestAgent sent ingest_unrouted notification: %s", message[:100])
         return "Owner notified. Leave the file unprocessed so the owner can review it."
 
+    @tool
     def wiki_search(self, query: str) -> str:
         """Search the wiki semantically and return matching page excerpts."""
         results = self._search.search(query, self._site, limit=10)
@@ -152,6 +159,7 @@ class IngestAgent(BaseAgent):
         ]
         return "\n\n".join(lines)
 
+    @tool
     def wiki_read(self, page_path: str) -> str:
         """Read the content of a wiki page by its page path."""
         if self._read_counter[0] >= self._max_page_reads:
@@ -164,6 +172,7 @@ class IngestAgent(BaseAgent):
         wiki = WikiPageMarkdownFile(site=self._site, page_path=page_path, storage=self._storage)
         return wiki.read()
 
+    @tool
     def wiki_write(self, page_path: str, content: str) -> str:
         """Write content to a wiki page."""
         page_path = page_path.strip().strip("/")
