@@ -86,6 +86,8 @@ const IS_MAIN_SITE = SITE === 'default'
 //   #/{page}                     →  {page}/content.md       (child page)
 //   #/.agents/{name}             →  .agents/{name}/agent.md (root agent)
 //   #/{page}/.agents/{name}      →  {page}/.agents/{name}/agent.md
+//   #/.agents/{name}/run_log.md  →  .agents/{name}/run_log.md (agent run log)
+//   #/{page}/.agents/{name}/run_log.md → {page}/.agents/{name}/run_log.md
 //   #/.skills/{name}             →  .skills/{name}/SKILL.md (site skill)
 
 function getFilePath(): string {
@@ -107,6 +109,9 @@ function getFilePath(): string {
   // {page}/.agents/{name}  or  .agents/{name}
   const agentMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)$/)
   if (agentMatch) return `${agentMatch[1] ?? ''}.agents/${agentMatch[2]}/agent.md`
+  // {page}/.agents/{name}/run_log.md  or  .agents/{name}/run_log.md
+  const runLogMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/run_log\.md$/)
+  if (runLogMatch) return `${runLogMatch[1] ?? ''}.agents/${runLogMatch[2]}/run_log.md`
   // page path
   return `${path}/content.md`
 }
@@ -120,6 +125,8 @@ function filePathToHash(fp: string): string {
   if (skillMatch) return `#/.skills/${skillMatch[1]}`
   const agentMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/agent\.md$/)
   if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
+  const runLogMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/run_log\.md$/)
+  if (runLogMatch) return `#/${runLogMatch[1] ?? ''}.agents/${runLogMatch[2]}/run_log.md`
   const pageMatch = fp.match(/^(.+)\/content\.md$/)
   if (pageMatch) return `#/${pageMatch[1]}`
   return ''
