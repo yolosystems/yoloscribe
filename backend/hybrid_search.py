@@ -32,6 +32,13 @@ def _rrf_score(rank: int, k: int = _RRF_K) -> float:
     return 1.0 / (k + rank + 1)
 
 
+def _result_key(r: dict) -> str:
+    """Dedup key: agents are keyed by (page_path, agent_name); content by page_path."""
+    if r.get("doc_type") == "agent":
+        return f"agent:{r['page_path']}:{r.get('agent_name', '')}"
+    return f"content:{r['page_path']}"
+
+
 def rrf_fuse(
     keyword_results: list[dict],
     semantic_results: list[dict],
@@ -42,30 +49,37 @@ def rrf_fuse(
     sorted by descending fused score, with both source scores attached.
     """
     scores: dict[str, float] = {}
-    kw_excerpts: dict[str, str] = {}
-    sem_previews: dict[str, str] = {}
+    meta: dict[str, dict] = {}
 
     for rank, r in enumerate(keyword_results):
-        pp = r["page_path"]
-        scores[pp] = scores.get(pp, 0.0) + _rrf_score(rank)
-        if pp not in kw_excerpts:
-            kw_excerpts[pp] = r.get("excerpt", "")
+        k = _result_key(r)
+        scores[k] = scores.get(k, 0.0) + _rrf_score(rank)
+        if k not in meta:
+            meta[k] = {**r, "excerpt": r.get("excerpt", "")}
 
     for rank, r in enumerate(semantic_results):
-        pp = r["page_path"]
-        scores[pp] = scores.get(pp, 0.0) + _rrf_score(rank)
-        if pp not in sem_previews:
-            sem_previews[pp] = r.get("content_preview", "")
+        k = _result_key(r)
+        scores[k] = scores.get(k, 0.0) + _rrf_score(rank)
+        if k not in meta:
+            meta[k] = {**r, "excerpt": r.get("content_preview", "")}
+        elif not meta[k].get("excerpt"):
+            meta[k]["excerpt"] = r.get("content_preview", "")
 
-    ranked = sorted(scores, key=lambda p: scores[p], reverse=True)
-    return [
-        {
-            "page_path": pp,
-            "score": scores[pp],
-            "excerpt": kw_excerpts.get(pp) or sem_previews.get(pp, ""),
+    ranked = sorted(scores, key=lambda k: scores[k], reverse=True)
+    results = []
+    for k in ranked:
+        r = meta[k]
+        entry: dict = {
+            "page_path": r["page_path"],
+            "score": scores[k],
+            "excerpt": r.get("excerpt", ""),
         }
-        for pp in ranked
-    ]
+        if r.get("doc_type"):
+            entry["doc_type"] = r["doc_type"]
+        if r.get("agent_name"):
+            entry["agent_name"] = r["agent_name"]
+        results.append(entry)
+    return results
 
 
 # ── Query expansion ───────────────────────────────────────────────────────────
@@ -111,12 +125,13 @@ def keyword_search(
     query: str,
     tags: list[str] | None = None,
     limit: int = 30,
+    doc_type: str = "content",
 ) -> list[dict]:
     """Search the SQLite FTS5 index. Returns [] if index is unavailable."""
     db_path = get_db_path(s3, bucket, site)
     if not db_path:
         return []
-    return fts_query(db_path, query, limit=limit, tags=tags)
+    return fts_query(db_path, query, limit=limit, tags=tags, doc_type=doc_type)
 
 
 # ── Semantic search ───────────────────────────────────────────────────────────
@@ -132,6 +147,7 @@ def semantic_search(
     vectors_index: str,
     tags: list[str] | None = None,
     limit: int = 30,
+    doc_type: str = "content",
 ) -> list[dict]:
     """Embed query and query S3 Vectors. Returns [] if not configured."""
     if not s3vectors_client or not vectors_bucket:
@@ -167,8 +183,14 @@ def semantic_search(
         metadata = vec.get("metadata", {})
         path = metadata.get("path", "")
         vec_tags: list[str] = metadata.get("tags") or []
+        vec_doc_type: str = metadata.get("doc_type", "content")
+        vec_agent_name: str = metadata.get("agent_name", "")
 
         if not path.startswith(site_prefix):
+            continue
+
+        # Post-filter by doc_type
+        if doc_type != "all" and vec_doc_type != doc_type:
             continue
 
         # Post-filter by tags if requested
@@ -176,24 +198,48 @@ def semantic_search(
             continue
 
         relative = path[len(site_prefix):]
-        page_path = "" if relative == "content.md" else relative[:-len("/content.md")]
 
-        # Fetch chunk preview
-        preview = ""
-        try:
-            page_dir = path.rsplit("/", 1)[0]
-            chunk_key = f"{page_dir}/.chunks/{vec['key']}"
-            chunk_obj = s3.get_object(Bucket=bucket, Key=chunk_key)
-            chunk_data = json.loads(chunk_obj["Body"].read())
-            preview = chunk_data.get("text", "")[:400]
-        except Exception:
-            pass
-
-        results.append({
-            "page_path": page_path,
-            "similarity_score": float(vec.get("score", 0.0)),
-            "content_preview": preview,
-        })
+        if vec_doc_type == "agent":
+            # path is like "blog/.agents/sync/agent.md"
+            # page_path is everything before "/.agents/"
+            agent_parts = relative.split("/.agents/")
+            page_path = "" if len(agent_parts) < 2 else agent_parts[0]
+            agent_name = vec_agent_name or (agent_parts[1].replace("/agent.md", "") if len(agent_parts) == 2 else "")
+            # Fetch chunk preview from agent chunk location
+            preview = ""
+            try:
+                agent_dir = path[:-len("/agent.md")]
+                chunk_key = f"{agent_dir}/.chunks/{vec['key']}"
+                chunk_obj = s3.get_object(Bucket=bucket, Key=chunk_key)
+                chunk_data = json.loads(chunk_obj["Body"].read())
+                preview = chunk_data.get("text", "")[:400]
+            except Exception:
+                pass
+            results.append({
+                "page_path": page_path,
+                "agent_name": agent_name,
+                "doc_type": "agent",
+                "similarity_score": float(vec.get("score", 0.0)),
+                "content_preview": preview,
+            })
+        else:
+            page_path = "" if relative == "content.md" else relative[:-len("/content.md")]
+            # Fetch chunk preview
+            preview = ""
+            try:
+                page_dir = path.rsplit("/", 1)[0]
+                chunk_key = f"{page_dir}/.chunks/{vec['key']}"
+                chunk_obj = s3.get_object(Bucket=bucket, Key=chunk_key)
+                chunk_data = json.loads(chunk_obj["Body"].read())
+                preview = chunk_data.get("text", "")[:400]
+            except Exception:
+                pass
+            results.append({
+                "page_path": page_path,
+                "doc_type": "content",
+                "similarity_score": float(vec.get("score", 0.0)),
+                "content_preview": preview,
+            })
 
         if len(results) >= limit:
             break
@@ -215,6 +261,7 @@ def hybrid_search(
     tags: list[str] | None = None,
     limit: int = 20,
     expand: bool = False,
+    doc_type: str = "content",
 ) -> list[dict]:
     """Run the full hybrid pipeline and return RRF-fused results.
 
@@ -232,8 +279,8 @@ def hybrid_search(
     seen_sem: set[str] = set()
 
     for q in queries:
-        for r in keyword_search(s3, bucket, site, q, tags=tags, limit=limit * 2):
-            key = r["page_path"]
+        for r in keyword_search(s3, bucket, site, q, tags=tags, limit=limit * 2, doc_type=doc_type):
+            key = _result_key(r)
             if key not in seen_kw:
                 seen_kw.add(key)
                 all_keyword.append(r)
@@ -245,8 +292,9 @@ def hybrid_search(
             vectors_index=vectors_index,
             tags=tags,
             limit=limit * 2,
+            doc_type=doc_type,
         ):
-            key = r["page_path"]
+            key = _result_key(r)
             if key not in seen_sem:
                 seen_sem.add(key)
                 all_semantic.append(r)

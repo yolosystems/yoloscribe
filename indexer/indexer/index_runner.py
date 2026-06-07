@@ -23,8 +23,8 @@ from uuid import uuid4
 
 import boto3
 
-from .chunker import chunk_markdown
-from .fts_index import download_or_create, update_page, upload
+from .chunker import chunk_markdown, parse_frontmatter_tags
+from .fts_index import delete_agents_for_page, download_or_create, update_page, upload
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -130,8 +130,8 @@ def main() -> None:
     log.info("Produced %d chunks from %s", len(chunks), content_key)
 
     if not chunks:
-        log.info("No content to index — updating FTS with empty page and exiting.")
-        _update_fts(s3, bucket, site, page_path, [])
+        log.info("No content to index — updating FTS with empty page (agents still indexed).")
+        _update_fts_with_agents(s3, bucket, site, page_path, page_dir, [], bedrock, s3vectors, user_id)
         return
 
     # Embed and store each chunk in S3 + S3 Vectors
@@ -151,7 +151,7 @@ def main() -> None:
             log.error("Failed to embed chunk %s: %s — skipping", chunk_id, exc)
             continue
         try:
-            metadata: dict = {"user_id": user_id, "path": content_key}
+            metadata: dict = {"user_id": user_id, "path": content_key, "doc_type": "content"}
             if chunk["tags"]:
                 metadata["tags"] = chunk["tags"]
             s3vectors.put_vectors(
@@ -167,8 +167,8 @@ def main() -> None:
         except Exception as exc:
             log.error("Failed to store vector for chunk %s: %s — skipping", chunk_id, exc)
 
-    # Build / update SQLite FTS5 index
-    _update_fts(s3, bucket, site, page_path, chunks)
+    # Build / update SQLite FTS5 index and index co-located agents
+    _update_fts_with_agents(s3, bucket, site, page_path, page_dir, chunks, bedrock, s3vectors, user_id)
 
     elapsed = time.time() - start
     log.info(
@@ -177,18 +177,179 @@ def main() -> None:
     )
 
 
-def _update_fts(s3, bucket: str, site: str, page_path: str, chunks: list[dict]) -> None:
+def _update_fts_with_agents(
+    s3,
+    bucket: str,
+    site: str,
+    page_path: str,
+    page_dir: str,
+    chunks: list[dict],
+    bedrock,
+    s3vectors,
+    user_id: str,
+) -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
     try:
         download_or_create(s3, bucket, site, db_path)
         update_page(db_path, page_path, chunks)
+        # Re-index all agents co-located under this page
+        _index_page_agents(s3, bucket, site, page_path, page_dir, db_path, bedrock, s3vectors, user_id)
         upload(s3, bucket, site, db_path)
     finally:
         try:
             os.unlink(db_path)
         except OSError:
             pass
+
+
+def _agent_text(content: str, agent_name: str) -> str:
+    """Build a searchable text blob from an agent.md file."""
+    _, fm, body = _split_agent_md(content)
+    parts = []
+    if body.strip():
+        parts.append(body.strip())
+    # Append structured frontmatter fields as searchable text
+    for field in ("trigger", "schedule", "skills", "model", "type"):
+        val = _fm_field(fm, field)
+        if val:
+            parts.append(f"{field}: {val}")
+    parts.append(f"agent: {agent_name}")
+    return "\n".join(parts)
+
+
+def _split_agent_md(content: str) -> tuple[str, str, str]:
+    """Return (raw, frontmatter_block, body) from agent.md content."""
+    import re
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if m:
+        return content, m.group(1), content[m.end():]
+    return content, "", content
+
+
+def _fm_field(fm: str, field: str) -> str:
+    import re
+    # Handle list fields (skills): join items
+    block = re.search(rf"^{field}:\s*\n((?:[ \t]*-[ \t]+.+\n?)*)", fm, re.MULTILINE)
+    if block:
+        items = [re.sub(r"^[ \t]*-[ \t]+", "", line).strip()
+                 for line in block.group(1).splitlines() if line.strip()]
+        return ", ".join(items)
+    inline = re.search(rf"^{field}:\s*(.+)", fm, re.MULTILINE)
+    if inline:
+        return inline.group(1).strip()
+    return ""
+
+
+def _index_page_agents(
+    s3,
+    bucket: str,
+    site: str,
+    page_path: str,
+    page_dir: str,
+    db_path: str,
+    bedrock,
+    s3vectors,
+    user_id: str,
+) -> None:
+    """Index all agent.md files under {page_dir}/.agents/ into FTS and S3 Vectors."""
+    agents_prefix = f"{page_dir}/.agents/"
+    try:
+        paginator = s3.get_paginator("list_objects_v2")
+        agent_keys = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=agents_prefix):
+            for obj in page.get("Contents", []):
+                if obj["Key"].endswith("/agent.md"):
+                    agent_keys.append(obj["Key"])
+    except Exception as exc:
+        log.warning("Failed to list agents for %s: %s", page_dir, exc)
+        return
+
+    # Clear existing agent FTS rows for this page before re-adding
+    delete_agents_for_page(db_path, page_path)
+
+    # Delete existing agent vectors for this page
+    agent_chunks_prefix = f"{page_dir}/.agents/"
+    try:
+        existing_agent_chunk_keys = []
+        existing_agent_vector_ids = []
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=agent_chunks_prefix):
+            for obj in page.get("Contents", []):
+                if "/.chunks/" in obj["Key"]:
+                    existing_agent_chunk_keys.append({"Key": obj["Key"]})
+                    existing_agent_vector_ids.append(obj["Key"].split("/")[-1])
+        if existing_agent_chunk_keys:
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": existing_agent_chunk_keys, "Quiet": True})
+        if existing_agent_vector_ids and s3vectors and S3_VECTORS_BUCKET:
+            for i in range(0, len(existing_agent_vector_ids), 100):
+                try:
+                    s3vectors.delete_vectors(
+                        vectorBucketName=S3_VECTORS_BUCKET,
+                        indexName=S3_VECTORS_INDEX_NAME,
+                        keys=existing_agent_vector_ids[i:i + 100],
+                    )
+                except Exception as exc:
+                    log.warning("Failed to delete agent vectors: %s", exc)
+    except Exception as exc:
+        log.warning("Failed to clean up old agent chunks: %s", exc)
+
+    for agent_key in agent_keys:
+        # e.g. "knuth/blog/.agents/sync/agent.md" → agent_name = "sync"
+        parts = agent_key.split("/.agents/")
+        if len(parts) != 2:
+            continue
+        agent_name = parts[1].replace("/agent.md", "")
+
+        try:
+            raw = s3.get_object(Bucket=bucket, Key=agent_key)["Body"].read().decode("utf-8")
+        except Exception as exc:
+            log.warning("Failed to read agent.md %s: %s", agent_key, exc)
+            continue
+
+        text = _agent_text(raw, agent_name)
+        if not text.strip():
+            continue
+
+        chunk_id = str(uuid4())
+        agent_dir = agent_key[:-len("/agent.md")]
+
+        # Store chunk in S3
+        chunk_data = {"text": text, "tags": [], "source": agent_key}
+        try:
+            s3.put_object(
+                Bucket=bucket,
+                Key=f"{agent_dir}/.chunks/{chunk_id}",
+                Body=json.dumps(chunk_data).encode("utf-8"),
+                ContentType="application/json",
+            )
+        except Exception as exc:
+            log.warning("Failed to store agent chunk for %s: %s", agent_key, exc)
+            continue
+
+        # Embed and store in S3 Vectors
+        if s3vectors and S3_VECTORS_BUCKET:
+            try:
+                embedding = _embed_with_retry(bedrock, text)
+                s3vectors.put_vectors(
+                    vectorBucketName=S3_VECTORS_BUCKET,
+                    indexName=S3_VECTORS_INDEX_NAME,
+                    vectors=[{
+                        "key": chunk_id,
+                        "data": {"float32": embedding},
+                        "metadata": {
+                            "user_id": user_id,
+                            "path": agent_key,
+                            "doc_type": "agent",
+                            "agent_name": agent_name,
+                        },
+                    }],
+                )
+            except Exception as exc:
+                log.warning("Failed to embed/store vector for agent %s: %s", agent_key, exc)
+
+        # Update FTS
+        update_page(db_path, page_path, [{"text": text, "tags": []}], doc_type="agent", agent_name=agent_name)
+        log.info("Indexed agent: %s on page %s", agent_name, page_path or "(root)")
 
 
 if __name__ == "__main__":
