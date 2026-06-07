@@ -2,7 +2,7 @@ REGISTRY    := ghcr.io
 GITHUB_USER ?= nate-yolodev
 IMAGE       := $(REGISTRY)/$(GITHUB_USER)/yoloscribe-indexer
 TAG         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo latest)
-PLATFORM    := linux/amd64
+PLATFORM    := linux/amd64,linux/arm64
 
 .PHONY: lock login release
 

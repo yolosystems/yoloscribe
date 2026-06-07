@@ -3,7 +3,7 @@ GITHUB_USER ?= nate-yolodev
 IMAGE       := $(REGISTRY)/$(GITHUB_USER)/yoloscribe-agent-runner
 LOCAL_IMAGE := $(IMAGE)-local
 TAG         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo latest)
-PLATFORM    := linux/amd64
+PLATFORM    := linux/amd64,linux/arm64
 
 .PHONY: lock login release release-local
 
