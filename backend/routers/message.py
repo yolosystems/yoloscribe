@@ -87,6 +87,7 @@ async def message(
             message=req.message,
             site=site,
             history=history,
+            user_id=user_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
