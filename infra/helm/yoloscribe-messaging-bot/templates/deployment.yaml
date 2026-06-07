@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yoloscribe-messaging-bot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yoloscribe-messaging-bot.labels" . | nindent 4 }}
+spec:
+  # Messaging bots are stateful (persistent WebSocket connections).
+  # Run as a single replica; horizontal scaling requires platform-specific sharding.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "yoloscribe-messaging-bot.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yoloscribe-messaging-bot.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.ghcr.pat }}
+      imagePullSecrets:
+        - name: {{ include "yoloscribe-messaging-bot.fullname" . }}-ghcr
+      {{- end }}
+      containers:
+        - name: messaging-bot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: YOLOSCRIBE_API_URL
+              value: {{ .Values.config.yoloscribeApiUrl | quote }}
+            - name: SUPABASE_URL
+              value: {{ .Values.config.supabaseUrl | quote }}
+            - name: ENABLED_ADAPTERS
+              value: {{ .Values.config.enabledAdapters | quote }}
+            - name: MESSAGING_AES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-messaging-bot.fullname" . }}
+                  key: messaging-aes-key
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-messaging-bot.fullname" . }}
+                  key: supabase-service-role-key
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-messaging-bot.fullname" . }}
+                  key: discord-bot-token
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
