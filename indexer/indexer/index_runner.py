@@ -75,6 +75,12 @@ def main() -> None:
     if not S3_VECTORS_BUCKET:
         parser.error("S3_VECTORS_BUCKET env var is required")
 
+    # Skip .user/ paths — platform/system files should not appear in search results.
+    # Ingest content is ephemeral staging; it belongs in wiki pages (which are indexed).
+    if "/.user/" in content_key:
+        log.info("Skipping .user/ path (not wiki content): %s", content_key)
+        return
+
     start = time.time()
 
     session = boto3.Session(profile_name=AWS_PROFILE or None)
