@@ -88,10 +88,16 @@ You have access to the following tools:
                         have content for, say so rather than inventing a URL.
 - content_writer      — use when the user wants to add, edit, or rewrite wiki
                         content on the current page.
-- creator             — use when the user wants to define a new AI agent for
-                        the current page, OR edit/update an existing agent.md.
-                        This is the only tool that writes agent.md files.
-                        After successfully creating an agent, ask the user:
+- creator             — use when the user wants to define a new AI agent, OR
+                        edit/update an existing agent.md. Handles all three types:
+                          • page — reads/writes a specific wiki page
+                          • ingest — processes content staged in .user/ingest/
+                          • notification — reacts to site events (on_notify)
+                        The creator guides the user through type selection, skills,
+                        trigger, and description. You do not need to navigate to
+                        .user/ingest or .user/notifications first — placement is
+                        handled automatically. This is the only tool that writes
+                        agent.md files. After successfully creating an agent, ask:
                         "Would you like to run this agent now?" If yes, use runner.
 - page_creator        — use when the user wants to create a new page or child
                         page under the current site.

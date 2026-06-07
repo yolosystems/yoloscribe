@@ -12,6 +12,7 @@ import re
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _MAX_DESCRIPTION_CHARS = 4_096
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
+_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification"})
 
 
 class AgentDefinitionError(ValueError):
@@ -28,6 +29,8 @@ class AgentDefinition:
     timezone: str = ""
     model: str = ""
     confirm_before_write: bool = False
+    type: str = ""
+    events: list[str] = dataclasses.field(default_factory=list)
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -90,6 +93,22 @@ def parse_agent_md(text: str) -> AgentDefinition:
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
     confirm_before_write = str(fm.get("confirm_before_write", "")).lower() in ("true", "yes", "1")
+
+    agent_type = str(fm.get("type", "page")).strip()
+    if agent_type and agent_type not in _VALID_AGENT_TYPES:
+        raise AgentDefinitionError(
+            f"Invalid type '{agent_type}'. "
+            f"Must be one of: {', '.join(sorted(_VALID_AGENT_TYPES))}."
+        )
+
+    events_raw = fm.get("events", [])
+    events: list[str] = [events_raw] if isinstance(events_raw, str) else list(events_raw)
+    if trigger == "on_notify" and not events:
+        raise AgentDefinitionError(
+            "trigger: on_notify requires an 'events' list — "
+            "specify which notification event types this agent should handle "
+            "(e.g. events: [page_shared, access_requested])."
+        )
 
     # name and skills may come from frontmatter (new format) or body sections (old format)
     name = fm.get("name", "")
@@ -156,6 +175,8 @@ def parse_agent_md(text: str) -> AgentDefinition:
         timezone=timezone,
         model=model,
         confirm_before_write=confirm_before_write,
+        type=agent_type,
+        events=events,
     )
 
 
@@ -164,6 +185,8 @@ def build_agent_md(defn: AgentDefinition) -> str:
     fm_lines = ["---", f"trigger: {defn.trigger}"]
     if defn.name:
         fm_lines.append(f"name: {defn.name}")
+    if defn.type:
+        fm_lines.append(f"type: {defn.type}")
     if defn.schedule:
         fm_lines.append(f"schedule: {defn.schedule}")
     if defn.timezone:
@@ -176,6 +199,10 @@ def build_agent_md(defn: AgentDefinition) -> str:
         fm_lines.append(f"model: {defn.model}")
     if defn.confirm_before_write:
         fm_lines.append("confirm_before_write: true")
+    if defn.events:
+        fm_lines.append("events:")
+        for e in defn.events:
+            fm_lines.append(f"  - {e}")
     fm_lines.append("---")
     fm_block = "\n".join(fm_lines) + "\n"
     body = (defn.description or "").strip()

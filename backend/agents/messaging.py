@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 from strands import Agent, tool
 
 from .models import build_strands_model, resolve_model_key
+from .base import SiteTools
+from .creator import CreatorAgent
 from yoloscribe_io import S3StorageBackend, WikiPageMarkdownFile
 
 if TYPE_CHECKING:
@@ -33,6 +35,15 @@ You have the following tools:
 - read_page    — read any page by its path
 - write_page   — write updated content to any page
 - search_wiki  — search across the wiki for content matching a query
+- creator      — create or edit an AI agent definition. Use this when the user
+                 asks to create any kind of agent. Handles three agent types:
+                   • page — reads/writes a specific wiki page
+                   • ingest — processes content staged in .user/ingest/ and
+                              writes it into wiki pages
+                   • notification — reacts to site events such as access
+                              requests or page sharing (trigger: on_notify)
+                 You do NOT need to tell the user to navigate anywhere first —
+                 the creator places agents in the correct location automatically.
 
 HOW TO RESPOND:
 - Answer questions directly using information from the wiki. Use read_page or \
@@ -40,6 +51,8 @@ search_wiki to find relevant content before answering.
 - If the user asks about the wiki's structure or what pages exist, use list_pages.
 - If the user wants to update a page, confirm what they want changed, then use \
 write_page with the complete updated content.
+- If the user wants to create an agent, use creator. The creator will ask the \
+right questions to determine the agent type, skills, trigger, and description.
 - If you're not sure which page is relevant, use search_wiki first.
 - Keep responses concise and conversational — this is a messaging interface, not \
 a document editor.
@@ -186,9 +199,27 @@ class MessagingAgent:
         message: str,
         site: str,
         history: list[dict[str, str]],
+        user_id: str = "",
     ) -> tuple[str, int]:
         """Process a message and return (reply, tokens_used)."""
         tools_obj = MessagingTools(site=site, s3=self._s3, bucket=self._bucket)
+        site_tools = SiteTools(site, tools_obj._storage, user_id=user_id)
+
+        @tool
+        def creator(instruction: str) -> str:
+            """Create or edit an AI agent definition for this wiki site.
+
+            Use this when the user wants to define a new agent (page, ingest, or
+            notification type) or edit an existing one.
+
+            Args:
+                instruction: The user's agent creation or editing request.
+            """
+            agent = CreatorAgent(
+                site_tools=site_tools,
+                page_path="(root)",
+            )
+            return str(agent(f"Site: {site}\n\n{instruction}"))
 
         agent = Agent(
             system_prompt=_SYSTEM_PROMPT.format(site=site),
@@ -198,6 +229,7 @@ class MessagingAgent:
                 tools_obj.read_page,
                 tools_obj.write_page,
                 tools_obj.search_wiki,
+                creator,
             ],
             callback_handler=None,
             load_tools_from_directory=False,

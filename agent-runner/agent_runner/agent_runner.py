@@ -680,7 +680,16 @@ def _make_agent(
     content_key: str = "",
 ):
     """Select and instantiate the appropriate agent subclass for this run."""
+    # trigger=on_notify and page_path=.user/ingest are strong invariants that
+    # win regardless of the type: field (handles agents predating the field).
     if agent_def.trigger == "on_notify":
+        agent_type = "notification"
+    elif page_path == ".user/ingest":
+        agent_type = "ingest"
+    else:
+        agent_type = getattr(agent_def, "type", "") or "page"
+
+    if agent_type == "notification":
         return NotificationAgent(
             agent_def=agent_def,
             site=site,
@@ -694,7 +703,7 @@ def _make_agent(
             max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
         )
 
-    if page_path == ".user/ingest":
+    if agent_type == "ingest":
         return IngestAgent(
             agent_def=agent_def,
             site=site,

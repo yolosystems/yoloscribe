@@ -495,3 +495,56 @@ def test_ref_agent_events_preserved_when_set():
     )
     defn = parse_agent_md(text)
     assert defn.events == ["page_shared"]
+
+
+# ── type field ────────────────────────────────────────────────────────────────
+
+def test_parse_type_page():
+    text = "---\ntrigger: on_write\nname: n\ntype: page\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.type == "page"
+
+
+def test_parse_type_ingest():
+    text = "---\ntrigger: on_write\nname: n\ntype: ingest\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.type == "ingest"
+
+
+def test_parse_type_notification():
+    text = "---\ntrigger: on_notify\nname: n\ntype: notification\nevents:\n  - page_shared\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.type == "notification"
+
+
+def test_parse_type_absent_defaults_to_page():
+    text = "---\ntrigger: on_write\nname: n\n---\n"
+    defn = parse_agent_md(text)
+    assert defn.type == "page"
+
+
+def test_parse_type_invalid_raises():
+    text = "---\ntrigger: on_write\nname: n\ntype: robot\n---\n"
+    with pytest.raises(AgentDefinitionError, match="type"):
+        parse_agent_md(text)
+
+
+def test_build_type_field_included():
+    defn = AgentDefinition(name="n", trigger="on_write", type="ingest")
+    text = build_agent_md(defn)
+    assert "type: ingest" in text
+
+
+def test_build_type_omitted_when_empty():
+    defn = AgentDefinition(name="n", trigger="on_write")
+    text = build_agent_md(defn)
+    assert "type:" not in text
+
+
+def test_type_roundtrip():
+    for agent_type in ("page", "ingest", "notification"):
+        events = ["page_shared"] if agent_type == "notification" else []
+        trigger = "on_notify" if agent_type == "notification" else "on_write"
+        defn = AgentDefinition(name="n", trigger=trigger, type=agent_type, events=events)
+        parsed = parse_agent_md(build_agent_md(defn))
+        assert parsed.type == agent_type

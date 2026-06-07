@@ -117,6 +117,7 @@ Full format (definition agents) — all metadata in YAML frontmatter, free-form 
 ---
 trigger: manual|schedule|on_write|on_notify
 name: {name}
+type: page|ingest|notification  # optional; explicit agent class dispatch (omit to use heuristics)
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
 skills:
@@ -133,6 +134,13 @@ confirm_before_write: true  # optional; when true, writes go to .proposed.conten
 - `schedule` — K8s CronJob (requires `schedule:` cron expression); `concurrencyPolicy: Forbid` prevents overlapping runs
 - `on_write` — fires when the agent's page `content.md` is updated; agents are looked up under the page's `.agents/` directory
 - `on_notify` — fires when a new entry is appended to the site's `notifications.md`; agents are looked up under the site root's `.agents/` directory; `agent_success` and `agent_failure` events never trigger `on_notify` to prevent feedback loops
+
+**Agent types (`type:` field):**
+- `page` — wiki page agent; reads and writes `content.md` on a wiki page (default when `type:` is absent and trigger is not `on_notify` and page is not `.user/ingest`)
+- `ingest` — ingest agent; processes content staged in `.user/ingest/` and writes it into wiki pages; must be placed on `.user/ingest`
+- `notification` — notification agent; handles entries in `.user/notifications.md`; must use `trigger: on_notify` and be placed at the site root
+
+The `type:` field drives explicit dispatch in the agent-runner. When absent, the runner falls back to heuristics: `trigger == on_notify` → `notification`; `page_path == .user/ingest` → `ingest`; otherwise → `page`.
 
 **Notification system** (`backend/notifications.py`):
 

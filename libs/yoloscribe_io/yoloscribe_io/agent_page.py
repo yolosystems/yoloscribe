@@ -13,6 +13,7 @@ from .storage import StorageBackend
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
+_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification"})
 
 
 # ── Error ─────────────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ class AgentDefinition:
     ref: str = ""
     scope: Scope = field(default_factory=Scope)
     events: list[str] = field(default_factory=list)
+    type: str = ""
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
@@ -129,6 +131,13 @@ def parse_agent_md(text: str) -> AgentDefinition:
     timezone = str(fm.get("timezone", "")).strip()
     model = str(fm.get("model", "")).strip()
     confirm_before_write = bool(fm.get("confirm_before_write", False))
+
+    agent_type = str(fm.get("type", "page")).strip()
+    if agent_type and agent_type not in _VALID_AGENT_TYPES:
+        raise AgentDefinitionError(
+            f"Invalid type '{agent_type}'. "
+            f"Must be one of: {', '.join(sorted(_VALID_AGENT_TYPES))}."
+        )
 
     name = str(fm.get("name", "")).strip()
     fm_skills_raw = fm.get("skills", [])
@@ -199,6 +208,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         confirm_before_write=confirm_before_write,
         scope=scope,
         events=events,
+        type=agent_type,
     )
 
 
@@ -209,6 +219,8 @@ def build_agent_md(defn: AgentDefinition) -> str:
     lines = ["---", f"trigger: {defn.trigger}"]
     if defn.name:
         lines.append(f"name: {defn.name}")
+    if defn.type:
+        lines.append(f"type: {defn.type}")
     if defn.ref:
         lines.append(f"ref: {defn.ref}")
     if defn.schedule:
