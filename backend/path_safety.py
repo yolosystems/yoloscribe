@@ -23,6 +23,8 @@ SAFE_PATH = re.compile(
     r"|\.user/ingest/content\.md"
     rf"|\.user/ingest/{_AGENT_NAME_SEG}/content\.md"
     rf"|\.user/ingest/{_AGENT_NAME_SEG}/settings\.json"
+    rf"|\.user/ingest/\.agents/{_AGENT_NAME_SEG}/agent\.md"
+    rf"|\.user/ingest/\.agents/{_AGENT_NAME_SEG}/run_log\.md"
     r")$"
 )
 

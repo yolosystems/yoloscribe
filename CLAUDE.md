@@ -137,7 +137,7 @@ confirm_before_write: true  # optional; when true, writes go to .proposed.conten
 
 **Agent types (`type:` field):**
 - `page` — wiki page agent; reads and writes `content.md` on a wiki page (default when `type:` is absent and trigger is not `on_notify` and page is not `.user/ingest`)
-- `ingest` — ingest agent; processes content staged in `.user/ingest/` and writes it into wiki pages; must be placed on `.user/ingest`
+- `ingest` — ingest agent; processes content staged in `.user/ingest/` and routes it to wiki pages using semantic search against the wiki's own structure; must be placed on `.user/ingest`. The page `.user/ingest/content.md` serves as an owner-editable routing instructions file — plain-text hints (e.g. "meeting notes go under meetings/") that are injected into the agent's system prompt on every run and take priority over the agent's own judgement.
 - `notification` — notification agent; handles entries in `.user/notifications.md`; must use `trigger: on_notify` and be placed at the site root
 
 The `type:` field drives explicit dispatch in the agent-runner. When absent, the runner falls back to heuristics: `trigger == on_notify` → `notification`; `page_path == .user/ingest` → `ingest`; otherwise → `page`.
@@ -163,6 +163,7 @@ Event types and their sources:
 | `agent_success` | agent-runner (never triggers `on_notify`) |
 | `agent_failure` | agent-runner + polling_worker (never triggers `on_notify`) |
 | `confirm_page_change` | agent-runner (propose mode; DOES trigger `on_notify`) |
+| `ingest_unrouted` | IngestAgent (`notify_owner` tool; DOES trigger `on_notify`) |
 
 **Backward-compatible old format** (still parseable but no longer generated):
 ```markdown
