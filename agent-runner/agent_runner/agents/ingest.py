@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from strands_tools import http_request
 from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
 
 from .base import BaseAgent
@@ -235,7 +234,6 @@ class IngestAgent(BaseAgent):
         self._owner_instructions = self._read_owner_instructions()
 
         tools = [
-            http_request,
             self.ingest_list_pending,
             self.ingest_read,
             self.ingest_mark_processed,
