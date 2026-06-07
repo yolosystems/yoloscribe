@@ -8,15 +8,14 @@
 
 import { ENABLED_ADAPTERS } from './config.js'
 import type { MessageHandler, PlatformAdapter } from './types.js'
-import { fetchContent, sendChat, RateLimitError } from './yoloscribe.js'
+import { sendMessage, RateLimitError } from './yoloscribe.js'
 
 async function handleMessage(adapter: PlatformAdapter): Promise<MessageHandler> {
   return async (msg) => {
-    const { token, siteName } = await msg.credentials()
-    const currentContent = await fetchContent(token, siteName, msg.filePath)
+    const { token } = await msg.credentials()
 
     try {
-      const reply = await sendChat(token, siteName, msg.filePath, msg.text, currentContent)
+      const reply = await sendMessage(token, adapter.platform, msg.channelId, msg.text)
       await msg.reply(reply)
       await msg.ack('success')
     } catch (err) {
