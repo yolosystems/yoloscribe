@@ -4,6 +4,7 @@ from .chat import router as chat_router
 from .content import router as content_router
 from .health import router as health_router
 from .mcp_oauth import router as mcp_oauth_router
+from .message import router as message_router
 from .messaging import router as messaging_router
 from .oauth import router as oauth_router
 from .obsidian import router as obsidian_router
@@ -24,6 +25,7 @@ __all__ = [
     "content_router",
     "health_router",
     "mcp_oauth_router",
+    "message_router",
     "messaging_router",
     "oauth_router",
     "obsidian_router",
