@@ -12,6 +12,7 @@ import re
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _MAX_DESCRIPTION_CHARS = 4_096
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
+_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification"})
 
 
 class AgentDefinitionError(ValueError):
@@ -28,6 +29,7 @@ class AgentDefinition:
     timezone: str = ""
     model: str = ""
     confirm_before_write: bool = False
+    type: str = ""
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -90,6 +92,13 @@ def parse_agent_md(text: str) -> AgentDefinition:
     timezone = fm.get("timezone", "")
     model = fm.get("model", "")
     confirm_before_write = str(fm.get("confirm_before_write", "")).lower() in ("true", "yes", "1")
+
+    agent_type = str(fm.get("type", "")).strip()
+    if agent_type and agent_type not in _VALID_AGENT_TYPES:
+        raise AgentDefinitionError(
+            f"Invalid type '{agent_type}'. "
+            f"Must be one of: {', '.join(sorted(_VALID_AGENT_TYPES))}."
+        )
 
     # name and skills may come from frontmatter (new format) or body sections (old format)
     name = fm.get("name", "")
@@ -156,6 +165,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         timezone=timezone,
         model=model,
         confirm_before_write=confirm_before_write,
+        type=agent_type,
     )
 
 
@@ -164,6 +174,8 @@ def build_agent_md(defn: AgentDefinition) -> str:
     fm_lines = ["---", f"trigger: {defn.trigger}"]
     if defn.name:
         fm_lines.append(f"name: {defn.name}")
+    if defn.type:
+        fm_lines.append(f"type: {defn.type}")
     if defn.schedule:
         fm_lines.append(f"schedule: {defn.schedule}")
     if defn.timezone:

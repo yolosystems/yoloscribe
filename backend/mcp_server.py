@@ -628,6 +628,7 @@ def create_mcp_app(
             "name": defn.name,
             "page_path": page_path,
             "trigger": defn.trigger,
+            "type": defn.type,
             "description": defn.description,
             "skills": defn.skills,
             "schedule": defn.schedule,
