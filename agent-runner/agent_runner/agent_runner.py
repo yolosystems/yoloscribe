@@ -680,16 +680,14 @@ def _make_agent(
     content_key: str = "",
 ):
     """Select and instantiate the appropriate agent subclass for this run."""
-    # Explicit type field takes priority; fall back to heuristics for agents
-    # that predate the type: field.
-    agent_type = getattr(agent_def, "type", "") or ""
-    if not agent_type:
-        if agent_def.trigger == "on_notify":
-            agent_type = "notification"
-        elif page_path == ".user/ingest":
-            agent_type = "ingest"
-        else:
-            agent_type = "page"
+    # trigger=on_notify and page_path=.user/ingest are strong invariants that
+    # win regardless of the type: field (handles agents predating the field).
+    if agent_def.trigger == "on_notify":
+        agent_type = "notification"
+    elif page_path == ".user/ingest":
+        agent_type = "ingest"
+    else:
+        agent_type = getattr(agent_def, "type", "") or "page"
 
     if agent_type == "notification":
         return NotificationAgent(

@@ -132,7 +132,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     model = str(fm.get("model", "")).strip()
     confirm_before_write = bool(fm.get("confirm_before_write", False))
 
-    agent_type = str(fm.get("type", "")).strip()
+    agent_type = str(fm.get("type", "page")).strip()
     if agent_type and agent_type not in _VALID_AGENT_TYPES:
         raise AgentDefinitionError(
             f"Invalid type '{agent_type}'. "

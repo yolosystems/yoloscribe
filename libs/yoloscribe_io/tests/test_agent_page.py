@@ -517,10 +517,10 @@ def test_parse_type_notification():
     assert defn.type == "notification"
 
 
-def test_parse_type_absent_defaults_to_empty():
+def test_parse_type_absent_defaults_to_page():
     text = "---\ntrigger: on_write\nname: n\n---\n"
     defn = parse_agent_md(text)
-    assert defn.type == ""
+    assert defn.type == "page"
 
 
 def test_parse_type_invalid_raises():
