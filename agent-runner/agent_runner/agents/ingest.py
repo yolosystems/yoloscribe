@@ -6,7 +6,7 @@ import logging
 from typing import Callable
 
 from strands_tools import http_request
-from yoloscribe_io import AgentDefinition, KnowledgeBaseIndexMarkdownFile, WikiPageMarkdownFile
+from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
 
 from .base import BaseAgent
 from .search import SearchBackend
@@ -18,21 +18,18 @@ _PROCESSED_PREFIX = ".user/ingest/processed/"
 
 
 class IngestAgent(BaseAgent):
-    """Agent that runs on a schedule to process files queued in .user/ingest/.
+    """Agent that processes files queued in .user/ingest/ using search-driven routing.
 
     Tool surface:
     - ingest_list_pending(): list unprocessed files in .user/ingest/
     - ingest_read(filename): read a specific pending file
     - ingest_mark_processed(filename): move a file to .user/ingest/processed/
-    - kb_index_read(): read the knowledge base topic index
-    - wiki_search(query): semantic search across the site
-    - wiki_read(page_path): read any wiki page (topic-scoped validation)
-    - wiki_write(page_path, content): write to a wiki page that matches a ingest page topic
+    - wiki_search(query): semantic search across the site to find routing targets
+    - wiki_list_pages(): list all wiki page paths for structural navigation
+    - wiki_read(page_path): read any wiki page for context
+    - wiki_write(page_path, content): write to a wiki page
+    - notify_owner(message): notify the site owner when content cannot be routed
     - http_request + any injected MCP tools
-
-    IngestAgent is always associated with .user/ingest and fires on schedule.
-    It enforces that wiki writes are limited to pages whose top-level path
-    segment matches a topic defined in .user/the ingest page.
     """
 
     def __init__(
@@ -60,8 +57,8 @@ class IngestAgent(BaseAgent):
             search=search,
             max_page_reads=max_page_reads,
         )
-        self._kb_index = KnowledgeBaseIndexMarkdownFile(site, storage)
         self._read_counter: list[int] = [0]
+        self._owner_instructions: str = ""
 
     # ── Tool surface ──────────────────────────────────────────────────────────
 
@@ -105,12 +102,45 @@ class IngestAgent(BaseAgent):
         log.info("Marked as processed: %s → %s", src_key, dst_key)
         return f"Marked as processed: {filename}"
 
-    def kb_index_read(self) -> str:
-        """Read the knowledge base topic index."""
-        topics = self._kb_index.topics
-        if not topics:
-            return "The knowledge base index is empty. No topics are defined."
-        return "Topics:\n" + "\n".join(f"- {t}" for t in topics)
+    def wiki_list_pages(self) -> str:
+        """List all wiki page paths in this site."""
+        prefix = f"{self._site}/"
+        keys = self._storage.list(prefix)
+        pages = []
+        for key in keys:
+            if not key.endswith("/content.md"):
+                continue
+            rel = key[len(prefix):]
+            if (
+                "/.agents/" in rel
+                or "/.user/" in rel
+                or "/.archive/" in rel
+                or "/.skills/" in rel
+                or rel.startswith(".agents/")
+                or rel.startswith(".user/")
+                or rel.startswith(".archive/")
+                or rel.startswith(".skills/")
+            ):
+                continue
+            page_path = rel[: -len("/content.md")] if rel != "content.md" else "(root)"
+            pages.append(page_path)
+        if not pages:
+            return "No wiki pages found."
+        return "Wiki pages:\n" + "\n".join(f"- {p}" for p in sorted(pages))
+
+    def notify_owner(self, message: str) -> str:
+        """Notify the site owner that a file could not be routed automatically.
+
+        Use this when you cannot determine a suitable destination for an ingest
+        file. Do not mark the file as processed after calling this.
+
+        Args:
+            message: A plain-text explanation of what was received and why it
+                     could not be routed.
+        """
+        self._notify("ingest_unrouted", {"message": message}, self._user_id)
+        log.info("IngestAgent sent ingest_unrouted notification: %s", message[:100])
+        return "Owner notified. Leave the file unprocessed so the owner can review it."
 
     def wiki_search(self, query: str) -> str:
         """Search the wiki semantically and return matching page excerpts."""
@@ -136,7 +166,7 @@ class IngestAgent(BaseAgent):
         return wiki.read()
 
     def wiki_write(self, page_path: str, content: str) -> str:
-        """Write content to a wiki page. The page must match a topic in the ingest page."""
+        """Write content to a wiki page."""
         page_path = page_path.strip().strip("/")
         error = self._check_scope(page_path)
         if error:
@@ -150,58 +180,70 @@ class IngestAgent(BaseAgent):
 
     def _check_scope(self, page_path: str) -> str | None:
         """Return an error string if page_path is out of scope, else None."""
-        # The agent.md scope field may restrict pages further via exclude globs.
         if not self.agent_def.scope.matches(page_path):
-            return (
-                f"Access denied: {page_path} is excluded by this agent's scope settings."
-            )
-
-        # Must match a ingest page topic (top-level segment of the page path).
-        topics = self._kb_index.topics
-        if topics:
-            top_level = page_path.split("/")[0]
-            if top_level not in topics:
-                return (
-                    f"Access denied: '{top_level}' is not a topic in the ingest page. "
-                    f"Available topics: {', '.join(topics)}. "
-                    "Add the topic to the ingest page first, or use an existing topic."
-                )
+            return f"Access denied: {page_path} is excluded by this agent's scope settings."
         return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    def _read_owner_instructions(self) -> str:
+        """Read the owner's routing instructions from .user/ingest/content.md."""
+        key = f"{self._site}/.user/ingest/content.md"
+        content = self._storage.read(key)
+        return (content or "").strip()
+
     def _build_system_prompt(self) -> str:
-        return (
-            (self.agent_def.description or "")
-            + "\n\n"
-            + "You process files that arrive in the ingest queue (.user/ingest/) "
-            "and route them to the appropriate wiki pages based on topics defined "
-            "in the knowledge base index (the ingest page).\n\n"
+        parts = []
+        if self.agent_def.description:
+            parts.append(self.agent_def.description)
+        if self._owner_instructions:
+            parts.append(
+                "The site owner has provided the following routing instructions. "
+                "Follow them precisely — they take priority over your own judgement:\n\n"
+                + self._owner_instructions
+            )
+        parts.append(
+            "You process files that arrive in the ingest queue (.user/ingest/) "
+            "and route each one to the appropriate wiki page using the wiki's own "
+            "structure as the topic guide — no separate index to maintain.\n\n"
             "Workflow for each run:\n"
             "1. Call ingest_list_pending() to find files to process.\n"
-            "2. For each file: call ingest_read(filename) to get its content.\n"
-            "3. Call kb_index_read() to see available topics.\n"
-            "4. Determine which topic(s) the content belongs to. "
-            "If the topic does not exist yet, add it to the ingest page "
-            "and create the new wiki page.\n"
-            "5. Use wiki_search(query) to find similar existing pages.\n"
-            "6. Use wiki_read(page_path) to read relevant pages for context.\n"
-            "7. Use wiki_write(page_path, content) to update or create wiki pages.\n"
-            "8. Call ingest_mark_processed(filename) to archive the file.\n\n"
-            "wiki_write is restricted to pages whose top-level path matches a "
-            "ingest page topic. You cannot write to arbitrary wiki pages."
+            "2. For each pending file:\n"
+            "   a. Call ingest_read(filename) to get the content.\n"
+            "   b. Call wiki_search(query) with a concise summary of the content "
+            "to find semantically similar wiki pages. Higher scores indicate "
+            "a better semantic match.\n"
+            "   c. If search results are sparse or ambiguous, call wiki_list_pages() "
+            "to browse the full page structure and pick the best structural fit.\n"
+            "   d. If a good destination page is found:\n"
+            "      - Call wiki_read(page_path) to read its current content.\n"
+            "      - Incorporate the new content appropriately (append, merge, or "
+            "create a new section).\n"
+            "      - Call wiki_write(page_path, updated_content) to save.\n"
+            "   e. If no suitable existing page fits but the content warrants a new page:\n"
+            "      - Choose a descriptive page path consistent with the wiki's "
+            "naming conventions.\n"
+            "      - Call wiki_write(new_page_path, content) to create it.\n"
+            "   f. If you genuinely cannot determine where the content belongs:\n"
+            "      - Call notify_owner(message) describing what you received and why "
+            "it could not be routed. Do NOT mark the file as processed.\n"
+            "   g. After successfully writing, call ingest_mark_processed(filename).\n"
         )
+        return "\n\n".join(parts)
 
     def run(self, prompt: str) -> int:
+        self._owner_instructions = self._read_owner_instructions()
+
         tools = [
             http_request,
             self.ingest_list_pending,
             self.ingest_read,
             self.ingest_mark_processed,
-            self.kb_index_read,
             self.wiki_search,
+            self.wiki_list_pages,
             self.wiki_read,
             self.wiki_write,
+            self.notify_owner,
         ] + self._mcp_tools
 
         agent = self._make_strands_agent(tools)

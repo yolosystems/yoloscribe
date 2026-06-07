@@ -1,4 +1,4 @@
-"""Tests for IngestAgent tool surface and scope enforcement (YOL-298)."""
+"""Tests for IngestAgent tool surface and scope enforcement."""
 from __future__ import annotations
 
 from yoloscribe_io import Scope
@@ -11,7 +11,12 @@ from tests.conftest import make_def, make_notify
 SITE = "s"
 
 
-def _make_agent(storage: LocalStorageBackend, max_page_reads: int = 10, **def_kwargs) -> IngestAgent:
+def _make_agent(
+    storage: LocalStorageBackend,
+    max_page_reads: int = 10,
+    notify_fn=None,
+    **def_kwargs,
+) -> IngestAgent:
     return IngestAgent(
         agent_def=make_def(trigger="schedule", **def_kwargs),
         site=SITE,
@@ -20,18 +25,10 @@ def _make_agent(storage: LocalStorageBackend, max_page_reads: int = 10, **def_kw
         mcp_tools=[],
         model=None,
         user_id="u1",
-        notify_fn=make_notify(),
+        notify_fn=notify_fn or make_notify(),
         search=NullSearchBackend(),
         max_page_reads=max_page_reads,
     )
-
-
-def _storage_with_kb(topics: list[str], extra: dict | None = None) -> LocalStorageBackend:
-    kb_content = "".join(f"- {t}\n" for t in topics)
-    data = {f"{SITE}/.user/ingest/content.md": kb_content}
-    if extra:
-        data.update(extra)
-    return LocalStorageBackend(data)
 
 
 # ── ingest_list_pending ───────────────────────────────────────────────────────
@@ -122,20 +119,59 @@ def test_mark_processed_missing_file():
     assert "not found" in result.lower()
 
 
-# ── kb_index_read ─────────────────────────────────────────────────────────────
+# ── wiki_list_pages ───────────────────────────────────────────────────────────
 
-def test_kb_index_read_no_topics():
+def test_wiki_list_pages_no_pages():
     agent = _make_agent(LocalStorageBackend())
-    result = agent.kb_index_read()
-    assert "empty" in result.lower()
+    assert "No wiki pages found" in agent.wiki_list_pages()
 
 
-def test_kb_index_read_lists_topics():
-    storage = _storage_with_kb(["jazz", "cooking"])
+def test_wiki_list_pages_returns_paths():
+    storage = LocalStorageBackend({
+        f"{SITE}/jazz/content.md": "jazz",
+        f"{SITE}/cooking/content.md": "cooking",
+        f"{SITE}/content.md": "root",
+    })
     agent = _make_agent(storage)
-    result = agent.kb_index_read()
+    result = agent.wiki_list_pages()
     assert "jazz" in result
     assert "cooking" in result
+    assert "(root)" in result
+
+
+def test_wiki_list_pages_excludes_system_paths():
+    storage = LocalStorageBackend({
+        f"{SITE}/jazz/content.md": "jazz",
+        f"{SITE}/.user/notifications.md": "notifs",
+        f"{SITE}/.archive/old/content.md": "archived",
+        f"{SITE}/jazz/.agents/sync/agent.md": "agent",
+    })
+    agent = _make_agent(storage)
+    result = agent.wiki_list_pages()
+    assert "jazz" in result
+    assert ".user" not in result
+    assert ".archive" not in result
+    assert ".agents" not in result
+
+
+# ── notify_owner ──────────────────────────────────────────────────────────────
+
+def test_notify_owner_calls_notify_fn():
+    events: list[tuple] = []
+
+    def capture(event_type, payload, user_id):
+        events.append((event_type, payload, user_id))
+
+    agent = _make_agent(LocalStorageBackend(), notify_fn=capture)
+    result = agent.notify_owner("Cannot route this file — no matching topic found.")
+    assert events == [("ingest_unrouted", {"message": "Cannot route this file — no matching topic found."}, "u1")]
+    assert "notified" in result.lower()
+
+
+def test_notify_owner_instructs_leave_unprocessed():
+    agent = _make_agent(LocalStorageBackend())
+    result = agent.notify_owner("unclear content")
+    assert "unprocessed" in result.lower()
 
 
 # ── wiki_read ─────────────────────────────────────────────────────────────────
@@ -163,76 +199,82 @@ def test_wiki_read_counter_increments():
     assert agent._read_counter[0] == 2
 
 
-# ── wiki_write — allowed ──────────────────────────────────────────────────────
+# ── wiki_write ────────────────────────────────────────────────────────────────
 
-def test_wiki_write_allowed_topic():
-    storage = _storage_with_kb(["jazz"])
+def test_wiki_write_any_page():
+    storage = LocalStorageBackend()
     agent = _make_agent(storage)
     result = agent.wiki_write("jazz/miles-davis", "# Miles Davis\n")
     assert "Written" in result
     assert storage.read(f"{SITE}/jazz/miles-davis/content.md") == "# Miles Davis\n"
 
 
-def test_wiki_write_empty_kb_allows_any_topic():
-    # When kb-index has no topics, writes are unrestricted by topic.
+def test_wiki_write_new_topic_no_restriction():
     storage = LocalStorageBackend()
     agent = _make_agent(storage)
-    result = agent.wiki_write("anything/here", "content")
+    result = agent.wiki_write("cooking/pasta", "recipe")
     assert "Written" in result
 
 
-# ── wiki_write — denied ───────────────────────────────────────────────────────
-
-def test_wiki_write_denied_unknown_topic():
-    storage = _storage_with_kb(["jazz"])
-    agent = _make_agent(storage)
-    result = agent.wiki_write("cooking/pasta", "recipe")
-    assert "denied" in result.lower()
-    assert "cooking" in result
-
-
 def test_wiki_write_denied_by_exclude_scope():
-    from yoloscribe_io import Scope
     scope = Scope(exclude=["jazz/*"])
-    storage = _storage_with_kb(["jazz"])
-    agent = _make_agent(storage, scope=scope)
+    agent = _make_agent(LocalStorageBackend(), scope=scope)
     result = agent.wiki_write("jazz/miles-davis", "content")
     assert "denied" in result.lower()
 
 
 # ── _check_scope ──────────────────────────────────────────────────────────────
 
-def test_check_scope_no_topics_returns_none():
+def test_check_scope_any_path_allowed():
     agent = _make_agent(LocalStorageBackend())
     assert agent._check_scope("any/path") is None
-
-
-def test_check_scope_matching_topic_returns_none():
-    storage = _storage_with_kb(["jazz"])
-    agent = _make_agent(storage)
-    assert agent._check_scope("jazz/subpage") is None
-
-
-def test_check_scope_non_matching_topic_returns_error():
-    storage = _storage_with_kb(["jazz"])
-    agent = _make_agent(storage)
-    error = agent._check_scope("cooking/pasta")
-    assert error is not None
-    assert "cooking" in error
+    assert agent._check_scope("completely/different/topic") is None
 
 
 def test_check_scope_exclude_returns_error():
     scope = Scope(exclude=["private/*"])
-    storage = _storage_with_kb(["private"])
-    agent = _make_agent(storage, scope=scope)
+    agent = _make_agent(LocalStorageBackend(), scope=scope)
     error = agent._check_scope("private/notes")
     assert error is not None
 
 
+# ── owner instructions page ───────────────────────────────────────────────────
+
+def test_read_owner_instructions_missing_page():
+    agent = _make_agent(LocalStorageBackend())
+    assert agent._read_owner_instructions() == ""
+
+
+def test_read_owner_instructions_returns_content():
+    storage = LocalStorageBackend({
+        f"{SITE}/.user/ingest/content.md": "Meeting notes go under meetings/\n",
+    })
+    agent = _make_agent(storage)
+    assert agent._read_owner_instructions() == "Meeting notes go under meetings/"
+
+
+def test_system_prompt_includes_instructions_when_set():
+    agent = _make_agent(LocalStorageBackend())
+    agent._owner_instructions = "Always route articles to the articles/ section."
+    prompt = agent._build_system_prompt()
+    assert "Always route articles to the articles/ section." in prompt
+    assert "priority" in prompt.lower()
+
+
+def test_system_prompt_omits_instructions_section_when_empty():
+    agent = _make_agent(LocalStorageBackend())
+    agent._owner_instructions = ""
+    prompt = agent._build_system_prompt()
+    assert "site owner" not in prompt.lower()
+
+
 # ── system prompt ─────────────────────────────────────────────────────────────
 
-def test_system_prompt_includes_ingest_workflow():
+def test_system_prompt_includes_search_driven_workflow():
     agent = _make_agent(LocalStorageBackend())
     prompt = agent._build_system_prompt()
-    assert "ingest_list_pending" in prompt
+    assert "wiki_search" in prompt
+    assert "wiki_list_pages" in prompt
     assert "wiki_write" in prompt
+    assert "notify_owner" in prompt
+    assert "ingest_list_pending" in prompt
