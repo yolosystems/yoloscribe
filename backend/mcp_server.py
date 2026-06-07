@@ -205,6 +205,8 @@ def _maybe_enqueue_index(
 ) -> None:
     if sqs_client is None or not queue_url:
         return
+    if "/.user/" in f"/{content_key}":
+        return
     try:
         sqs_client.send_message(
             QueueUrl=queue_url,

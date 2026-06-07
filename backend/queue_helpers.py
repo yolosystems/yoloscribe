@@ -68,6 +68,9 @@ def enqueue_index_job(content_key: str, user_id: str) -> None:
 
     if sqs_indexing is None or not SQS_INDEXING_QUEUE_URL:
         return
+    # Skip .user/ paths — system/staging content, not first-class wiki pages.
+    if "/.user/" in f"/{content_key}":
+        return
     try:
         sqs_indexing.send_message(
             QueueUrl=SQS_INDEXING_QUEUE_URL,
