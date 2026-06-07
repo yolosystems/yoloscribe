@@ -284,12 +284,14 @@ class SiteTools:
         agent_name: str,
         description: str,
         skills: list[str],
+        agent_type: str = "",
         page_path: str = "",
         trigger: str = "manual",
         schedule: str = "",
         timezone: str = "",
         model: str = "",
         confirm_before_write: bool = False,
+        events: list[str] | None = None,
         overwrite: bool = False,
     ) -> str:
         """Create a new agent.md file. Set overwrite=True to replace an existing agent.
@@ -298,7 +300,10 @@ class SiteTools:
             agent_name: Name of the agent (lowercase, alphanumeric/hyphen/underscore).
             description: Agent purpose / system prompt.
             skills: List of skill names the agent should use.
-            page_path: Relative page path; empty for root.
+            agent_type: Agent class — "page", "ingest", or "notification". Empty string
+                        lets the runner infer the type from trigger/path heuristics.
+            page_path: Relative page path; empty for root. Overridden automatically
+                       for ingest (→ .user/ingest) and notification (→ site root) types.
             trigger: When the agent runs — "manual", "schedule", "on_write", or "on_notify".
             schedule: Cron expression — required when trigger is "schedule".
             timezone: Timezone for the schedule (e.g. "America/New_York"). Defaults to UTC.
@@ -306,6 +311,8 @@ class SiteTools:
                    Leave blank to use the server default.
             confirm_before_write: When true the agent writes proposed changes to
                                   .proposed.content.md instead of content.md directly.
+            events: Event types to watch — required when trigger is "on_notify".
+                    E.g. ["page_shared", "access_requested"].
             overwrite: If False (default) and an agent with this name already exists,
                        the call is rejected. Pass True to intentionally replace it.
         """
@@ -330,9 +337,24 @@ class SiteTools:
             )
         if trigger == "schedule" and not schedule:
             return "Error: trigger 'schedule' requires a 'schedule' cron expression."
+        if trigger == "on_notify" and not events:
+            return (
+                "Error: trigger 'on_notify' requires an 'events' list. "
+                "Specify which notification event types this agent should handle "
+                "(e.g. [\"page_shared\", \"access_requested\"])."
+            )
 
-        # on_notify agents always live at the site root.
-        if trigger == "on_notify":
+        valid_types = {"", "page", "ingest", "notification"}
+        if agent_type not in valid_types:
+            return (
+                f"Error: invalid agent_type '{agent_type}'. "
+                f"Use one of: page, ingest, notification (or leave empty)."
+            )
+
+        # Enforce canonical paths per type.
+        if agent_type == "ingest":
+            page_path = ".user/ingest"
+        elif agent_type == "notification" or trigger == "on_notify":
             page_path = ""
 
         agent_file = AgentMarkdownFile(self._site, page_path, agent_name, self._storage)
@@ -351,13 +373,16 @@ class SiteTools:
             timezone=timezone,
             model=model,
             confirm_before_write=confirm_before_write,
+            events=list(events) if events else [],
+            type=agent_type,
         )
         if overwrite:
             agent_file.save(defn)
         else:
             agent_file.create(defn)
 
-        return f"Agent '{agent_name}' created. View/edit at #/.agents/{agent_name}"
+        location = f"#/{page_path}/.agents/{agent_name}" if page_path else f"#/.agents/{agent_name}"
+        return f"Agent '{agent_name}' created. View/edit at {location}"
 
     # ── Skills (write) ────────────────────────────────────────────────────────
 
