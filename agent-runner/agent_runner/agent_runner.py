@@ -961,7 +961,8 @@ def main() -> None:
         log.info("Agent run complete (propose mode): pending review for %s", CONTENT_KEY)
     else:
         log.info("Agent run complete for %s", CONTENT_KEY)
-        _enqueue_index_job(CONTENT_KEY)
+        if f"/{_site}/.user/" not in f"/{CONTENT_KEY}":
+            _enqueue_index_job(CONTENT_KEY)
 
     if _budget is not None and tokens_used > 0:
         _budget.record_usage(USER_ID, tokens_used)
