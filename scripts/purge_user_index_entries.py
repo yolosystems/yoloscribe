@@ -10,7 +10,7 @@ results. This script removes them from S3 Vectors and the per-site SQLite FTS
 index, and deletes the orphaned .chunks/ objects from S3.
 
 Usage:
-    uv run --env-file .env python scripts/purge_user_index_entries.py [--dry-run] [--site SITE]
+    uv run --env-file .env scripts/purge_user_index_entries.py [--dry-run] [--site SITE]
 
 Options:
     --dry-run   List affected entries without deleting anything.
