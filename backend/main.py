@@ -6,8 +6,10 @@ import os
 
 from fastapi import FastAPI
 from log_setup import configure_logging
+from telemetry import setup_telemetry
 
 configure_logging()
+setup_telemetry()
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler

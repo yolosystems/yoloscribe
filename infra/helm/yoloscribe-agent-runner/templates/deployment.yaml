@@ -42,5 +42,16 @@ spec:
                   name: {{ include "yoloscribe-agent-runner.secretName" . }}
                   key: {{ .Values.existingSecretKey }}
                   optional: true
+            {{- if .Values.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.otel.headers }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-agent-runner.fullname" . }}-otel
+                  key: otlp-headers
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

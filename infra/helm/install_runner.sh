@@ -61,4 +61,6 @@ helm upgrade --install yoloscribe-agent-runner \
   --values "$VALUES_FILE" \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
   --set ghcr.pat="$GHCR_PAT" \
+  ${OTEL_EXPORTER_OTLP_ENDPOINT:+--set otel.endpoint="$OTEL_EXPORTER_OTLP_ENDPOINT"} \
+  ${OTEL_EXPORTER_OTLP_HEADERS:+--set otel.headers="$OTEL_EXPORTER_OTLP_HEADERS"} \
   "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

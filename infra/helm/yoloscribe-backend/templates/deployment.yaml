@@ -121,6 +121,17 @@ spec:
             - name: MCP_BASE_URL
               value: {{ .Values.config.mcpBaseUrl | quote }}
             {{- end }}
+            {{- if .Values.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.otel.headers }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.fullname" . }}-otel
+                  key: otlp-headers
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

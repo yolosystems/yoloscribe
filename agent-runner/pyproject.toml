@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.35.0",
     "kubernetes>=29.0.0",
-    "strands-agents[anthropic]>=0.1.0",
+    "strands-agents[anthropic,otel]>=0.1.0",
     "strands-agents-tools>=0.1.0",
     "mcp>=1.0.0",
     "mcp-oauth",

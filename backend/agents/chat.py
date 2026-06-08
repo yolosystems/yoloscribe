@@ -217,6 +217,11 @@ Current context:
             tools=tools,
             callback_handler=None,
             load_tools_from_directory=False,
+            trace_attributes={
+                "user.id": user_id,
+                "site": site,
+                "page_path": page_path or "",
+            },
         )
 
         context_block = ""

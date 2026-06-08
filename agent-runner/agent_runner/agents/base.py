@@ -73,4 +73,10 @@ class BaseAgent(ABC):
                 initial_delay=10,
                 max_delay=120,
             ),
+            trace_attributes={
+                "user.id": self._user_id,
+                "site": self._site,
+                "page_path": self._page_path,
+                "agent_name": self.agent_def.name,
+            },
         )

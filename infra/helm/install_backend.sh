@@ -73,4 +73,6 @@ helm upgrade --install yoloscribe-backend \
   --set webhookSecret="$WEBHOOK_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
+  ${OTEL_EXPORTER_OTLP_ENDPOINT:+--set otel.endpoint="$OTEL_EXPORTER_OTLP_ENDPOINT"} \
+  ${OTEL_EXPORTER_OTLP_HEADERS:+--set otel.headers="$OTEL_EXPORTER_OTLP_HEADERS"} \
   "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

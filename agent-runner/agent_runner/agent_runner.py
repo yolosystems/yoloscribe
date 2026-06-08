@@ -765,6 +765,8 @@ def _write_run_log(
 
 def main() -> None:
     configure_logging()
+    from .telemetry import setup_telemetry
+    setup_telemetry()
     log.info("Agent runner starting: bucket=%s agent_md=%s user=%s", BUCKET, AGENT_MD_KEY, USER_ID)
 
     # Expose the package directory so mcp.json files can reference bundled
