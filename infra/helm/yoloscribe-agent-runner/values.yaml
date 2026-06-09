@@ -23,6 +23,13 @@ config:
   k8sNamespace: ""
   agentRunnerImage: ""  # defaults to image.repository:image.tag if empty
 
+# ── OTEL / Arize Phoenix tracing ─────────────────────────────────────────────
+# Set endpoint to the internal Phoenix service DNS name to enable tracing.
+# Pass headers via --set on the command line; never commit a real value here.
+otel:
+  endpoint: ""   # e.g. http://phoenix-svc.arize.svc.cluster.local:6006
+  headers: ""    # e.g. "Authorization=Bearer <token>" — pass via --set
+
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)
 #   existingSecret: yoloscribe-secrets

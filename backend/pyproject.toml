@@ -8,7 +8,7 @@ dependencies = [
     "boto3>=1.42.0",
     "python-multipart==0.0.9",
     "pydantic>=2.12.2",
-    "strands-agents[anthropic]>=0.1.0",
+    "strands-agents[anthropic,otel]>=0.1.0",
     "strands-agents-tools>=0.1.0",
     "kubernetes>=29.0.0",
     "pyjwt[crypto]>=2.8.0",
