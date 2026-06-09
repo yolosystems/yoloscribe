@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Inbox, Pencil, Plus, Save, Settings, X } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Inbox, Pencil, Plus, Save, Settings, Upload, X } from 'lucide-react'
 import { authClient, type AuthSession } from './auth'
 import MarkdownViewer from './components/MarkdownViewer'
 import MarkdownEditor from './components/MarkdownEditor'
@@ -231,6 +231,8 @@ export default function App() {
   const [proposedContent, setProposedContent] = useState<string | null>(null)
   const [selectedVersion, setSelectedVersion] = useState<VersionMeta | null>(null)
   const [archiving, setArchiving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
 
   // Subscribe to auth state changes (skipped in LOCAL_MODE).
   useEffect(() => {
@@ -403,6 +405,7 @@ export default function App() {
 
   // Poll for pending proposed content on content pages (owner only)
   const isContentPage = filePath === 'content.md' || filePath.endsWith('/content.md')
+  const isIngest = filePath === '.user/ingest/content.md'
   useEffect(() => {
     if (!isOwner || !session || !isContentPage) {
       setProposedContent(null)
@@ -483,6 +486,30 @@ export default function App() {
 
   function navigate(fp: string) {
     window.location.hash = filePathToHash(fp)
+  }
+
+  async function uploadFile(file: File) {
+    if (!session) return
+    setUploading(true)
+    try {
+      const res = await fetch(
+        `${API_BASE}/ingest/upload?site=${encodeURIComponent(SITE)}&filename=${encodeURIComponent(file.name)}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` } },
+      )
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      const { upload_url, content_type } = await res.json()
+      const putRes = await fetch(upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': content_type },
+        body: file,
+      })
+      if (!putRes.ok) throw new Error(`S3 upload failed: ${putRes.status}`)
+      setReloadKey((k) => k + 1)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
   }
 
   // ── View rendering ────────────────────────────────────────────────────────
@@ -590,6 +617,28 @@ export default function App() {
               )}
               <button className="btn btn-icon" title="Discard changes" onClick={discard}>
                 <X size={16} />
+              </button>
+            </>
+          )}
+          {isOwner && isIngest && mode !== 'edit' && (
+            <>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  Array.from(e.target.files ?? []).forEach(uploadFile)
+                  e.target.value = ''
+                }}
+              />
+              <button
+                className="btn btn-icon"
+                title={uploading ? 'Uploading…' : 'Upload to ingest queue'}
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={uploading}
+              >
+                <Upload size={16} />
               </button>
             </>
           )}

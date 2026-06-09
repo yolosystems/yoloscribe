@@ -29,6 +29,7 @@ from routers import (
     chat_router,
     content_router,
     health_router,
+    ingest_router,
     mcp_oauth_router,
     message_router,
     messaging_router,
@@ -176,6 +177,7 @@ else:
 
 app.include_router(health_router)
 app.include_router(assets_router)
+app.include_router(ingest_router)
 app.include_router(content_router)
 app.include_router(obsidian_router)
 app.include_router(pages_router)

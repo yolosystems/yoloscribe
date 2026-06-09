@@ -1,5 +1,6 @@
 from .archive import router as archive_router
 from .assets import router as assets_router
+from .ingest import router as ingest_router
 from .chat import router as chat_router
 from .content import router as content_router
 from .health import router as health_router
@@ -21,6 +22,7 @@ from .webhooks import router as webhooks_router
 
 __all__ = [
     "assets_router",
+    "ingest_router",
     "chat_router",
     "content_router",
     "health_router",

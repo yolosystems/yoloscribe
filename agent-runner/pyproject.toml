@@ -4,6 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.35.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    "openpyxl>=3.1.0",
     "kubernetes>=29.0.0",
     "strands-agents[anthropic,otel]>=0.1.0",
     "strands-agents-tools>=0.1.0",

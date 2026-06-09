@@ -37,6 +37,18 @@ class StorageBackend(ABC):
     def list(self, prefix: str) -> list[str]:
         """Return all keys that start with prefix."""
 
+    @abstractmethod
+    def move(self, src: str, dst: str) -> None:
+        """Move src to dst. Works for binary and text content."""
+
+    @abstractmethod
+    def read_bytes(self, key: str) -> bytes | None:
+        """Return raw bytes at key, or None if not found."""
+
+    @abstractmethod
+    def write_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        """Write raw bytes to key."""
+
 
 class S3StorageBackend(StorageBackend):
     def __init__(self, bucket: str, s3_client=None) -> None:
@@ -101,12 +113,33 @@ class S3StorageBackend(StorageBackend):
         resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=prefix)
         return [obj["Key"] for obj in resp.get("Contents", [])]
 
+    def move(self, src: str, dst: str) -> None:
+        self._s3.copy_object(
+            Bucket=self._bucket,
+            CopySource={"Bucket": self._bucket, "Key": src},
+            Key=dst,
+        )
+        self._s3.delete_object(Bucket=self._bucket, Key=src)
+
+    def read_bytes(self, key: str) -> bytes | None:
+        try:
+            obj = self._s3.get_object(Bucket=self._bucket, Key=key)
+            return obj["Body"].read()
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+
+    def write_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        self._s3.put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
+
 
 class LocalStorageBackend(StorageBackend):
     """In-memory storage backend for testing — no AWS required."""
 
     def __init__(self, initial: dict[str, str] | None = None) -> None:
         self._store: dict[str, str] = dict(initial or {})
+        self._bytes_store: dict[str, bytes] = {}
         self._etags: dict[str, str] = {}
         self._counter = 0
 
@@ -142,9 +175,23 @@ class LocalStorageBackend(StorageBackend):
     def delete(self, key: str) -> None:
         self._store.pop(key, None)
         self._etags.pop(key, None)
+        self._bytes_store.pop(key, None)
 
     def list(self, prefix: str) -> list[str]:
         return [k for k in self._store if k.startswith(prefix)]
+
+    def move(self, src: str, dst: str) -> None:
+        if src in self._store:
+            self._store[dst] = self._store.pop(src)
+            self._etags[dst] = self._etags.pop(src, self._mint_etag())
+        elif src in self._bytes_store:
+            self._bytes_store[dst] = self._bytes_store.pop(src)
+
+    def read_bytes(self, key: str) -> bytes | None:
+        return self._bytes_store.get(key)
+
+    def write_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        self._bytes_store[key] = data
 
 
 def _is_not_found(exc: Exception) -> bool:
