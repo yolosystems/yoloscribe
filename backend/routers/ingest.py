@@ -10,10 +10,9 @@ import logging
 import mimetypes
 import re
 
-from fastapi import APIRouter, HTTPException, Security
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, HTTPException
 
-from auth import decode_jwt, get_site_for_user, require_site_owner, _bearer
+from auth import get_user_context
 from config import S3_BUCKET, s3
 
 log = logging.getLogger(__name__)
@@ -35,22 +34,26 @@ _SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 ._-]*\.[a-zA-Z0-9]{1,10}
         "Owner-only. Validates the filename, then returns a short-lived pre-signed "
         "S3 PUT URL targeting the site's `.user/ingest/` queue. "
         "The browser uploads directly to S3 — the backend never handles file bytes. "
-        "Accepts any file type (PDF, DOCX, PPTX, XLSX, plain text, etc.)."
+        "Accepts any file type (PDF, DOCX, PPTX, XLSX, plain text, etc.). "
+        "Accepts both Supabase JWTs and `as_`-prefixed API tokens."
     ),
 )
 async def upload_ingest(
-    site: str,
     filename: str,
-    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+    site: str | None = None,
 ) -> dict:
     if not _SAFE_FILENAME_RE.match(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    claims = decode_jwt(credentials)
-    user_site = get_site_for_user(claims.user_id)
-    require_site_owner(site, user_site)
+    _user_id, token_site = ctx
+    if not token_site:
+        raise HTTPException(status_code=401, detail="Token is not associated with a site")
+    if site and site != token_site:
+        raise HTTPException(status_code=403, detail="Site does not match token")
+    resolved_site = token_site
 
-    s3_key = f"{site}/.user/ingest/{filename}"
+    s3_key = f"{resolved_site}/.user/ingest/{filename}"
     content_type, _ = mimetypes.guess_type(filename)
     content_type = content_type or "application/octet-stream"
 
@@ -65,7 +68,7 @@ async def upload_ingest(
         HttpMethod="PUT",
     )
 
-    log.info("Issued ingest upload URL for %s/%s", site, filename)
+    log.info("Issued ingest upload URL for %s/%s", resolved_site, filename)
 
     return {
         "upload_url": presigned_url,
