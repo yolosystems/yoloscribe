@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from typing import Callable
@@ -21,6 +22,45 @@ _PROCESSED_PREFIX = ".user/ingest/processed/"
 _ABS_LINK_RE = re.compile(r'\[([^\]]+)\]\(https?://[^/\s)]+(/[^)]*)\)')
 
 
+def _extract_pdf(file_bytes: bytes) -> str:
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(file_bytes))
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return "\n\n".join(p.strip() for p in pages if p.strip())
+
+
+def _extract_docx(file_bytes: bytes) -> str:
+    from docx import Document
+    doc = Document(io.BytesIO(file_bytes))
+    return "\n\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+
+
+def _extract_pptx(file_bytes: bytes) -> str:
+    from pptx import Presentation
+    prs = Presentation(io.BytesIO(file_bytes))
+    slides = []
+    for i, slide in enumerate(prs.slides, 1):
+        texts = [s.text.strip() for s in slide.shapes if hasattr(s, "text") and s.text.strip()]
+        if texts:
+            slides.append(f"## Slide {i}\n\n" + "\n\n".join(texts))
+    return "\n\n".join(slides)
+
+
+def _extract_xlsx(file_bytes: bytes) -> str:
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    sheets = []
+    for name in wb.sheetnames:
+        rows = []
+        for row in wb[name].iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(c.strip() for c in cells):
+                rows.append(" | ".join(cells))
+        if rows:
+            sheets.append(f"## {name}\n\n" + "\n".join(rows))
+    return "\n\n".join(sheets)
+
+
 class IngestAgent(BaseAgent):
     """Agent that processes files queued in .user/ingest/ using search-driven routing.
 
@@ -33,6 +73,7 @@ class IngestAgent(BaseAgent):
     - wiki_read(page_path): read any wiki page for context
     - wiki_write(page_path, content): write to a wiki page
     - notify_owner(message): notify the site owner when content cannot be routed
+    - document_index(page_path, filename, mode): extract and index an uploaded document
     - http_request + any injected MCP tools
     """
 
@@ -48,6 +89,7 @@ class IngestAgent(BaseAgent):
         notify_fn: Callable[[str, dict, str], None],
         search: SearchBackend | None = None,
         max_page_reads: int = 10,
+        enqueue_fn=None,
     ) -> None:
         super().__init__(
             agent_def=agent_def,
@@ -63,6 +105,7 @@ class IngestAgent(BaseAgent):
         )
         self._read_counter: list[int] = [0]
         self._owner_instructions: str = ""
+        self._enqueue_fn = enqueue_fn or (lambda key: None)
 
     # ── Tool surface ──────────────────────────────────────────────────────────
 
@@ -101,11 +144,10 @@ class IngestAgent(BaseAgent):
         filename = filename.strip().lstrip("/")
         src_key = f"{self._site}/{_INGEST_PREFIX}{filename}"
         dst_key = f"{self._site}/{_PROCESSED_PREFIX}{filename}"
-        content = self._storage.read(src_key)
-        if content is None:
-            return f"File not found: {filename}"
-        self._storage.write(dst_key, content)
-        self._storage.delete(src_key)
+        try:
+            self._storage.move(src_key, dst_key)
+        except Exception as e:
+            return f"Error moving {filename}: {e}"
         log.info("Marked as processed: %s → %s", src_key, dst_key)
         return f"Marked as processed: {filename}"
 
@@ -190,6 +232,59 @@ class IngestAgent(BaseAgent):
         log.info("IngestAgent wrote to %s/%s", self._site, page_path)
         return f"Written to {page_path}."
 
+    @tool
+    def document_index(self, filename: str, mode: str = "both") -> str:
+        """Extract text from a binary file in the ingest queue (PDF, DOCX, PPTX, XLSX) and index it.
+
+        Call this instead of ingest_read for binary files. Use the returned text to
+        decide where to route the document, then call wiki_write and ingest_mark_processed.
+
+        Args:
+            filename: Name of the file in the ingest queue, e.g. 'report.pdf'.
+            mode: 'extract' returns text only; 'index-only' indexes without returning text;
+                  'both' (default) does both.
+        """
+        s3_key = f"{self._site}/{_INGEST_PREFIX}{filename}"
+        file_bytes = self._storage.read_bytes(s3_key)
+        if file_bytes is None:
+            return f"File not found: {filename}"
+
+        try:
+            extracted_md = self._extract_document(file_bytes, filename)
+        except Exception as e:
+            return f"Error extracting {filename}: {e}"
+
+        extracted_key = f"{self._site}/{_INGEST_PREFIX}{filename}.extracted.md"
+        try:
+            self._storage.write_bytes(extracted_key, extracted_md.encode("utf-8"), "text/markdown")
+        except Exception as e:
+            return f"Error saving extracted text for {filename}: {e}"
+
+        if mode in ("index-only", "both"):
+            try:
+                self._enqueue_fn(extracted_key)
+            except Exception as e:
+                log.warning("Failed to enqueue indexing job for %s: %s", extracted_key, e)
+
+        log.info("Indexed document %s → %s (%d chars)", s3_key, extracted_key, len(extracted_md))
+
+        if mode == "index-only":
+            return f"Indexed {filename}: {len(extracted_md)} chars extracted, indexing job enqueued."
+        return f"Extracted {len(extracted_md)} chars from {filename}.\n\n---\n\n{extracted_md}"
+
+    def _extract_document(self, file_bytes: bytes, filename: str) -> str:
+        """Extract text from document bytes, dispatching by file extension."""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext == "pdf":
+            return _extract_pdf(file_bytes)
+        if ext == "docx":
+            return _extract_docx(file_bytes)
+        if ext == "pptx":
+            return _extract_pptx(file_bytes)
+        if ext in ("xlsx", "xls"):
+            return _extract_xlsx(file_bytes)
+        return file_bytes.decode("utf-8", errors="replace")
+
     # ── Content helpers ───────────────────────────────────────────────────────
 
     def _ensure_parent_pages(self, page_path: str) -> None:
@@ -264,10 +359,17 @@ class IngestAgent(BaseAgent):
             "You process files that arrive in the ingest queue (.user/ingest/) "
             "and route each one to the appropriate wiki page using the wiki's own "
             "structure as the topic guide — no separate index to maintain.\n\n"
+            "All content — text and binary documents — flows through the ingest queue. "
+            "Binary documents (.pdf, .docx, .pptx, .xlsx) must be extracted before "
+            "reading; do not call ingest_read on them.\n\n"
             "Workflow for each run:\n"
             "1. Call ingest_list_pending() to find files to process.\n"
             "2. For each pending file:\n"
-            "   a. Call ingest_read(filename) to get the content.\n"
+            "   a. Read the content:\n"
+            "      - Binary files (.pdf, .docx, .pptx, .xlsx): call "
+            "document_index(filename) to extract text and index it. Use the returned "
+            "text for routing decisions. Do NOT call ingest_read on binary files.\n"
+            "      - Text files (.md, .txt, .csv, etc.): call ingest_read(filename).\n"
             "   b. Call wiki_search(query) with a concise summary of the content "
             "to find semantically similar wiki pages. Higher scores indicate "
             "a better semantic match.\n"
@@ -301,6 +403,7 @@ class IngestAgent(BaseAgent):
             self.wiki_read,
             self.wiki_write,
             self.notify_owner,
+            self.document_index,
         ] + self._mcp_tools
 
         agent = self._make_strands_agent(tools)

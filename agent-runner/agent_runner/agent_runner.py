@@ -715,6 +715,7 @@ def _make_agent(
             notify_fn=notify_fn,
             search=search,
             max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+            enqueue_fn=_enqueue_index_job,
         )
 
     return PageAgent(
