@@ -17,6 +17,7 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  type Attachment,
   type AnyThreadChannel,
   type Interaction,
   type Message,
@@ -27,6 +28,7 @@ import { decryptPayload, encryptPayload } from '../crypto.js'
 import { recordRequest } from '../rate-tracker.js'
 import { getApiTokenByHash, getConfigByChannel, upsertConfig } from '../store.js'
 import type { MessageHandler, PlatformAdapter } from '../types.js'
+import { uploadIngestFile } from '../yoloscribe.js'
 
 const MAX_CHARS = 2000
 const PAGE_RE = /^\[\/([^\]]*)\]\s*/
@@ -155,11 +157,61 @@ export class DiscordAdapter implements PlatformAdapter {
     })
   }
 
+  private async _handleAttachments(
+    message: Message,
+    attachments: Attachment[],
+    config: Awaited<ReturnType<typeof getConfigByChannel>>,
+  ): Promise<void> {
+    await message.react('⏳').catch(() => {})
+    let ackEmoji = '✅'
+
+    try {
+      const { token } = decryptPayload(config!.encrypted_token)
+
+      for (const attachment of attachments) {
+        // Fetch immediately — Discord CDN URLs expire quickly
+        const fileRes = await fetch(attachment.url, { signal: AbortSignal.timeout(60_000) })
+        if (!fileRes.ok) throw new Error(`Failed to fetch ${attachment.name} (HTTP ${fileRes.status})`)
+        const bytes = Buffer.from(await fileRes.arrayBuffer())
+        const contentType = attachment.contentType ?? 'application/octet-stream'
+        await uploadIngestFile(token, attachment.name, bytes, contentType)
+      }
+
+      // If the message also has text, save it as a caption alongside the first attachment
+      const caption = message.content.trim()
+      if (caption) {
+        const captionFilename = `${attachments[0].name}.caption.txt`
+        await uploadIngestFile(token, captionFilename, Buffer.from(caption, 'utf-8'), 'text/plain')
+      }
+
+      const n = attachments.length
+      const thread = await getOrCreateThread(message)
+      await thread.send(`✅ ${n} file${n > 1 ? 's' : ''} added to your ingest queue.`)
+    } catch (err: unknown) {
+      console.error('[discord] attachment upload error:', err)
+      ackEmoji = '❌'
+      const thread = await getOrCreateThread(message)
+      await thread
+        .send(`❌ Failed to upload file(s): ${err instanceof Error ? err.message : String(err)}`)
+        .catch(() => {})
+    }
+
+    await message.reactions.cache.get('⏳')?.users.remove(this.client!.user!).catch(() => {})
+    await message.react(ackEmoji).catch(() => {})
+  }
+
   private async _handleMessage(message: Message, handler: MessageHandler): Promise<void> {
     if (message.author.bot) return
 
     const config = await getConfigByChannel('discord', String(message.channelId))
     if (!config) return
+
+    const attachments = [...message.attachments.values()]
+
+    if (attachments.length > 0) {
+      await this._handleAttachments(message, attachments, config)
+      return
+    }
 
     const { filePath, text } = parseMessage(message.content)
     if (!text.trim()) return
