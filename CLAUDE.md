@@ -164,6 +164,8 @@ Event types and their sources:
 | `agent_failure` | agent-runner + polling_worker (never triggers `on_notify`) |
 | `confirm_page_change` | agent-runner (propose mode; DOES trigger `on_notify`) |
 | `ingest_unrouted` | IngestAgent (`notify_owner` tool; DOES trigger `on_notify`) |
+| `ingest_start` | IngestAgent lifecycle — fired at the start of every run (DOES trigger `on_notify`) |
+| `ingest_end` | IngestAgent (`ingest_complete` tool) — fired when all files are processed; payload includes `summary` of what was routed (DOES trigger `on_notify`) |
 
 **Backward-compatible old format** (still parseable but no longer generated):
 ```markdown

@@ -504,6 +504,11 @@ export default function App() {
         body: file,
       })
       if (!putRes.ok) throw new Error(`S3 upload failed: ${putRes.status}`)
+      // Trigger ingest agents — fire-and-forget, don't block or fail the upload on error
+      fetch(`${API_BASE}/ingest/trigger?site=${encodeURIComponent(SITE)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      }).catch(() => {})
       setReloadKey((k) => k + 1)
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Upload failed')

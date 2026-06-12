@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_user_context
 from config import S3_BUCKET, s3
+from queue_helpers import enqueue_ingest_agents
 
 log = logging.getLogger(__name__)
 
@@ -76,3 +77,28 @@ async def upload_ingest(
         "content_type": content_type,
         "max_bytes": _INGEST_MAX_BYTES,
     }
+
+
+@router.post(
+    "/ingest/trigger",
+    tags=["ingest"],
+    summary="Trigger on_write ingest agents for this site",
+    description=(
+        "Call after a successful file upload to .user/ingest/ to immediately "
+        "dispatch any on_write ingest agents. Fire-and-forget via SQS — returns "
+        "as soon as the job is enqueued. Accepts both Supabase JWTs and API tokens."
+    ),
+)
+async def trigger_ingest(
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+    site: str | None = None,
+) -> dict:
+    user_id, token_site = ctx
+    if not token_site:
+        raise HTTPException(status_code=401, detail="Token is not associated with a site")
+    if site and site != token_site:
+        raise HTTPException(status_code=403, detail="Site does not match token")
+
+    enqueue_ingest_agents(token_site, user_id)
+    log.info("Triggered ingest agents for %s", token_site)
+    return {"triggered": True}
