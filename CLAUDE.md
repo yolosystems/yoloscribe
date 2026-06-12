@@ -269,6 +269,7 @@ Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `model:` frontmat
 | `haiku` | Anthropic | claude-haiku-4-5-20251001 |
 | `sonnet` | Anthropic | claude-sonnet-4-6 |
 | `opus` | Anthropic | claude-opus-4-6 |
+| `glm` | Anthropic | zai.glm-5.0 |
 | `bedrock-haiku` | Bedrock | claude-haiku-4-5 (cross-region) |
 | `bedrock-sonnet` | Bedrock | claude-sonnet-4-6 (cross-region) |
 | `bedrock-opus` | Bedrock | claude-opus-4-6 (cross-region) |

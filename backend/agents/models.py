@@ -26,6 +26,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "haiku":   ModelSpec("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":  ModelSpec("anthropic", "claude-sonnet-4-6"),
     "opus":    ModelSpec("anthropic", "claude-opus-4-6"),
+    "glm":     ModelSpec("anthropic", "zai.glm-5.0"),
     # Amazon Bedrock
     "bedrock-haiku":  ModelSpec("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0"),
     "bedrock-sonnet": ModelSpec("bedrock", "anthropic.claude-sonnet-4-6-20250514-v1:0"),
