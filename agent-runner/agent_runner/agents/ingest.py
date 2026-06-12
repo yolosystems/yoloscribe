@@ -18,8 +18,12 @@ log = logging.getLogger(__name__)
 _INGEST_PREFIX = ".user/ingest/"
 _PROCESSED_PREFIX = ".user/ingest/processed/"
 
-# Matches markdown links with absolute HTTP(S) URLs: [label](https://host/path)
-_ABS_LINK_RE = re.compile(r'\[([^\]]+)\]\(https?://[^/\s)]+(/[^)]*)\)')
+# Matches markdown links pointing at YoloScribe app domains only.
+# Used to rewrite absolute YoloScribe URLs to # notation.
+# Intentionally narrow — must never match external URLs (foodnetwork.com, etc.).
+_YOLOSCRIBE_LINK_RE = re.compile(
+    r'\[([^\]]+)\]\(https?://(?:app(?:-dev)?\.yoloscribe\.com|localhost(?::\d+)?)(/[^)]*)\)'
+)
 
 
 def _extract_pdf(file_bytes: bytes) -> str:
@@ -305,29 +309,27 @@ class IngestAgent(BaseAgent):
                 log.info("IngestAgent created parent page stub: %s", parent_path)
 
     def _rewrite_internal_links(self, content: str) -> str:
-        """Rewrite absolute URLs that look like internal wiki links to # notation.
+        """Rewrite absolute YoloScribe app URLs to # notation.
 
-        Converts [label](https://any-host/page/path) to [label](#page/path),
-        stripping a leading site-name segment if present. Only rewrites paths
-        that look like wiki page paths (lowercase slugs, no file extension).
+        Only rewrites links pointing at app.yoloscribe.com or app-dev.yoloscribe.com
+        (and localhost for dev). External URLs (foodnetwork.com, github.com, etc.)
+        are never touched — they must be preserved verbatim.
         """
         site_prefix = f"/{self._site}/"
 
         def rewrite(m: re.Match) -> str:
             label = m.group(1)
             url_path = m.group(2)  # includes leading slash
-            # Strip leading site prefix if present
             if url_path.startswith(site_prefix):
                 url_path = url_path[len(site_prefix):]
             else:
                 url_path = url_path.lstrip("/")
-            # Only rewrite if path looks like a wiki page path
             last_seg = url_path.split("/")[-1] if url_path else ""
             if last_seg and "." not in last_seg and re.match(r"^[a-z0-9][a-z0-9/_-]*$", url_path):
                 return f"[{label}](#{url_path})"
             return m.group(0)
 
-        return _ABS_LINK_RE.sub(rewrite, content)
+        return _YOLOSCRIBE_LINK_RE.sub(rewrite, content)
 
     # ── Scope validation ──────────────────────────────────────────────────────
 
@@ -363,31 +365,45 @@ class IngestAgent(BaseAgent):
             "Binary documents (.pdf, .docx, .pptx, .xlsx) must be extracted before "
             "reading; do not call ingest_read on them.\n\n"
             "Workflow for each run:\n"
-            "1. Call ingest_list_pending() to find files to process.\n"
-            "2. For each pending file:\n"
+            "1. Call wiki_list_pages() to get the full page tree. Always do this first, "
+            "before processing any files — it gives you the complete picture of what "
+            "topics already exist and prevents creating duplicate or redundant pages.\n"
+            "2. Call ingest_list_pending() to find files to process.\n"
+            "3. For each pending file:\n"
             "   a. Read the content:\n"
             "      - Binary files (.pdf, .docx, .pptx, .xlsx): call "
             "document_index(filename) to extract text and index it. Use the returned "
             "text for routing decisions. Do NOT call ingest_read on binary files.\n"
             "      - Text files (.md, .txt, .csv, etc.): call ingest_read(filename).\n"
-            "   b. Call wiki_search(query) with a concise summary of the content "
-            "to find semantically similar wiki pages. Higher scores indicate "
-            "a better semantic match.\n"
-            "   c. If search results are sparse or ambiguous, call wiki_list_pages() "
-            "to browse the full page structure and pick the best structural fit.\n"
-            "   d. If a good destination page is found:\n"
-            "      - Call wiki_read(page_path) to read its current content.\n"
-            "      - Incorporate the new content appropriately (append, merge, or "
-            "create a new section).\n"
-            "      - Call wiki_write(page_path, updated_content) to save.\n"
-            "   e. If no suitable existing page fits but the content warrants a new page:\n"
-            "      - Choose a descriptive page path consistent with the wiki's "
-            "naming conventions.\n"
-            "      - Call wiki_write(new_page_path, content) to create it.\n"
+            "   b. Call wiki_search(query) with a concise topic summary to find "
+            "semantically similar wiki pages. Higher scores indicate a better match.\n"
+            "   c. Choose a destination — strongly prefer routing to an existing page:\n"
+            "      - If any existing page (at any depth in the hierarchy) is a "
+            "reasonable topical match, append or merge the content there. A partial "
+            "match to an existing page is always better than creating a new top-level "
+            "topic. When in doubt, add to the closest existing match.\n"
+            "      - Only create a new page if you are confident no existing page — "
+            "including deep nested pages — is even loosely related to the content.\n"
+            "      - Never create a new top-level topic that overlaps with an existing "
+            "one at any level of the hierarchy.\n"
+            "   d. Call wiki_read(page_path) to read the destination page's current content.\n"
+            "   e. Incorporate the new content appropriately (append, merge, or create "
+            "a new section), then call wiki_write(page_path, updated_content).\n"
             "   f. If you genuinely cannot determine where the content belongs:\n"
             "      - Call notify_owner(message) describing what you received and why "
             "it could not be routed. Do NOT mark the file as processed.\n"
-            "   g. After successfully writing, call ingest_mark_processed(filename).\n"
+            "   g. After successfully writing, call ingest_mark_processed(filename).\n\n"
+            "URL hygiene — follow these rules strictly:\n"
+            "- Never construct or guess YoloScribe links (app.yoloscribe.com or "
+            "app-dev.yoloscribe.com). Internal wiki links use # notation "
+            "([label](#page/path)) and must only point to pages you know exist.\n"
+            "- External URLs (e.g. foodnetwork.com, github.com, arxiv.org) must be "
+            "copied exactly as they appear in the source. Never transform or shorten "
+            "them. If the source does not contain a URL, do not add one.\n"
+            "- Text extracted from binary files (PDF, DOCX, etc.) may not include "
+            "reliable hyperlinks — the extractors capture text only, not the underlying "
+            "URLs. Do not invent URLs for titles, authors, or concepts mentioned in "
+            "extracted text.\n"
         )
         return "\n\n".join(parts)
 
