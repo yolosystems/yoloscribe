@@ -77,6 +77,12 @@ aws "${AWS_ARGS[@]}" iam put-role-policy \
   --policy-name "yoloscribe-agent-runner-access" \
   --policy-document "file://$POLICY_FILE"
 
+# Required for Bedrock Mantle inference (GLM and other Mantle-hosted models).
+echo "Attaching AmazonBedrockMantleInferenceAccess managed policy..."
+aws "${AWS_ARGS[@]}" iam attach-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-arn "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
+
 ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
 echo ""
 echo "Done. Role ARN:"

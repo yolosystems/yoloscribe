@@ -35,6 +35,8 @@ SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/yoloscribe-agent-runner:latest")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+YOLOSCRIBE_MODEL = os.environ.get("YOLOSCRIBE_MODEL", "")
+YOLOSCRIBE_MODEL_BASE_URL = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
@@ -131,6 +133,10 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="SQS_QUEUE_URL", value=SQS_QUEUE_URL),
         k8s_client.V1EnvVar(name="YOLOSCRIBE_WEBHOOKS", value=_load_user_webhooks(user_id)),
     ]
+    if YOLOSCRIBE_MODEL:
+        env_vars.append(k8s_client.V1EnvVar(name="YOLOSCRIBE_MODEL", value=YOLOSCRIBE_MODEL))
+    if YOLOSCRIBE_MODEL_BASE_URL:
+        env_vars.append(k8s_client.V1EnvVar(name="YOLOSCRIBE_MODEL_BASE_URL", value=YOLOSCRIBE_MODEL_BASE_URL))
     return k8s_client.V1Container(
         name="agent-runner",
         image=AGENT_RUNNER_IMAGE,
