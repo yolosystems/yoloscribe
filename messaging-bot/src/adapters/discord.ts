@@ -28,7 +28,7 @@ import { decryptPayload, encryptPayload } from '../crypto.js'
 import { recordRequest } from '../rate-tracker.js'
 import { getApiTokenByHash, getConfigByChannel, upsertConfig } from '../store.js'
 import type { MessageHandler, PlatformAdapter } from '../types.js'
-import { uploadIngestFile } from '../yoloscribe.js'
+import { triggerIngest, uploadIngestFile } from '../yoloscribe.js'
 
 const MAX_CHARS = 2000
 const PAGE_RE = /^\[\/([^\]]*)\]\s*/
@@ -183,6 +183,9 @@ export class DiscordAdapter implements PlatformAdapter {
         const captionFilename = `${attachments[0].name}.caption.txt`
         await uploadIngestFile(token, captionFilename, Buffer.from(caption, 'utf-8'), 'text/plain')
       }
+
+      // Trigger ingest agents now that files are in the queue
+      await triggerIngest(token)
 
       const n = attachments.length
       const thread = await getOrCreateThread(message)

@@ -77,7 +77,8 @@ class IngestAgent(BaseAgent):
     - wiki_read(page_path): read any wiki page for context
     - wiki_write(page_path, content): write to a wiki page
     - notify_owner(message): notify the site owner when content cannot be routed
-    - document_index(page_path, filename, mode): extract and index an uploaded document
+    - ingest_complete(summary): emit ingest_end event when all files are processed
+    - document_index(filename, mode): extract and index an uploaded document
     - http_request + any injected MCP tools
     """
 
@@ -181,6 +182,24 @@ class IngestAgent(BaseAgent):
         if not pages:
             return "No wiki pages found."
         return "Wiki pages:\n" + "\n".join(f"- {p}" for p in sorted(pages))
+
+    @tool
+    def ingest_complete(self, summary: str) -> str:
+        """Signal that all ingest files for this run have been processed.
+
+        Call this once at the end of every run, after all pending files have been
+        handled (written, skipped, or flagged for the owner). The summary is
+        written to notifications.md so that on_notify agents (e.g. a Discord
+        notification agent) can inform the owner.
+
+        Args:
+            summary: Plain-text description of what was ingested and where it was
+                     routed — e.g. "Processed 2 files: added recipe to cooking/american-south,
+                     created new page tech-research-tracker/wasm."
+        """
+        self._notify("ingest_end", {"summary": summary}, self._user_id)
+        log.info("IngestAgent emitted ingest_end: %s", summary[:120])
+        return "Ingest complete notification sent."
 
     @tool
     def notify_owner(self, message: str) -> str:
@@ -392,7 +411,11 @@ class IngestAgent(BaseAgent):
             "   f. If you genuinely cannot determine where the content belongs:\n"
             "      - Call notify_owner(message) describing what you received and why "
             "it could not be routed. Do NOT mark the file as processed.\n"
-            "   g. After successfully writing, call ingest_mark_processed(filename).\n\n"
+            "   g. After successfully writing, call ingest_mark_processed(filename).\n"
+            "4. When all files have been processed, call ingest_complete(summary) with "
+            "a plain-text description of what happened — how many files were processed, "
+            "which pages were created or updated, and any files left unprocessed. "
+            "Always call this at the end of every run, even if there were no files to process.\n\n"
             "URL hygiene — follow these rules strictly:\n"
             "- Never construct or guess YoloScribe links (app.yoloscribe.com or "
             "app-dev.yoloscribe.com). Internal wiki links use # notation "
@@ -409,6 +432,7 @@ class IngestAgent(BaseAgent):
 
     def run(self, prompt: str) -> int:
         self._owner_instructions = self._read_owner_instructions()
+        self._notify("ingest_start", {"message": "Processing ingest queue"}, self._user_id)
 
         tools = [
             self.ingest_list_pending,
@@ -419,6 +443,7 @@ class IngestAgent(BaseAgent):
             self.wiki_read,
             self.wiki_write,
             self.notify_owner,
+            self.ingest_complete,
             self.document_index,
         ] + self._mcp_tools
 

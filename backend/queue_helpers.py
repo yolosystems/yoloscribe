@@ -62,6 +62,55 @@ def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
             log.warning("Failed to enqueue on_write agent %s", key, exc_info=True)
 
 
+def enqueue_ingest_agents(site: str, user_id: str) -> None:
+    """Enqueue agent-runner jobs for on_write agents subscribed to the ingest queue.
+
+    Called when a file is uploaded to .user/ingest/ so the ingest agent starts
+    immediately rather than waiting for its next scheduled run. Best-effort; never raises.
+    """
+    from config import S3_BUCKET, SQS_QUEUE_URL, s3, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+
+    agents_prefix = f"{site}/.user/ingest/.agents/"
+    content_key = f"{site}/.user/ingest/content.md"
+
+    try:
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=agents_prefix)
+    except Exception:
+        log.warning("Failed to list ingest agents for site %s", site, exc_info=True)
+        return
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith("/agent.md"):
+            continue
+        try:
+            agent_text = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read().decode("utf-8")
+        except Exception:
+            log.warning("Failed to read agent.md at %s", key, exc_info=True)
+            continue
+
+        if not _ON_WRITE_PATTERN.search(agent_text):
+            continue
+
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": S3_BUCKET,
+                    "agent_md_key": key,
+                    "content_key": content_key,
+                    "prompt": "New files have been added to the ingest queue. Process all pending files now.",
+                    "user_id": user_id,
+                }),
+            )
+            log.info("Enqueued ingest agent %s for site %s", key, site)
+        except Exception:
+            log.warning("Failed to enqueue ingest agent %s", key, exc_info=True)
+
+
 def enqueue_index_job(content_key: str, user_id: str) -> None:
     """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
     from config import S3_BUCKET, SQS_INDEXING_QUEUE_URL, sqs_indexing

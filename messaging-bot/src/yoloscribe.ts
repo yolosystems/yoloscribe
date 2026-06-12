@@ -64,3 +64,16 @@ export async function uploadIngestFile(
   })
   if (!putResp.ok) throw new Error(`S3 PUT returned ${putResp.status}`)
 }
+
+/**
+ * Trigger on_write ingest agents for the site associated with the token.
+ * Call after all files have been uploaded to the ingest queue.
+ */
+export async function triggerIngest(token: string): Promise<void> {
+  const resp = await fetch(`${YOLOSCRIBE_API_URL}/ingest/trigger`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!resp.ok) throw new Error(`/ingest/trigger returned ${resp.status}`)
+}
