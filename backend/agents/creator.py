@@ -77,6 +77,9 @@ FLOW FOR ALL TYPES
        page_access_changed — a shared user's access level changed
        page_visibility_changed — a page's visibility changed
        confirm_page_change — an agent proposed a change that needs review
+       ingest_start       — an ingest run has begun processing queued files
+       ingest_end         — an ingest run completed; payload includes a summary of what was routed
+       ingest_unrouted    — a file could not be routed to any wiki page
    - The agent must declare at least one event. Suggest the most relevant ones
      based on the agent's described purpose.
 
