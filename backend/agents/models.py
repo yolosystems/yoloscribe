@@ -16,7 +16,7 @@ from typing import Literal
 
 @dataclasses.dataclass
 class ModelSpec:
-    provider: Literal["anthropic", "bedrock"]
+    provider: Literal["anthropic", "bedrock", "openai"]
     model_id: str
     supports_thinking: bool = False
 
@@ -26,6 +26,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "haiku":   ModelSpec("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":  ModelSpec("anthropic", "claude-sonnet-4-6"),
     "opus":    ModelSpec("anthropic", "claude-opus-4-6"),
+    "glm":     ModelSpec("openai", "zai.glm-5"),
     # Amazon Bedrock
     "bedrock-haiku":  ModelSpec("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0"),
     "bedrock-sonnet": ModelSpec("bedrock", "anthropic.claude-sonnet-4-6-20250514-v1:0"),
@@ -48,6 +49,13 @@ def build_strands_model(model_key: str):
         fallback = MODEL_REGISTRY[DEFAULT_MODEL_KEY]
         model_id = model_key if model_key else fallback.model_id
         return BedrockModel(model_id=model_id)
+    if spec.provider == "openai":
+        from openai import AsyncOpenAI
+        from strands.models.openai import OpenAIModel
+        from aws_bedrock_token_generator import provide_token
+        base_url = os.getenv("YOLOSCRIBE_MODEL_BASE_URL", "https://bedrock-mantle.us-west-2.api.aws/v1").strip()
+        client = AsyncOpenAI(api_key=provide_token(), base_url=base_url, project="default")
+        return OpenAIModel(client=client, model_id=spec.model_id)
     if spec.provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(

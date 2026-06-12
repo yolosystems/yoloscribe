@@ -245,6 +245,7 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `YOLOSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
 | `YOLOSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
 | `YOLOSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
+| `YOLOSCRIBE_MODEL_BASE_URL` | backend + agent-runner | Optional base URL for the Anthropic API client (e.g. a Bedrock Mantle endpoint); when set, all Anthropic model calls are directed to this URL instead of the default |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `CLOUDFRONT_SIGNING_KEY_ID` | backend | CloudFront key pair ID for signed-cookie media auth (e.g. `K2JCJMDEHXQW5F`) |
 | `CLOUDFRONT_MEDIA_DOMAIN` | backend | CloudFront domain for video/audio assets; falls back to `CLOUDFRONT_DOMAIN` |
@@ -269,6 +270,7 @@ Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `model:` frontmat
 | `haiku` | Anthropic | claude-haiku-4-5-20251001 |
 | `sonnet` | Anthropic | claude-sonnet-4-6 |
 | `opus` | Anthropic | claude-opus-4-6 |
+| `glm` | OpenAI (Bedrock Mantle) | zai.glm-5 |
 | `bedrock-haiku` | Bedrock | claude-haiku-4-5 (cross-region) |
 | `bedrock-sonnet` | Bedrock | claude-sonnet-4-6 (cross-region) |
 | `bedrock-opus` | Bedrock | claude-opus-4-6 (cross-region) |

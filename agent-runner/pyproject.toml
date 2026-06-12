@@ -11,6 +11,8 @@ dependencies = [
     "kubernetes>=29.0.0",
     "strands-agents[anthropic,otel]>=0.1.0",
     "strands-agents-tools>=0.1.0",
+    "openai>=2.41.1",
+    "aws-bedrock-token-generator>=1.1.0",
     "mcp>=1.0.0",
     "mcp-oauth",
     "python-json-logger>=3.2.0",

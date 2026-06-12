@@ -123,6 +123,10 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
         PolicyName="yoloscribe-user-access",
         PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": statements}),
     )
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess",
+    )
     role_arn = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/yoloscribe/{role_name}"
 
     # 3. Create K8s ServiceAccount annotated with role ARN

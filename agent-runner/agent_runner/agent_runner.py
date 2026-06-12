@@ -87,6 +87,7 @@ _MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "haiku":          ("anthropic", "claude-haiku-4-5-20251001"),
     "sonnet":         ("anthropic", "claude-sonnet-4-6"),
     "opus":           ("anthropic", "claude-opus-4-6"),
+    "glm":            ("openai",    "zai.glm-5"),
     "bedrock-haiku":  ("bedrock",   "anthropic.claude-haiku-4-5-20251001-v1:0"),
     "bedrock-sonnet": ("bedrock",   "anthropic.claude-sonnet-4-6-20250514-v1:0"),
     "bedrock-opus":   ("bedrock",   "anthropic.claude-opus-4-6-20250514-v1:0"),
@@ -110,6 +111,13 @@ def _build_model(model_key: str):
         model_id = model_key if model_key else _MODEL_REGISTRY[_DEFAULT_MODEL_KEY][1]
         return BedrockModel(model_id=model_id, max_tokens=16384)
     provider, model_id = entry
+    if provider == "openai":
+        from openai import AsyncOpenAI
+        from strands.models.openai import OpenAIModel
+        from aws_bedrock_token_generator import provide_token
+        base_url = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "https://bedrock-mantle.us-west-2.api.aws/v1").strip()
+        client = AsyncOpenAI(api_key=provide_token(), base_url=base_url, project="default")
+        return OpenAIModel(client=client, model_id=model_id)
     if provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
         return AnthropicModel(
