@@ -113,10 +113,14 @@ def _build_model(model_key: str):
     provider, model_id = entry
     if provider == "anthropic":
         from strands.models.anthropic import AnthropicModel
+        client_args: dict = {"max_retries": 0}
+        base_url = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "").strip()
+        if base_url:
+            client_args["base_url"] = base_url
         return AnthropicModel(
             model_id=model_id,
             max_tokens=16384,
-            client_args={"max_retries": 0},
+            client_args=client_args,
         )
     else:
         from strands.models.bedrock import BedrockModel

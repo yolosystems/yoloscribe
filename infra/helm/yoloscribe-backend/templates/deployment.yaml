@@ -121,6 +121,10 @@ spec:
             - name: MCP_BASE_URL
               value: {{ .Values.config.mcpBaseUrl | quote }}
             {{- end }}
+            {{- if .Values.config.modelBaseUrl }}
+            - name: YOLOSCRIBE_MODEL_BASE_URL
+              value: {{ .Values.config.modelBaseUrl | quote }}
+            {{- end }}
             {{- if .Values.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

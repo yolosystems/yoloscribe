@@ -75,6 +75,9 @@ config:
   s3VectorsIndexName: "yoloscribe"
   bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
   mcpBaseUrl: ""
+  # Optional Anthropic API base URL override (leave empty to use the Anthropic default).
+  # Set to a Bedrock Mantle endpoint to route all Anthropic model calls through it.
+  modelBaseUrl: ""
   # Auth provider — supabase (default) or cognito
   authProvider: "supabase"
   # Supabase (only used when authProvider=supabase)
