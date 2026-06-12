@@ -139,6 +139,7 @@ class SiteTools:
         self._site = site
         self._storage = storage
         self._user_id = user_id
+        self.last_created_page: str | None = None
 
     @property
     def site(self) -> str:
@@ -458,6 +459,12 @@ class SiteTools:
         wiki = WikiPageMarkdownFile(self._site, page_path, self._storage)
         wiki.create(content, user_id=self._user_id)
         self._storage.write(f"{self._site}/{page_path}/.agents/.keep", "")
+        self.last_created_page = page_path
+        try:
+            from queue_helpers import enqueue_index_job as _enqueue_idx
+            _enqueue_idx(f"{self._site}/{page_path}/content.md", self._user_id)
+        except Exception:
+            pass
         return f"Page '{page_path}' created at {wiki.key}"
 
     # ── Tool introspection (used by orchestrator, not LLM tools) ─────────────

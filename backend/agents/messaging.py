@@ -131,6 +131,12 @@ class MessagingTools:
         path = _normalise_path(page_path)
         wiki = WikiPageMarkdownFile(self._site, path, self._storage)
         wiki.write(content)
+        try:
+            from queue_helpers import enqueue_index_job as _enqueue_idx
+            content_key = f"{self._site}/{path}/content.md" if path else f"{self._site}/content.md"
+            _enqueue_idx(content_key, "")
+        except Exception:
+            pass
         return f"Page '{page_path or '(root)'}' saved."
 
     @tool

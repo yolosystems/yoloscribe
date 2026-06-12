@@ -378,15 +378,10 @@ Current context:
                 page_path=page_path or "(root)",
             )
             result = str(agent(f"Site: {site}\nParent page: {page_path or '(root)'}\n\n{instruction}"))
-            match = re.search(r"Page '([^']+)' created", result)
-            if match:
-                created_page = match.group(1)
+            created_page = site_tools.last_created_page
+            if created_page:
                 shared["navigate_to"] = f"#/{created_page}"
-                try:
-                    from queue_helpers import enqueue_index_job as _enqueue_idx
-                    _enqueue_idx(f"{site}/{created_page}/content.md", user_id)
-                except Exception:
-                    pass
+                site_tools.last_created_page = None
             return result
 
         @tool
