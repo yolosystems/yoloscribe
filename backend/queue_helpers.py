@@ -138,6 +138,7 @@ def enqueue_eval_annotator(site: str, page_path: str, run_log_key: str, user_id:
                 "bucket": S3_BUCKET,
                 "agent_md_key": eval_agent_key,
                 "content_key": run_log_key,
+                "prompt": "Process the run log annotations and submit to Phoenix.",
                 "user_id": user_id,
             }),
         )

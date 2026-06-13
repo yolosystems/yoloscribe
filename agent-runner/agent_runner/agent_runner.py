@@ -52,6 +52,7 @@ from yoloscribe_io import (
     parse_skill_md,
 )
 from .agents import (
+    EvalAnnotatorAgent,
     IngestAgent,
     NotificationAgent,
     NullSearchBackend,
@@ -724,6 +725,21 @@ def _make_agent(
             search=search,
             max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
             enqueue_fn=_enqueue_index_job,
+        )
+
+    if agent_type == "eval_annotator":
+        return EvalAnnotatorAgent(
+            agent_def=agent_def,
+            site=site,
+            page_path=page_path,
+            storage=storage,
+            mcp_tools=mcp_tools,
+            model=model,
+            user_id=user_id,
+            notify_fn=notify_fn,
+            search=search,
+            max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+            content_key=content_key,
         )
 
     return PageAgent(
