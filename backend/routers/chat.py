@@ -1,6 +1,8 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from opentelemetry import trace as _ot
+from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 
 from agents import ChatAgent
@@ -13,6 +15,7 @@ from queue_helpers import enqueue_index_job
 from token_budget import _resets_at_utc
 
 router = APIRouter()
+_tracer = _ot.get_tracer("yoloscribe.chat")
 
 # Module-level singleton — instantiated once at startup.
 _chat_agent = ChatAgent(
@@ -71,20 +74,34 @@ async def chat(
         if m.role in ("user", "assistant")
     ]
 
-    try:
-        reply, updated_content, navigate_to, tokens_used = _chat_agent.run(
-            message=req.message,
-            current_content=req.current_content,
-            history=history,
-            site=req.site,
-            file_path=req.file_path,
-            user_id=user_id,
-            user_site=user_site or "",
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    with _tracer.start_as_current_span("yoloscribe.chat") as _span:
+        _span.set_attribute("openinference.span.kind", "CHAIN")
+        _span.set_attribute("user.id", user_id)
+        _span.set_attribute("site", req.site)
+        _span.set_attribute("page_path", req.file_path)
+        if req.session_id:
+            _span.set_attribute("session.id", req.session_id)
+        _span.set_attribute("input.value", req.message)
+
+        try:
+            reply, updated_content, navigate_to, tokens_used = _chat_agent.run(
+                message=req.message,
+                current_content=req.current_content,
+                history=history,
+                site=req.site,
+                file_path=req.file_path,
+                user_id=user_id,
+                user_site=user_site or "",
+            )
+        except PermissionError as exc:
+            _span.set_status(StatusCode.ERROR, str(exc))
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception as exc:
+            _span.set_status(StatusCode.ERROR, str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        _span.set_attribute("output.value", reply)
+        _span.set_status(StatusCode.OK)
 
     if updated_content is not None:
         content_key = f"{req.site}/{req.file_path}"

@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     history: list[HistoryMessage] = []
     site: str = "default"
     file_path: str = "content.md"
+    session_id: str | None = None
 
     # YOL-42: silently truncate oversized page content so the agent can still
     # operate on partial content rather than failing the whole request.

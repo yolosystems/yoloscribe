@@ -7,6 +7,8 @@ completed turn back to the cache.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from opentelemetry import trace as _ot
+from opentelemetry.trace import StatusCode
 from pydantic import BaseModel
 from starlette.requests import Request
 
@@ -19,6 +21,7 @@ from rate_limit import limiter
 from token_budget import _resets_at_utc
 
 router = APIRouter()
+_tracer = _ot.get_tracer("yoloscribe.message")
 
 _messaging_agent = MessagingAgent(s3=s3, bucket=S3_BUCKET)
 
@@ -82,15 +85,26 @@ async def message(
 
     history = get_history(user_id, req.platform, req.channel_id)
 
-    try:
-        reply, tokens_used = _messaging_agent.run(
-            message=req.message,
-            site=site,
-            history=history,
-            user_id=user_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    with _tracer.start_as_current_span("yoloscribe.message") as _span:
+        _span.set_attribute("openinference.span.kind", "CHAIN")
+        _span.set_attribute("user.id", user_id)
+        _span.set_attribute("site", site)
+        _span.set_attribute("session.id", f"{req.platform}:{req.channel_id}")
+        _span.set_attribute("input.value", req.message)
+
+        try:
+            reply, tokens_used = _messaging_agent.run(
+                message=req.message,
+                site=site,
+                history=history,
+                user_id=user_id,
+            )
+        except Exception as exc:
+            _span.set_status(StatusCode.ERROR, str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        _span.set_attribute("output.value", reply)
+        _span.set_status(StatusCode.OK)
 
     append_history(user_id, req.platform, req.channel_id, req.message, reply)
 

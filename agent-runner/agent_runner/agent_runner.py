@@ -849,6 +849,17 @@ def main() -> None:
     content = ""
     agent_def = None
 
+    from opentelemetry import trace as _ot, context as _ot_ctx
+    from opentelemetry.trace import StatusCode as _SC
+    _tracer = _ot.get_tracer("yoloscribe.agent_runner")
+    _span = _tracer.start_span("yoloscribe.agent_runner")
+    _span_token = _ot_ctx.attach(_ot.trace.set_span_in_context(_span))
+    _span.set_attribute("openinference.span.kind", "CHAIN")
+    _span.set_attribute("user.id", USER_ID)
+    _span.set_attribute("site", _site)
+    _span.set_attribute("agent_md_key", AGENT_MD_KEY)
+    _span.set_attribute("input.value", AGENT_PROMPT)
+
     try:
         # 1. Read and parse agent.md
         raw_agent_md = storage.read(AGENT_MD_KEY)
@@ -954,7 +965,10 @@ def main() -> None:
             )
             tokens_used = agent.run(AGENT_PROMPT)
 
+        _span.set_status(_SC.OK)
+
     except Exception as exc:
+        _span.set_status(_SC.ERROR, str(exc))
         log.error("Agent execution failed: %s", exc, exc_info=True)
         _trigger = agent_def.trigger if agent_def is not None else "manual"
         _agent_name = agent_def.name if agent_def is not None else "unknown"
@@ -965,6 +979,9 @@ def main() -> None:
         )
         _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": str(exc)})
         return
+    finally:
+        _ot_ctx.detach(_span_token)
+        _span.end()
 
     if agent_def.trigger == "on_notify":
         log.info("on_notify agent run complete for %s", AGENT_MD_KEY)

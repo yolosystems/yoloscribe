@@ -45,6 +45,45 @@ log = logging.getLogger(__name__)
 _PAGE_PATH_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+
+def _mcp_span(tool_name: str):
+    """Decorator that wraps an async MCP tool handler in an OpenInference TOOL span."""
+    from functools import wraps
+
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            from opentelemetry import trace as _ot
+            from opentelemetry.trace import StatusCode
+            tracer = _ot.get_tracer("yoloscribe.mcp")
+            with tracer.start_as_current_span(f"mcp.{tool_name}") as span:
+                span.set_attribute("openinference.span.kind", "TOOL")
+                ctx = kwargs.get("ctx")
+                if ctx is not None:
+                    try:
+                        user = _user(ctx)
+                        span.set_attribute("user.id", user.user_id)
+                        span.set_attribute("site", user.site)
+                    except Exception:
+                        pass
+                in_parts = [
+                    f"{k}={v!r}" for k, v in kwargs.items()
+                    if k != "ctx" and v is not None
+                ]
+                if in_parts:
+                    span.set_attribute("input.value", ", ".join(in_parts)[:2000])
+                try:
+                    result = await fn(*args, **kwargs)
+                    if result is not None:
+                        span.set_attribute("output.value", str(result)[:2000])
+                    span.set_status(StatusCode.OK)
+                    return result
+                except Exception as exc:
+                    span.set_status(StatusCode.ERROR, str(exc))
+                    raise
+        return wrapper
+    return decorator
+
 # ── User context ───────────────────────────────────────────────────────────────
 
 
@@ -254,6 +293,7 @@ def create_mcp_app(
     # ── Wiki CRUD ─────────────────────────────────────────────────────────────
 
     @mcp.tool()
+    @_mcp_span("wiki_create")
     async def wiki_create(page_path: str, content: str, ctx: Context) -> dict:
         """Create a new wiki page with markdown content.
 
@@ -290,6 +330,7 @@ def create_mcp_app(
         }
 
     @mcp.tool()
+    @_mcp_span("wiki_read")
     async def wiki_read(
         page_path: str,
         include_metadata: bool = False,
@@ -341,6 +382,7 @@ def create_mcp_app(
         return result
 
     @mcp.tool()
+    @_mcp_span("wiki_update")
     async def wiki_update(
         page_path: str,
         content: str,
@@ -372,6 +414,7 @@ def create_mcp_app(
         }
 
     @mcp.tool()
+    @_mcp_span("wiki_archive")
     async def wiki_archive(
         page_path: str,
         ctx: Context = None,
@@ -400,6 +443,7 @@ def create_mcp_app(
         return {"page_path": page_path, **result}
 
     @mcp.tool()
+    @_mcp_span("empty_archive")
     async def empty_archive(
         ctx: Context = None,
     ) -> dict:
@@ -413,6 +457,7 @@ def create_mcp_app(
         return _empty(s3=s3_client, bucket=bucket, site=user.site)
 
     @mcp.tool()
+    @_mcp_span("wiki_list")
     async def wiki_list(
         page_path: str = "",
         recursive: bool = True,
@@ -471,6 +516,7 @@ def create_mcp_app(
         return {"pages": pages}
 
     @mcp.tool()
+    @_mcp_span("wiki_versions")
     async def wiki_versions(
         page_path: str,
         limit: int = 20,
@@ -510,6 +556,7 @@ def create_mcp_app(
         return {"page_path": page_path, "versions": versions}
 
     @mcp.tool()
+    @_mcp_span("wiki_diff")
     async def wiki_diff(
         page_path: str,
         version_id: str,
@@ -572,6 +619,7 @@ def create_mcp_app(
     # ── Search ────────────────────────────────────────────────────────────────
 
     @mcp.tool()
+    @_mcp_span("search")
     async def search(
         query: str,
         tags: list[str] | None = None,
@@ -654,6 +702,7 @@ def create_mcp_app(
         }
 
     @mcp.tool()
+    @_mcp_span("agent_create")
     async def agent_create(
         agent_name: str,
         description: str,
@@ -749,6 +798,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("agent_create_page")
     async def agent_create_page(
         agent_name: str,
         description: str,
@@ -829,6 +879,7 @@ def create_mcp_app(
                 "created_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("agent_create_ingest")
     async def agent_create_ingest(
         agent_name: str,
         description: str,
@@ -903,6 +954,7 @@ def create_mcp_app(
                 "created_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("agent_create_notification")
     async def agent_create_notification(
         agent_name: str,
         description: str,
@@ -978,6 +1030,7 @@ def create_mcp_app(
                 "events": list(events), "created_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("agent_read")
     async def agent_read(
         agent_name: str,
         page_path: str = "",
@@ -1005,6 +1058,7 @@ def create_mcp_app(
         return _defn_to_dict(defn, page_path)
 
     @mcp.tool()
+    @_mcp_span("agent_update")
     async def agent_update(
         agent_name: str,
         page_path: str = "",
@@ -1077,6 +1131,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("agent_delete")
     async def agent_delete(
         agent_name: str,
         page_path: str = "",
@@ -1138,6 +1193,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
     @mcp.tool()
+    @_mcp_span("agent_list")
     async def agent_list(
         page_path: str = "",
         site_wide: bool = False,
@@ -1198,6 +1254,7 @@ def create_mcp_app(
     # The file format is a YAML frontmatter block followed by markdown instructions.
 
     @mcp.tool()
+    @_mcp_span("skill_list")
     async def skill_list(ctx: Context = None) -> dict:
         """List all skills defined for the user's site.
 
@@ -1231,6 +1288,7 @@ def create_mcp_app(
         return {"skills": skills}
 
     @mcp.tool()
+    @_mcp_span("skill_create")
     async def skill_create(
         skill_name: str,
         content: str,
@@ -1259,6 +1317,7 @@ def create_mcp_app(
         return {"skill_name": skill_name, "created_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("skill_update")
     async def skill_update(
         skill_name: str,
         content: str,
@@ -1288,6 +1347,7 @@ def create_mcp_app(
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
     @mcp.tool()
+    @_mcp_span("skill_delete")
     async def skill_delete(
         skill_name: str,
         ctx: Context = None,
@@ -1313,6 +1373,7 @@ def create_mcp_app(
     # ── Introspection ─────────────────────────────────────────────────────────
 
     @mcp.tool()
+    @_mcp_span("list_skill_tools")
     async def list_skill_tools(ctx: Context = None) -> dict:
         """List all tools available to agents running on this site.
 
