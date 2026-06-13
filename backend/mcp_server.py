@@ -19,6 +19,7 @@ import difflib
 import json
 import logging
 import re
+import urllib.parse
 from typing import Any
 
 from fastapi import HTTPException
@@ -278,6 +279,7 @@ def create_mcp_app(
     user_site_repo: UserSiteRepository | None,
     sqs_indexing_client,
     sqs_indexing_queue_url: str,
+    phoenix_api_endpoint: str = "",
     base_url: str = "",
     local_mode: bool = False,
     local_site_name: str = "local",
@@ -1409,6 +1411,134 @@ def create_mcp_app(
                 except Exception:
                     pass
         return {"tools": tools}
+
+    # ── Eval annotation tool ──────────────────────────────────────────────────
+
+    @mcp.tool()
+    @_mcp_span("annotate_trace")
+    async def annotate_trace(
+        session_id: str,
+        rating: str,
+        notes: str = "",
+        correction: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Submit human feedback annotations for an agent run to Phoenix.
+
+        This is a platform-controlled tool. It validates that the session
+        belongs to the calling user's site before writing any annotations,
+        preventing cross-site data access.
+
+        Only callable by the platform-provisioned phoenix-annotator agent
+        (type: eval_annotator). Not available as a user-configurable skill.
+
+        Args:
+            session_id: The session ID from the run log frontmatter.
+            rating: Feedback label — one of: Excellent, Good, Poor, Bad.
+            notes: Free-text notes about the run (optional).
+            correction: What the agent should have done differently (optional).
+        """
+        import urllib.request as _req
+
+        user = _user(ctx)
+
+        if not phoenix_api_endpoint:
+            raise HTTPException(
+                status_code=503,
+                detail="Phoenix API is not configured on this server.",
+            )
+
+        _valid_ratings = {"Excellent", "Good", "Poor", "Bad"}
+        if rating not in _valid_ratings:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid rating '{rating}'. Must be one of: {', '.join(sorted(_valid_ratings))}.",
+            )
+
+        # Query Phoenix for spans with this session ID to verify site ownership.
+        encoded_id = urllib.parse.quote(session_id)
+        query_url = (
+            f"{phoenix_api_endpoint.rstrip('/')}/v1/spans"
+            f"?project_name=default&filter%5Bsession_id%5D={encoded_id}"
+        )
+        try:
+            req = _req.Request(query_url, headers={"Accept": "application/json"})
+            with _req.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except Exception as exc:
+            log.warning("Phoenix span query failed for session %s: %s", session_id[:8], exc)
+            raise HTTPException(status_code=502, detail=f"Phoenix API error: {exc}")
+
+        spans = data.get("data", [])
+        if not spans:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No spans found for session '{session_id}'. "
+                "Traces may still be exporting — wait a moment and retry.",
+            )
+
+        # Security check: validate every span's site attribute matches the caller.
+        for span in spans:
+            span_site = span.get("attributes", {}).get("site", "")
+            if span_site and span_site != user.site:
+                log.warning(
+                    "annotate_trace blocked: user site=%s tried to annotate span site=%s (session=%s)",
+                    user.site, span_site, session_id[:8],
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied: this session does not belong to your site.",
+                )
+
+        # Build annotation payload and write to Phoenix.
+        annotations = []
+        for span in spans:
+            span_id = span.get("span_id", "")
+            if not span_id:
+                continue
+            explanation_parts = []
+            if notes:
+                explanation_parts.append(notes)
+            if correction:
+                explanation_parts.append(f"Correction: {correction}")
+            annotations.append({
+                "span_id": span_id,
+                "name": "human_feedback",
+                "annotator_kind": "HUMAN",
+                "result": {
+                    "label": rating,
+                    "explanation": "\n\n".join(explanation_parts) or None,
+                },
+            })
+
+        if not annotations:
+            return {"status": "no_spans", "session_id": session_id}
+
+        post_url = f"{phoenix_api_endpoint.rstrip('/')}/v1/span_annotations"
+        payload = json.dumps({"data": annotations}).encode()
+        post_req = _req.Request(
+            post_url,
+            data=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with _req.urlopen(post_req, timeout=10) as resp:
+                result = json.loads(resp.read()) if resp.length else {}
+        except Exception as exc:
+            log.warning("Phoenix annotation write failed for session %s: %s", session_id[:8], exc)
+            raise HTTPException(status_code=502, detail=f"Phoenix annotation error: {exc}")
+
+        log.info(
+            "Submitted %d annotation(s) for session %s (site=%s, rating=%s)",
+            len(annotations), session_id[:8], user.site, rating,
+        )
+        return {
+            "status": "submitted",
+            "session_id": session_id,
+            "spans_annotated": len(annotations),
+            "rating": rating,
+        }
 
     # ── Return ASGI app ───────────────────────────────────────────────────────
 

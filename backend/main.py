@@ -162,6 +162,7 @@ if LOCAL_MODE or auth_provider is not None:
         user_site_repo=user_site_repo,
         sqs_indexing_client=sqs_indexing,
         sqs_indexing_queue_url=os.environ.get("SQS_INDEXING_QUEUE_URL", ""),
+        phoenix_api_endpoint=os.environ.get("PHOENIX_API_ENDPOINT", ""),
         base_url=mcp_api_base(),
         local_mode=LOCAL_MODE,
         local_site_name=LOCAL_SITE_NAME,
