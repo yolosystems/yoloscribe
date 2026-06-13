@@ -3,7 +3,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_md import AgentDefinitionError, parse_agent_md
+from yoloscribe_io import AgentDefinitionError, parse_agent_md
 from agents.base import AGENT_NAME_RE, agents_prefix, skills_prefix
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, s3

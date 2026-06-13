@@ -28,16 +28,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from agent_md import (
-    AGENT_NAME_RE,
+from yoloscribe_io import (
     AgentDefinition,
     AgentDefinitionError,
     build_agent_md,
     parse_agent_md,
 )
+from yoloscribe_io.agent_page import AGENT_NAME_RE
+from yoloscribe_io.markdown_file import _parse_frontmatter
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
 from queue_helpers import enqueue_on_write_agents
-from agent_md import _parse_frontmatter
 from auth_providers.base import AuthProvider, UserSiteRepository
 
 log = logging.getLogger(__name__)
@@ -704,6 +704,7 @@ def create_mcp_app(
             "model": defn.model,
             "confirm_before_write": defn.confirm_before_write,
             "events": defn.events,
+            "eval_log": defn.eval_log,
         }
 
     @mcp.tool()

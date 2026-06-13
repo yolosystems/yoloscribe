@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 import sse_broadcaster
-from agent_md import AgentDefinitionError, parse_agent_md
+from yoloscribe_io import AgentDefinitionError, parse_agent_md
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
 from k8s_agent import enqueue_schedule_bootstrap

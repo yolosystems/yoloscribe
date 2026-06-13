@@ -13,7 +13,7 @@ from .storage import StorageBackend
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
-_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification"})
+_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification", "eval_annotator"})
 
 
 # ── Error ─────────────────────────────────────────────────────────────────────
@@ -76,6 +76,7 @@ class AgentDefinition:
     scope: Scope = field(default_factory=Scope)
     events: list[str] = field(default_factory=list)
     type: str = ""
+    eval_log: bool = False
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
@@ -131,6 +132,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
     timezone = str(fm.get("timezone", "")).strip()
     model = str(fm.get("model", "")).strip()
     confirm_before_write = bool(fm.get("confirm_before_write", False))
+    eval_log = bool(fm.get("eval_log", False))
 
     agent_type = str(fm.get("type", "page")).strip()
     if agent_type and agent_type not in _VALID_AGENT_TYPES:
@@ -209,6 +211,7 @@ def parse_agent_md(text: str) -> AgentDefinition:
         scope=scope,
         events=events,
         type=agent_type,
+        eval_log=eval_log,
     )
 
 
@@ -235,6 +238,8 @@ def build_agent_md(defn: AgentDefinition) -> str:
         lines.append(f"model: {defn.model}")
     if defn.confirm_before_write:
         lines.append("confirm_before_write: true")
+    if defn.eval_log:
+        lines.append("eval_log: true")
     if defn.events:
         lines.append("events:")
         for e in defn.events:
