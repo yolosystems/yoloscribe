@@ -37,6 +37,8 @@ AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 YOLOSCRIBE_MODEL = os.environ.get("YOLOSCRIBE_MODEL", "")
 YOLOSCRIBE_MODEL_BASE_URL = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "")
+OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+OTEL_EXPORTER_OTLP_HEADERS = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
@@ -137,6 +139,10 @@ def _build_container(payload: dict):  # type: ignore[return]
         env_vars.append(k8s_client.V1EnvVar(name="YOLOSCRIBE_MODEL", value=YOLOSCRIBE_MODEL))
     if YOLOSCRIBE_MODEL_BASE_URL:
         env_vars.append(k8s_client.V1EnvVar(name="YOLOSCRIBE_MODEL_BASE_URL", value=YOLOSCRIBE_MODEL_BASE_URL))
+    if OTEL_EXPORTER_OTLP_ENDPOINT:
+        env_vars.append(k8s_client.V1EnvVar(name="OTEL_EXPORTER_OTLP_ENDPOINT", value=OTEL_EXPORTER_OTLP_ENDPOINT))
+    if OTEL_EXPORTER_OTLP_HEADERS:
+        env_vars.append(k8s_client.V1EnvVar(name="OTEL_EXPORTER_OTLP_HEADERS", value=OTEL_EXPORTER_OTLP_HEADERS))
     return k8s_client.V1Container(
         name="agent-runner",
         image=AGENT_RUNNER_IMAGE,
