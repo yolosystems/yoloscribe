@@ -853,7 +853,7 @@ def main() -> None:
     from opentelemetry.trace import StatusCode as _SC
     _tracer = _ot.get_tracer("yoloscribe.agent_runner")
     _span = _tracer.start_span("yoloscribe.agent_runner")
-    _span_token = _ot_ctx.attach(_ot.trace.set_span_in_context(_span))
+    _span_token = _ot_ctx.attach(_ot.set_span_in_context(_span))
     _span.set_attribute("openinference.span.kind", "CHAIN")
     _span.set_attribute("user.id", USER_ID)
     _span.set_attribute("site", _site)
