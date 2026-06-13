@@ -36,7 +36,12 @@ class _SanitizingExporter:
                         attrs[key] = _TOKEN_RE.sub("[REDACTED]", val)
                     except Exception:
                         pass
-        return self._wrapped.export(spans)
+        try:
+            return self._wrapped.export(spans)
+        except Exception:
+            log.debug("OTEL span export failed", exc_info=True)
+            from opentelemetry.sdk.trace.export import SpanExportResult
+            return SpanExportResult.FAILURE
 
     def shutdown(self) -> None:
         self._wrapped.shutdown()

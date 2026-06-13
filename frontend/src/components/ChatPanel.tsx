@@ -63,6 +63,7 @@ export default function ChatPanel({
   const [expanded, setExpanded] = useState(true)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [tokenBudget, setTokenBudget] = useState<TokenBudget | null>(null)
+  const sessionId = useRef<string>(crypto.randomUUID())
   const bottomRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
@@ -121,6 +122,7 @@ export default function ChatPanel({
           history: messages.map((m) => ({ role: m.role, content: m.content })),
           site,
           file_path: filePath,
+          session_id: sessionId.current,
         }),
       })
       if (!res.ok) {
