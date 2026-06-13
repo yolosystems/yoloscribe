@@ -241,6 +241,22 @@ def _now_iso() -> str:
     return datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
 
 
+def _otlp_auth_headers() -> dict[str, str]:
+    """Parse OTEL_EXPORTER_OTLP_HEADERS into a dict for Phoenix REST calls.
+
+    Format: comma-separated key=value pairs, e.g. "api_key=abc123".
+    """
+    import os
+    raw = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+    headers: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            headers[k.strip()] = v.strip()
+    return headers
+
+
 def _maybe_enqueue_index(
     content_key: str,
     user_id: str,
@@ -1462,7 +1478,7 @@ def create_mcp_app(
             f"?project_name=default&filter%5Bsession_id%5D={encoded_id}"
         )
         try:
-            req = _req.Request(query_url, headers={"Accept": "application/json"})
+            req = _req.Request(query_url, headers={"Accept": "application/json", **_otlp_auth_headers()})
             with _req.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
         except Exception as exc:
@@ -1519,7 +1535,7 @@ def create_mcp_app(
         post_req = _req.Request(
             post_url,
             data=payload,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={"Content-Type": "application/json", "Accept": "application/json", **_otlp_auth_headers()},
             method="POST",
         )
         try:

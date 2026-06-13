@@ -29,6 +29,22 @@ def _phoenix_base_url() -> str:
     return os.environ.get("PHOENIX_API_ENDPOINT", "").rstrip("/")
 
 
+def _otlp_auth_headers() -> dict[str, str]:
+    """Parse OTEL_EXPORTER_OTLP_HEADERS into a dict for use in Phoenix REST calls.
+
+    Format: comma-separated key=value pairs, e.g. "api_key=abc123,other=val".
+    """
+    import os
+    raw = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+    headers: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            headers[k.strip()] = v.strip()
+    return headers
+
+
 def _fetch_spans(session_id: str, max_retries: int = 5) -> list[dict]:
     """Poll Phoenix REST API for spans by session ID with exponential backoff.
 
@@ -52,7 +68,7 @@ def _fetch_spans(session_id: str, max_retries: int = 5) -> list[dict]:
 
     for attempt in range(max_retries):
         try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            req = urllib.request.Request(url, headers={"Accept": "application/json", **_otlp_auth_headers()})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
                 spans = data.get("data", [])
