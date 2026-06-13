@@ -39,6 +39,8 @@ YOLOSCRIBE_MODEL = os.environ.get("YOLOSCRIBE_MODEL", "")
 YOLOSCRIBE_MODEL_BASE_URL = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "")
 OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 OTEL_EXPORTER_OTLP_HEADERS = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+PHOENIX_API_ENDPOINT = os.environ.get("PHOENIX_API_ENDPOINT", "")
+PHOENIX_API_KEY = os.environ.get("PHOENIX_API_KEY", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
@@ -104,6 +106,10 @@ def _run_local(payload: dict) -> None:
         env["SQS_QUEUE_URL"] = SQS_QUEUE_URL
     if AWS_PROFILE:
         env["AWS_PROFILE"] = AWS_PROFILE
+    if PHOENIX_API_ENDPOINT:
+        env["PHOENIX_API_ENDPOINT"] = PHOENIX_API_ENDPOINT
+    if PHOENIX_API_KEY:
+        env["PHOENIX_API_KEY"] = PHOENIX_API_KEY
 
     log.info(
         "LOCAL_RUNNER: running agent-runner for %s / %s",
@@ -143,6 +149,10 @@ def _build_container(payload: dict):  # type: ignore[return]
         env_vars.append(k8s_client.V1EnvVar(name="OTEL_EXPORTER_OTLP_ENDPOINT", value=OTEL_EXPORTER_OTLP_ENDPOINT))
     if OTEL_EXPORTER_OTLP_HEADERS:
         env_vars.append(k8s_client.V1EnvVar(name="OTEL_EXPORTER_OTLP_HEADERS", value=OTEL_EXPORTER_OTLP_HEADERS))
+    if PHOENIX_API_ENDPOINT:
+        env_vars.append(k8s_client.V1EnvVar(name="PHOENIX_API_ENDPOINT", value=PHOENIX_API_ENDPOINT))
+    if PHOENIX_API_KEY:
+        env_vars.append(k8s_client.V1EnvVar(name="PHOENIX_API_KEY", value=PHOENIX_API_KEY))
     return k8s_client.V1Container(
         name="agent-runner",
         image=AGENT_RUNNER_IMAGE,
