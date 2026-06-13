@@ -47,7 +47,12 @@ _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _mcp_span(tool_name: str):
-    """Decorator that wraps an async MCP tool handler in an OpenInference TOOL span."""
+    """Enrich the FastMCP-created span for a tool call with OpenInference attributes.
+
+    FastMCP creates its own span per tool invocation. This decorator enriches that
+    existing span (via get_current_span()) rather than creating a nested child, so
+    the top-level trace in Phoenix gets the correct kind, status, and user context.
+    """
     from functools import wraps
 
     def decorator(fn):
@@ -55,32 +60,32 @@ def _mcp_span(tool_name: str):
         async def wrapper(*args, **kwargs):
             from opentelemetry import trace as _ot
             from opentelemetry.trace import StatusCode
-            tracer = _ot.get_tracer("yoloscribe.mcp")
-            with tracer.start_as_current_span(f"mcp.{tool_name}") as span:
-                span.set_attribute("openinference.span.kind", "TOOL")
-                ctx = kwargs.get("ctx")
-                if ctx is not None:
-                    try:
-                        user = _user(ctx)
-                        span.set_attribute("user.id", user.user_id)
-                        span.set_attribute("site", user.site)
-                    except Exception:
-                        pass
-                in_parts = [
-                    f"{k}={v!r}" for k, v in kwargs.items()
-                    if k != "ctx" and v is not None
-                ]
-                if in_parts:
-                    span.set_attribute("input.value", ", ".join(in_parts)[:2000])
+            span = _ot.get_current_span()
+            span.set_attribute("openinference.span.kind", "TOOL")
+            span.set_attribute("tool.name", tool_name)
+            ctx = kwargs.get("ctx")
+            if ctx is not None:
                 try:
-                    result = await fn(*args, **kwargs)
-                    if result is not None:
-                        span.set_attribute("output.value", str(result)[:2000])
-                    span.set_status(StatusCode.OK)
-                    return result
-                except Exception as exc:
-                    span.set_status(StatusCode.ERROR, str(exc))
-                    raise
+                    user = _user(ctx)
+                    span.set_attribute("user.id", user.user_id)
+                    span.set_attribute("site", user.site)
+                except Exception:
+                    pass
+            in_parts = [
+                f"{k}={v!r}" for k, v in kwargs.items()
+                if k != "ctx" and v is not None
+            ]
+            if in_parts:
+                span.set_attribute("input.value", ", ".join(in_parts)[:2000])
+            try:
+                result = await fn(*args, **kwargs)
+                if result is not None:
+                    span.set_attribute("output.value", str(result)[:2000])
+                span.set_status(StatusCode.OK)
+                return result
+            except Exception as exc:
+                span.set_status(StatusCode.ERROR, str(exc))
+                raise
         return wrapper
     return decorator
 
