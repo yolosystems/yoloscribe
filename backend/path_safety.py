@@ -5,6 +5,7 @@ import re
 _AGENT_NAME_SEG = r"[a-z0-9][a-z0-9_-]*"
 _PAGE_SEG = r"[a-z0-9][a-z0-9_/-]*"
 _ASSET_FILE = r"[a-zA-Z0-9][a-zA-Z0-9._-]*"
+_RUN_LOG_FILE = r"\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.md"
 
 SAFE_PATH = re.compile(
     r"^("
@@ -15,8 +16,10 @@ SAFE_PATH = re.compile(
     rf"|{_PAGE_SEG}/settings\.json"
     rf"|\.agents/{_AGENT_NAME_SEG}/agent\.md"
     rf"|\.agents/{_AGENT_NAME_SEG}/run_log\.md"
+    rf"|\.agents/{_AGENT_NAME_SEG}/runs/{_RUN_LOG_FILE}"
     rf"|{_PAGE_SEG}/\.agents/{_AGENT_NAME_SEG}/agent\.md"
     rf"|{_PAGE_SEG}/\.agents/{_AGENT_NAME_SEG}/run_log\.md"
+    rf"|{_PAGE_SEG}/\.agents/{_AGENT_NAME_SEG}/runs/{_RUN_LOG_FILE}"
     rf"|\.skills/{_AGENT_NAME_SEG}/SKILL\.md"
     r"|\.user/search\.md"
     r"|\.user/notifications\.md"
@@ -25,7 +28,14 @@ SAFE_PATH = re.compile(
     rf"|\.user/ingest/{_AGENT_NAME_SEG}/settings\.json"
     rf"|\.user/ingest/\.agents/{_AGENT_NAME_SEG}/agent\.md"
     rf"|\.user/ingest/\.agents/{_AGENT_NAME_SEG}/run_log\.md"
+    rf"|\.user/ingest/\.agents/{_AGENT_NAME_SEG}/runs/{_RUN_LOG_FILE}"
     r")$"
+)
+
+# Matches a run log path (relative to site root, without site prefix).
+# Groups: (1) page_path or None, (2) agent_name
+RUN_LOG_PATH_RE = re.compile(
+    r"^(?:(.+)/)?\.agents/([a-z0-9][a-z0-9_-]*)/runs/\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.md$"
 )
 
 # Asset paths: site-level or page-level, under assets/ (images) or media/ (video/audio).
