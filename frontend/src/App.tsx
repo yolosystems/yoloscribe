@@ -26,6 +26,7 @@ export interface AgentMeta {
   trigger: 'manual' | 'schedule' | 'on_write' | string
   scope: string[]
   is_pointer: boolean
+  eval_log?: boolean
 }
 
 // In LOCAL_MODE Supabase auth is bypassed — the backend accepts all requests
@@ -88,6 +89,8 @@ const IS_MAIN_SITE = SITE === 'default'
 //   #/{page}/.agents/{name}      →  {page}/.agents/{name}/agent.md
 //   #/.agents/{name}/run_log.md  →  .agents/{name}/run_log.md (agent run log)
 //   #/{page}/.agents/{name}/run_log.md → {page}/.agents/{name}/run_log.md
+//   #/.agents/{name}/runs/{file} →  .agents/{name}/runs/{file} (eval annotation log)
+//   #/{page}/.agents/{name}/runs/{file} → {page}/.agents/{name}/runs/{file}
 //   #/.skills/{name}             →  .skills/{name}/SKILL.md (site skill)
 
 function getFilePath(): string {
@@ -112,6 +115,9 @@ function getFilePath(): string {
   // {page}/.agents/{name}/run_log.md  or  .agents/{name}/run_log.md
   const runLogMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/run_log\.md$/)
   if (runLogMatch) return `${runLogMatch[1] ?? ''}.agents/${runLogMatch[2]}/run_log.md`
+  // {page}/.agents/{name}/runs/{file}  or  .agents/{name}/runs/{file}
+  const evalRunMatch = path.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/runs\/(\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.md)$/)
+  if (evalRunMatch) return `${evalRunMatch[1] ?? ''}.agents/${evalRunMatch[2]}/runs/${evalRunMatch[3]}`
   // page path
   return `${path}/content.md`
 }
@@ -127,6 +133,8 @@ function filePathToHash(fp: string): string {
   if (agentMatch) return `#/${agentMatch[1] ?? ''}.agents/${agentMatch[2]}`
   const runLogMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/run_log\.md$/)
   if (runLogMatch) return `#/${runLogMatch[1] ?? ''}.agents/${runLogMatch[2]}/run_log.md`
+  const evalRunMatch = fp.match(/^(.*\/)?\.agents\/([a-z0-9][a-z0-9_-]*)\/runs\/(\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.md)$/)
+  if (evalRunMatch) return `#/${evalRunMatch[1] ?? ''}.agents/${evalRunMatch[2]}/runs/${evalRunMatch[3]}`
   const pageMatch = fp.match(/^(.+)\/content\.md$/)
   if (pageMatch) return `#/${pageMatch[1]}`
   return ''

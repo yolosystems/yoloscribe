@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 import bleach
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
@@ -7,18 +8,61 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 import sse_broadcaster
-from agent_md import AgentDefinitionError, parse_agent_md
+from yoloscribe_io import AgentDefinition, AgentDefinitionError, build_agent_md, parse_agent_md
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
-from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES
+from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES, S3_BUCKET, s3
 from k8s_agent import enqueue_schedule_bootstrap
 from rate_limit import limiter
-from path_safety import is_safe_path
-from queue_helpers import enqueue_index_job, enqueue_on_write_agents
+from path_safety import is_safe_path, RUN_LOG_PATH_RE
+from queue_helpers import enqueue_index_job, enqueue_on_write_agents, enqueue_eval_annotator
 from s3_storage import storage
 from settings_cache import get_page_settings, page_path_from_file_path
 from yoloscribe_io import WikiPageMarkdownFile
 
 _audit_log = logging.getLogger("yoloscribe.audit")
+
+_AGENT_MD_PATH_RE = re.compile(
+    r"^(?:(.+)/)?\.agents/([a-z0-9][a-z0-9_-]*)/agent\.md$"
+)
+
+_PHOENIX_ANNOTATOR_DEFN = AgentDefinition(
+    name="phoenix-annotator",
+    type="eval_annotator",
+    trigger="manual",
+    description=(
+        "Platform-provisioned agent that reads run log annotations and submits them "
+        "to Phoenix as span labels. Do not edit."
+    ),
+)
+
+
+def _provision_phoenix_annotator(site: str, path: str, text: str) -> None:
+    """Auto-provision the phoenix-annotator sibling agent when eval_log: true is saved."""
+    try:
+        defn = parse_agent_md(text)
+    except AgentDefinitionError:
+        return
+    if not defn.eval_log:
+        return
+    m = _AGENT_MD_PATH_RE.match(path)
+    if not m:
+        return
+    page_path_seg = m.group(1) or ""
+    agents_dir = f"{site}/{page_path_seg}/.agents" if page_path_seg else f"{site}/.agents"
+    eval_key = f"{agents_dir}/phoenix-annotator/agent.md"
+    try:
+        check = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=eval_key, MaxKeys=1)
+        if check.get("KeyCount", 0) > 0:
+            return
+        content = build_agent_md(_PHOENIX_ANNOTATOR_DEFN)
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=eval_key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+    except Exception:
+        _audit_log.warning("Failed to provision phoenix-annotator at %s", eval_key, exc_info=True)
 
 # HTML tags and attributes permitted in shared-write content.
 # Anything not in these lists is stripped by bleach.
@@ -248,6 +292,11 @@ async def put_content_route(
             storage.write(f"{site}/{path}", text)
         if ".agents/" in path and path.endswith("agent.md") and not is_shared_write:
             _maybe_bootstrap_schedule(site, path, text, claims.user_id)
+            _provision_phoenix_annotator(site, path, text)
+        run_log_m = RUN_LOG_PATH_RE.match(path)
+        if run_log_m and not is_shared_write:
+            page_path_seg = run_log_m.group(1) or ""
+            enqueue_eval_annotator(site, page_path_seg, f"{site}/{path}", claims.user_id)
 
     return Response(content='{"status":"saved"}', status_code=200, media_type="application/json")
 

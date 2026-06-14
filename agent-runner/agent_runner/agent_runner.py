@@ -52,6 +52,7 @@ from yoloscribe_io import (
     parse_skill_md,
 )
 from .agents import (
+    EvalAnnotatorAgent,
     IngestAgent,
     NotificationAgent,
     NullSearchBackend,
@@ -726,6 +727,21 @@ def _make_agent(
             enqueue_fn=_enqueue_index_job,
         )
 
+    if agent_type == "eval_annotator":
+        return EvalAnnotatorAgent(
+            agent_def=agent_def,
+            site=site,
+            page_path=page_path,
+            storage=storage,
+            mcp_tools=mcp_tools,
+            model=model,
+            user_id=user_id,
+            notify_fn=notify_fn,
+            search=search,
+            max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
+            content_key=content_key,
+        )
+
     return PageAgent(
         agent_def=agent_def,
         site=site,
@@ -852,11 +868,24 @@ def main() -> None:
     import uuid as _uuid
     from opentelemetry import trace as _ot, context as _ot_ctx
     from opentelemetry.trace import StatusCode as _SC
+    _session_id = str(_uuid.uuid4())
+
+    # Stamp session.id and site on every span so Phoenix queries are always
+    # scoped to this session — never rely on trace_id alone for cross-user safety.
+    _otel_provider = _ot.get_tracer_provider()
+    if hasattr(_otel_provider, "add_span_processor"):
+        from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor  # noqa: PLC0415
+        class _SessionStamper(_SpanProcessor):
+            def on_start(self, span, parent_context=None):
+                span.set_attribute("session.id", _session_id)
+                span.set_attribute("site", _site)
+        _otel_provider.add_span_processor(_SessionStamper())
+
     _tracer = _ot.get_tracer("yoloscribe.agent_runner")
     _span = _tracer.start_span("yoloscribe.agent_runner")
     _span_token = _ot_ctx.attach(_ot.set_span_in_context(_span))
     _span.set_attribute("openinference.span.kind", "CHAIN")
-    _span.set_attribute("session.id", str(_uuid.uuid4()))
+    _span.set_attribute("session.id", _session_id)
     _span.set_attribute("user.id", USER_ID)
     _span.set_attribute("site", _site)
     _span.set_attribute("agent_md_key", AGENT_MD_KEY)
@@ -1002,6 +1031,26 @@ def main() -> None:
         storage, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
     )
+
+    # Write eval annotation log for eval_log agents when OTEL is active.
+    if getattr(agent_def, "eval_log", False) and os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        import datetime as _dt
+        from .trace_fetcher import write_eval_annotation_log
+        _run_at = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _model_key = agent_def.model or _resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL")
+        write_eval_annotation_log(
+            session_id=_session_id,
+            agent_name=agent_def.name,
+            page_path=_page_path,
+            agent_md_key=AGENT_MD_KEY,
+            run_at=_run_at,
+            status="success",
+            duration_s=time.monotonic() - _run_start,
+            tokens_used=tokens_used,
+            model_key=_model_key,
+            storage=storage,
+        )
+
     _notify("agent_success", {"agent": AGENT_MD_KEY})
 
 

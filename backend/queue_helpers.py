@@ -111,6 +111,42 @@ def enqueue_ingest_agents(site: str, user_id: str) -> None:
             log.warning("Failed to enqueue ingest agent %s", key, exc_info=True)
 
 
+def enqueue_eval_annotator(site: str, page_path: str, run_log_key: str, user_id: str) -> None:
+    """Enqueue the platform phoenix-annotator agent when a run log file is saved.
+
+    Looks for a platform-provisioned phoenix-annotator agent.md co-located under
+    the same .agents/ directory as the eval_log agent whose run log was just saved.
+    Best-effort; never raises.
+    """
+    from config import S3_BUCKET, SQS_QUEUE_URL, s3, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+
+    agents_dir = f"{site}/{page_path}/.agents" if page_path else f"{site}/.agents"
+    eval_agent_key = f"{agents_dir}/phoenix-annotator/agent.md"
+
+    try:
+        s3.head_object(Bucket=S3_BUCKET, Key=eval_agent_key)
+    except Exception:
+        return
+
+    try:
+        sqs.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps({
+                "bucket": S3_BUCKET,
+                "agent_md_key": eval_agent_key,
+                "content_key": run_log_key,
+                "prompt": "Process the run log annotations and submit to Phoenix.",
+                "user_id": user_id,
+            }),
+        )
+        log.info("Enqueued eval annotator for run log %s", run_log_key)
+    except Exception:
+        log.warning("Failed to enqueue eval annotator for %s", run_log_key, exc_info=True)
+
+
 def enqueue_index_job(content_key: str, user_id: str) -> None:
     """Send an indexing job to the SQS indexing queue (best-effort; never raises)."""
     from config import S3_BUCKET, SQS_INDEXING_QUEUE_URL, sqs_indexing

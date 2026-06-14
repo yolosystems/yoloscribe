@@ -3,7 +3,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from agent_md import AgentDefinitionError, parse_agent_md
+from yoloscribe_io import AgentDefinitionError, parse_agent_md
 from agents.base import AGENT_NAME_RE, agents_prefix, skills_prefix
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, s3
@@ -17,11 +17,12 @@ router = APIRouter()
 
 
 def _extract_agent_meta(text: str) -> dict:
-    """Extract trigger and scope from agent.md frontmatter."""
+    """Extract trigger, scope, and eval_log from agent.md frontmatter."""
     fm_match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
     trigger = "manual"
     scope: list[str] = []
     is_pointer = False
+    eval_log = False
     if fm_match:
         fm = fm_match.group(1)
         tm = re.search(r"^trigger:\s*(\S+)", fm, re.MULTILINE)
@@ -31,7 +32,9 @@ def _extract_agent_meta(text: str) -> dict:
             scope = re.findall(r"^\s+-\s+(.+)$", fm, re.MULTILINE)
         if re.search(r"^ref:\s*\S+", fm, re.MULTILINE):
             is_pointer = True
-    return {"trigger": trigger, "scope": scope, "is_pointer": is_pointer}
+        if re.search(r"^eval_log:\s*true", fm, re.MULTILINE):
+            eval_log = True
+    return {"trigger": trigger, "scope": scope, "is_pointer": is_pointer, "eval_log": eval_log}
 
 
 @router.get("/agents", tags=["agents"], summary="List agents for a page")
@@ -87,6 +90,39 @@ async def create_agent(
         ContentType="text/markdown; charset=utf-8",
     )
     return {"agent_name": req.agent_name}
+
+
+@router.get("/agent-runs", tags=["agents"], summary="List annotation run logs for an agent")
+async def list_agent_runs(
+    site: str = "default",
+    agent_name: str = "",
+    page_path: str = "",
+    ctx: tuple[str, str | None] = Depends(get_user_context),
+) -> dict:
+    """List available eval annotation run log files for a given agent.
+
+    Returns filenames (YYYY-MM-DD-{8hex}.md) in reverse chronological order.
+    Requires site ownership — run logs are owner-only.
+    """
+    user_id, user_site = ctx
+    require_site_owner(site, user_site)
+
+    if not AGENT_NAME_RE.match(agent_name):
+        raise HTTPException(status_code=400, detail="Invalid agent name")
+
+    prefix = agents_prefix(site, page_path)
+    runs_prefix = f"{prefix}/{agent_name}/runs/"
+
+    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=runs_prefix)
+    runs = []
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        filename = key[len(runs_prefix):]
+        if filename.endswith(".md"):
+            runs.append(filename)
+
+    runs.sort(reverse=True)
+    return {"runs": runs}
 
 
 @router.delete("/agents", tags=["agents"], summary="Delete an agent")

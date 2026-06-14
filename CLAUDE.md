@@ -117,13 +117,14 @@ Full format (definition agents) — all metadata in YAML frontmatter, free-form 
 ---
 trigger: manual|schedule|on_write|on_notify
 name: {name}
-type: page|ingest|notification  # optional; explicit agent class dispatch (omit to use heuristics)
+type: page|ingest|notification|eval_annotator  # optional; explicit agent class dispatch (omit to use heuristics)
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
 skills:
   - {skill-name}
 model: sonnet          # optional; overrides server default
 confirm_before_write: true  # optional; when true, writes go to .proposed.content.md
+eval_log: true         # optional; default false; enables eval annotation log post-processing after each run
 ---
 
 {description}
@@ -139,8 +140,15 @@ confirm_before_write: true  # optional; when true, writes go to .proposed.conten
 - `page` — wiki page agent; reads and writes `content.md` on a wiki page (default when `type:` is absent and trigger is not `on_notify` and page is not `.user/ingest`)
 - `ingest` — ingest agent; processes content staged in `.user/ingest/` and routes it to wiki pages using semantic search against the wiki's own structure; must be placed on `.user/ingest`. The page `.user/ingest/content.md` serves as an owner-editable routing instructions file — plain-text hints (e.g. "meeting notes go under meetings/") that are injected into the agent's system prompt on every run and take priority over the agent's own judgement.
 - `notification` — notification agent; handles entries in `.user/notifications.md`; must use `trigger: on_notify` and be placed at the site root
+- `eval_annotator` — platform-provisioned annotation agent; reads a run log at `{page}/.agents/{name}/runs/{YYYY-MM-DD}-{8hex}.md`, extracts Rating/Notes/Correction fields, and calls the `annotate_trace` MCP tool to write span labels to Phoenix. NOT user-creatable; automatically provisioned as `phoenix-annotator` when any agent with `eval_log: true` is saved.
 
 The `type:` field drives explicit dispatch in the agent-runner. When absent, the runner falls back to heuristics: `trigger == on_notify` → `notification`; `page_path == .user/ingest` → `ingest`; otherwise → `page`.
+
+**Eval annotation flow** (`eval_log: true` agents):
+1. After a successful run (when `OTEL_EXPORTER_OTLP_ENDPOINT` is set), the trace fetcher polls Phoenix via `PHOENIX_API_ENDPOINT` for spans with the run's `session.id`, formats an annotation log (`runs/YYYY-MM-DD-{8hex}.md`), and writes it to S3.
+2. The owner can view, edit, and fill in Rating/Notes/Correction in the annotation log via the "runs" button in `AgentsList`.
+3. Saving the annotation log triggers the platform-provisioned `phoenix-annotator` (`type: eval_annotator`) agent via SQS.
+4. `EvalAnnotatorAgent` reads the log, calls the `annotate_trace` MCP tool on the backend which validates site ownership and writes span labels to Phoenix `/v1/span_annotations`.
 
 **Notification system** (`backend/notifications.py`):
 
@@ -247,6 +255,7 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `YOLOSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
 | `YOLOSCRIBE_MODEL_BASE_URL` | backend + agent-runner | Optional base URL for the Anthropic API client (e.g. a Bedrock Mantle endpoint); when set, all Anthropic model calls are directed to this URL instead of the default |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
+| `PHOENIX_API_ENDPOINT` | backend + agent-runner | Base URL for the Arize Phoenix REST API (e.g. `http://phoenix:6006`); enables `annotate_trace` MCP tool and eval annotation log post-processing |
 | `CLOUDFRONT_SIGNING_KEY_ID` | backend | CloudFront key pair ID for signed-cookie media auth (e.g. `K2JCJMDEHXQW5F`) |
 | `CLOUDFRONT_MEDIA_DOMAIN` | backend | CloudFront domain for video/audio assets; falls back to `CLOUDFRONT_DOMAIN` |
 | `CLOUDFRONT_MEDIA_DISTRIBUTION_ID` | backend | CloudFront distribution ID for the media distribution; enables cache invalidation on asset delete |
