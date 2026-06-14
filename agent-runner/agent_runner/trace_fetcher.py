@@ -48,40 +48,51 @@ def _otlp_auth_headers() -> dict[str, str]:
 def _fetch_spans(session_id: str, max_retries: int = 5) -> list[dict]:
     """Poll Phoenix REST API for spans by session ID with exponential backoff.
 
+    Every span in the trace carries session.id (stamped by _SessionStamper in
+    agent_runner.py), so a single attribute-filtered query is sufficient.
+
     Returns list of span dicts from Phoenix, or empty list if unavailable.
     """
     base_url = _phoenix_base_url()
     if not base_url:
         return []
 
-    # Phoenix REST API: GET /v1/spans?filter[session_id]=<id>&project_name=default
-    # The filter parameter uses the Phoenix span attribute filter syntax.
-    encoded_id = urllib.parse.quote(session_id)
-    url = (
-        f"{base_url}/v1/spans"
-        f"?project_name=default"
-        f"&filter%5Bsession_id%5D={encoded_id}"
-    )
+    # attribute filter splits on first ':' only — UUID session IDs are safe.
+    encoded_attr = urllib.parse.quote(f"session.id:{session_id}")
+    url = f"{base_url}/v1/projects/default/spans?attribute={encoded_attr}&limit=1000"
 
-    sleep_s = 2.0
+    auth_headers = {"Accept": "application/json", **_otlp_auth_headers()}
+
+    sleep_s = 5.0
     total_sleep = 0.0
+
+    def _query() -> list[dict]:
+        req = urllib.request.Request(url, headers=auth_headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read()).get("data", [])
 
     for attempt in range(max_retries):
         try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json", **_otlp_auth_headers()})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-                spans = data.get("data", [])
-                if spans:
-                    log.info(
-                        "Fetched %d spans for session %s on attempt %d",
-                        len(spans), session_id[:8], attempt + 1,
-                    )
-                    return spans
+            spans = _query()
+            if spans:
                 log.info(
-                    "Phoenix returned 0 spans for session %s (attempt %d/%d)",
-                    session_id[:8], attempt + 1, max_retries,
+                    "Fetched %d spans for session %s on attempt %d — waiting 5s for stragglers",
+                    len(spans), session_id[:8], attempt + 1,
                 )
+                time.sleep(5.0)
+                try:
+                    spans = _query()
+                    log.info(
+                        "Final fetch: %d spans for session %s",
+                        len(spans), session_id[:8],
+                    )
+                except Exception as exc:
+                    log.warning("Final span fetch failed for session %s: %s", session_id[:8], exc)
+                return spans
+            log.info(
+                "Phoenix returned 0 spans for session %s (attempt %d/%d)",
+                session_id[:8], attempt + 1, max_retries,
+            )
         except Exception as exc:
             log.warning(
                 "Phoenix API query failed (attempt %d/%d): %s",
@@ -99,8 +110,31 @@ def _fetch_spans(session_id: str, max_retries: int = 5) -> list[dict]:
     return []
 
 
+def _parse_event_content(raw) -> str:
+    """Parse a gen_ai event content field (JSON array of content blocks) to plain text."""
+    if not raw:
+        return ""
+    try:
+        blocks = json.loads(raw) if isinstance(raw, str) else raw
+        parts = []
+        for block in blocks:
+            if "text" in block:
+                parts.append(block["text"])
+            elif "toolUse" in block:
+                tu = block["toolUse"]
+                inp = json.dumps(tu.get("input", {}))
+                parts.append(f"`{tu.get('name', '?')}({inp[:300]})`")
+            elif "toolResult" in block:
+                tr = block["toolResult"]
+                result_parts = [c.get("text", "") for c in tr.get("content", [])]
+                parts.append(" ".join(result_parts)[:400])
+        return "\n".join(parts)
+    except Exception:
+        return str(raw)[:500]
+
+
 def _format_span_tree(spans: list[dict]) -> str:
-    """Format Phoenix spans as a readable conversation section."""
+    """Format Phoenix spans as: system prompt → tool calls → final output."""
     if not spans:
         return (
             "*Trace data not available. "
@@ -109,67 +143,96 @@ def _format_span_tree(spans: list[dict]) -> str:
 
     lines: list[str] = []
 
-    # Sort by start time if available; root spans (no parent) come first.
-    def _start_time(s: dict) -> float:
-        attrs = s.get("attributes", {})
-        return float(attrs.get("start_time", 0))
+    # ── System prompt — from first LLM span ──────────────────────────────────
+    llm_spans = sorted(
+        [s for s in spans if s.get("span_kind") == "LLM"],
+        key=lambda s: s.get("start_time", ""),
+    )
+    for span in llm_spans:
+        for ev in span.get("events", []):
+            if ev.get("name") == "gen_ai.system.message":
+                text = _parse_event_content(ev.get("attributes", {}).get("content", ""))
+                if text:
+                    lines.append("**System:**")
+                    lines.append(text[:800])
+                    lines.append("")
+                break
+        else:
+            continue
+        break
 
-    root_spans = [s for s in spans if not s.get("parent_id")]
-    child_spans = [s for s in spans if s.get("parent_id")]
+    # ── Tool calls — from TOOL spans, chronological ───────────────────────────
+    tool_spans = sorted(
+        [s for s in spans if s.get("span_kind") == "TOOL"],
+        key=lambda s: s.get("start_time", ""),
+    )
+    for ts in tool_spans:
+        attrs = ts.get("attributes", {})
+        tool_name = attrs.get("gen_ai.tool.name") or ts.get("name", "unknown tool")
+        tool_input = ""
+        tool_result = ""
+        for ev in ts.get("events", []):
+            ev_name = ev.get("name", "")
+            ev_attrs = ev.get("attributes", {})
+            if ev_name == "gen_ai.tool.message":
+                raw = ev_attrs.get("content", "")
+                if raw:
+                    try:
+                        parsed = json.loads(raw) if isinstance(raw, str) else raw
+                        tool_input = json.dumps(parsed, ensure_ascii=False)[:400]
+                    except Exception:
+                        tool_input = str(raw)[:400]
+            elif ev_name == "gen_ai.choice":
+                msg = ev_attrs.get("message", "")
+                tool_result = _parse_event_content(msg)[:400] if msg else ""
 
-    root_spans.sort(key=_start_time)
-    child_spans.sort(key=_start_time)
+        lines.append(f"**Tool call:** `{tool_name}`")
+        if tool_input:
+            lines.append(f"Input: `{tool_input}`")
+        if tool_result:
+            lines.append(f"Result: {tool_result}")
+        lines.append("")
 
-    turn = 0
-    for span in root_spans:
-        attrs = span.get("attributes", {})
-        span_kind = attrs.get("openinference.span.kind", "")
-        name = span.get("name", "")
+    # ── Final output — prefer AGENT span, fall back to last end_turn LLM span ─
+    final_output = ""
 
-        if span_kind in ("LLM", "CHAIN") or "llm" in name.lower():
-            turn += 1
-            lines.append(f"### Turn {turn}")
+    agent_spans = [s for s in spans if s.get("span_kind") == "AGENT"]
+    for s in agent_spans:
+        for ev in s.get("events", []):
+            if ev.get("name") == "gen_ai.choice":
+                ev_attrs = ev.get("attributes", {})
+                if ev_attrs.get("finish_reason") == "end_turn":
+                    msg = ev_attrs.get("message", "")
+                    # AGENT span choice.message is raw text, not a JSON array.
+                    final_output = msg if isinstance(msg, str) else _parse_event_content(msg)
+                    break
+        if final_output:
+            break
+
+    if not final_output:
+        for span in reversed(llm_spans):
+            for ev in span.get("events", []):
+                if ev.get("name") == "gen_ai.choice":
+                    ev_attrs = ev.get("attributes", {})
+                    if ev_attrs.get("finish_reason") == "end_turn":
+                        final_output = _parse_event_content(ev_attrs.get("message", ""))
+                        break
+            if final_output:
+                break
+
+    if final_output:
+        lines.append("**Final output:**")
+        if len(final_output) > 2000:
+            lines.append(f"*[…{len(final_output) - 2000} chars…]*")
             lines.append("")
-
-            input_val = attrs.get("input.value", "")
-            output_val = attrs.get("output.value", "")
-
-            if input_val:
-                lines.append("**Input:**")
-                lines.append(input_val[:2000])
-                lines.append("")
-
-            # Collect tool calls from child spans of this root span
-            span_id = span.get("span_id", "")
-            tool_calls = [
-                c for c in child_spans
-                if c.get("parent_id") == span_id
-                and c.get("attributes", {}).get("openinference.span.kind") == "TOOL"
-            ]
-            if tool_calls:
-                lines.append("**Tool calls:**")
-                for tc in tool_calls:
-                    tc_attrs = tc.get("attributes", {})
-                    tc_name = tc.get("name", "unknown")
-                    tc_input = tc_attrs.get("input.value", "")
-                    tc_output = tc_attrs.get("output.value", "")
-                    summary = (tc_output[:200] + "…") if len(tc_output) > 200 else tc_output
-                    lines.append(f"- `{tc_name}({tc_input[:100]})` → {summary}")
-                lines.append("")
-
-            if output_val:
-                lines.append("**Output:**")
-                lines.append(output_val[:2000])
-                lines.append("")
-
-            lines.append("---")
-            lines.append("")
-
-    # Fallback: just show span names if we couldn't parse the tree
-    if turn == 0:
-        lines.append(f"*{len(spans)} span(s) recorded. Span tree could not be parsed.*")
+            lines.append(final_output[-2000:])
+        else:
+            lines.append(final_output)
+        lines.append("")
+    elif not lines:
+        lines.append(f"*{len(spans)} span(s) recorded. Could not extract conversation.*")
         for s in spans[:10]:
-            lines.append(f"- `{s.get('name', '?')}` ({s.get('attributes', {}).get('openinference.span.kind', '?')})")
+            lines.append(f"- `{s.get('name', '?')}` ({s.get('span_kind', '?')})")
         lines.append("")
 
     return "\n".join(lines)

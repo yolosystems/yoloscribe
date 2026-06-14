@@ -868,10 +868,22 @@ def main() -> None:
     import uuid as _uuid
     from opentelemetry import trace as _ot, context as _ot_ctx
     from opentelemetry.trace import StatusCode as _SC
+    _session_id = str(_uuid.uuid4())
+
+    # Stamp session.id and site on every span so Phoenix queries are always
+    # scoped to this session — never rely on trace_id alone for cross-user safety.
+    _otel_provider = _ot.get_tracer_provider()
+    if hasattr(_otel_provider, "add_span_processor"):
+        from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor  # noqa: PLC0415
+        class _SessionStamper(_SpanProcessor):
+            def on_start(self, span, parent_context=None):
+                span.set_attribute("session.id", _session_id)
+                span.set_attribute("site", _site)
+        _otel_provider.add_span_processor(_SessionStamper())
+
     _tracer = _ot.get_tracer("yoloscribe.agent_runner")
     _span = _tracer.start_span("yoloscribe.agent_runner")
     _span_token = _ot_ctx.attach(_ot.set_span_in_context(_span))
-    _session_id = str(_uuid.uuid4())
     _span.set_attribute("openinference.span.kind", "CHAIN")
     _span.set_attribute("session.id", _session_id)
     _span.set_attribute("user.id", USER_ID)

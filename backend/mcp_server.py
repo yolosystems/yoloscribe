@@ -1472,11 +1472,8 @@ def create_mcp_app(
             )
 
         # Query Phoenix for spans with this session ID to verify site ownership.
-        encoded_id = urllib.parse.quote(session_id)
-        query_url = (
-            f"{phoenix_api_endpoint.rstrip('/')}/v1/spans"
-            f"?project_name=default&filter%5Bsession_id%5D={encoded_id}"
-        )
+        encoded_attr = urllib.parse.quote(f"session.id:{session_id}")
+        query_url = f"{phoenix_api_endpoint.rstrip('/')}/v1/projects/default/spans?attribute={encoded_attr}&limit=100"
         try:
             req = _req.Request(query_url, headers={"Accept": "application/json", **_otlp_auth_headers()})
             with _req.urlopen(req, timeout=10) as resp:
@@ -1506,10 +1503,12 @@ def create_mcp_app(
                     detail="Access denied: this session does not belong to your site.",
                 )
 
-        # Build annotation payload and write to Phoenix.
+        # Build annotation payload — annotate only the root span (no parent_id)
+        # so human_feedback appears at the trace level, not on every LLM/tool call.
+        root_spans = [s for s in spans if not s.get("parent_id")]
         annotations = []
-        for span in spans:
-            span_id = span.get("span_id", "")
+        for span in root_spans:
+            span_id = span.get("context", {}).get("span_id", "")
             if not span_id:
                 continue
             explanation_parts = []
