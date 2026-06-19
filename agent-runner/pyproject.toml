@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 agent-runner = "agent_runner.agent_runner:main"
+agent-enqueuer = "agent_runner.enqueuer:main"
 polling-worker = "agent_runner.polling_worker:main"
 test-local-mcp = "agent_runner.test_local_mcp:main"
 

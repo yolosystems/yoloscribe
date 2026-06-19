@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Callable
 
@@ -43,6 +44,7 @@ class PageAgent(BaseAgent):
         search: SearchBackend | None = None,
         max_page_reads: int = 10,
         content_key: str = "",
+        agent_md_key: str = "",
     ) -> None:
         super().__init__(
             agent_def=agent_def,
@@ -58,6 +60,7 @@ class PageAgent(BaseAgent):
         )
         self._wiki = wiki
         self._content_key = content_key
+        self._agent_md_key = agent_md_key
 
     # ── Tool surface ──────────────────────────────────────────────────────────
 
@@ -114,7 +117,9 @@ class PageAgent(BaseAgent):
         updated = _strip_preamble(str(response))
 
         proposed_key = self._content_key[:-len("content.md")] + ".proposed.content.md"
+        meta_key = self._content_key[:-len("content.md")] + ".proposed.content.meta.json"
         self._storage.write(proposed_key, updated)
+        self._storage.write(meta_key, json.dumps({"agent_md_key": self._agent_md_key}))
         log.info("Propose mode: wrote %d chars to %s", len(updated), proposed_key)
         self._notify(
             "confirm_page_change",

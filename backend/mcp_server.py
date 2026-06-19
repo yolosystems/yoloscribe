@@ -32,13 +32,16 @@ from starlette.responses import JSONResponse
 from yoloscribe_io import (
     AgentDefinition,
     AgentDefinitionError,
+    OnWriteEventHandler,
+    WikiPageMarkdownFile,
     build_agent_md,
     parse_agent_md,
 )
 from yoloscribe_io.agent_page import AGENT_NAME_RE
 from yoloscribe_io.markdown_file import _parse_frontmatter
+from s3_storage import storage as _storage
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
-from queue_helpers import enqueue_on_write_agents
+from queue_helpers import enqueue_agent_job
 from auth_providers.base import AuthProvider, UserSiteRepository
 
 log = logging.getLogger(__name__)
@@ -326,13 +329,9 @@ def create_mcp_app(
         """
         _validate_page_path(page_path)
         user = _user(ctx)
-        key = _content_key(user.site, page_path)
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
+        wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
+        wiki.create(content, user_id=user.user_id)
         # Write default private settings.json if one doesn't exist yet.
         sk = _settings_key(user.site, page_path)
         try:
@@ -344,8 +343,7 @@ def create_mcp_app(
                 Body=json.dumps({"visibility": "private", "shared_with": []}).encode(),
                 ContentType="application/json",
             )
-        _maybe_enqueue_index(key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        enqueue_on_write_agents(user.site, key, user.user_id)
+        _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {
             "page_path": page_path,
             "url": f"/{user.site}/{page_path}" if page_path else f"/{user.site}/",
@@ -421,15 +419,10 @@ def create_mcp_app(
         """
         _validate_page_path(page_path)
         user = _user(ctx)
-        key = _content_key(user.site, page_path)
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
-        _maybe_enqueue_index(key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        enqueue_on_write_agents(user.site, key, user.user_id)
+        wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
+        wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
+        wiki.write(content, user_id=user.user_id)
+        _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),

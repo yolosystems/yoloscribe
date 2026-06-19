@@ -15,6 +15,7 @@ set -euo pipefail
 REGION="${AWS_REGION:-us-east-1}"
 USER_SITE_TABLE="${DYNAMODB_USER_SITE_TABLE:-yoloscribe-user-site}"
 API_TOKENS_TABLE="${DYNAMODB_API_TOKENS_TABLE:-yoloscribe-api-tokens}"
+AGENT_LOCKS_TABLE="${DYNAMODB_AGENT_LOCKS_TABLE:-yoloscribe-agent-locks}"
 ENDPOINT="${DYNAMODB_ENDPOINT_URL:-}"  # set for local testing (e.g. http://localhost:8000)
 
 aws_cmd() {
@@ -29,9 +30,10 @@ table_exists() {
   aws_cmd dynamodb describe-table --table-name "$1" > /dev/null 2>&1
 }
 
-echo "Region:           ${REGION}"
-echo "User-site table:  ${USER_SITE_TABLE}"
-echo "API-tokens table: ${API_TOKENS_TABLE}"
+echo "Region:            ${REGION}"
+echo "User-site table:   ${USER_SITE_TABLE}"
+echo "API-tokens table:  ${API_TOKENS_TABLE}"
+echo "Agent-locks table: ${AGENT_LOCKS_TABLE}"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -97,5 +99,33 @@ else
   echo "✓ Created '${API_TOKENS_TABLE}'."
 fi
 
+
+# ---------------------------------------------------------------------------
+# yoloscribe-agent-locks
+# PK: user_id   (S)
+# SK: page_path (S)
+# TTL on expires_at — prevents stale locks if an agent pod crashes
+# ---------------------------------------------------------------------------
+
+if table_exists "${AGENT_LOCKS_TABLE}"; then
+  echo "✓ Table '${AGENT_LOCKS_TABLE}' already exists — skipping."
+else
+  echo "Creating '${AGENT_LOCKS_TABLE}'..."
+  aws_cmd dynamodb create-table \
+    --table-name "${AGENT_LOCKS_TABLE}" \
+    --attribute-definitions \
+      AttributeName=user_id,AttributeType=S \
+      AttributeName=page_path,AttributeType=S \
+    --key-schema \
+      AttributeName=user_id,KeyType=HASH \
+      AttributeName=page_path,KeyType=RANGE \
+    --billing-mode PAY_PER_REQUEST \
+    --tags Key=app,Value=yoloscribe
+  aws_cmd dynamodb update-time-to-live \
+    --table-name "${AGENT_LOCKS_TABLE}" \
+    --time-to-live-specification "Enabled=true,AttributeName=expires_at"
+  echo "✓ Created '${AGENT_LOCKS_TABLE}'."
+fi
+
 echo ""
-echo "Done. Both tables are ready."
+echo "Done. All tables are ready."

@@ -91,6 +91,21 @@ def _get_proposed(site: str, page_path: str) -> str | None:
 def _delete_proposed(site: str, page_path: str) -> None:
     proposed = f"{page_path}/.proposed.content.md" if page_path else ".proposed.content.md"
     storage.delete(f"{site}/{proposed}")
+    meta = f"{page_path}/.proposed.content.meta.json" if page_path else ".proposed.content.meta.json"
+    storage.delete(f"{site}/{meta}")
+
+
+def _get_proposed_agent_md_key(site: str, page_path: str) -> str:
+    """Return the agent_md_key that wrote the current proposal, or '' if absent."""
+    import json as _json
+    meta = f"{page_path}/.proposed.content.meta.json" if page_path else ".proposed.content.meta.json"
+    raw = storage.read(f"{site}/{meta}")
+    if not raw:
+        return ""
+    try:
+        return _json.loads(raw).get("agent_md_key", "")
+    except Exception:
+        return ""
 
 
 @router.get(
@@ -323,12 +338,15 @@ async def accept_proposed_route(
     if proposed is None:
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
+    originating_agent = _get_proposed_agent_md_key(site, page_path)
     wiki = WikiPageMarkdownFile(site=site, page_path=page_path, storage=storage)
     wiki.write(proposed, user_id=claims.user_id)
     _delete_proposed(site, page_path)
 
     enqueue_index_job(wiki.key, claims.user_id)
-    enqueue_on_write_agents(site, wiki.key, claims.user_id)
+    enqueue_on_write_agents(
+        site, wiki.key, claims.user_id, exclude_agent_md_key=originating_agent
+    )
     sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "agent"})
 
     return Response(content='{"status":"accepted"}', status_code=200, media_type="application/json")
