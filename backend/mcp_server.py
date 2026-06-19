@@ -1548,6 +1548,147 @@ def create_mcp_app(
             "rating": rating,
         }
 
+    # ── Librarian memory tools ────────────────────────────────────────────────
+
+    @mcp.tool()
+    @_mcp_span("read_memory")
+    async def read_memory(
+        domain: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Read the Librarian's per-user preference memory.
+
+        Returns the list of conclusions stored in .user/librarian/memory.md,
+        optionally filtered to a single domain.
+
+        Args:
+            domain: Filter conclusions to this domain (ingest | enrich | retrieve |
+                notify | present). Empty string returns all conclusions.
+        """
+        from yoloscribe_io import MemoryFile
+        user = _user(ctx)
+        mf = MemoryFile(site=user.site, storage=_storage)
+        fm, conclusions = mf.read()
+        from yoloscribe_io import conclusion_to_dict
+        items = [conclusion_to_dict(c) for c in conclusions]
+        if domain:
+            items = [c for c in items if c.get("domain") == domain]
+        return {
+            "owner": user.site,
+            "schema_version": fm.get("schema_version", 1),
+            "last_consolidated": fm.get("last_consolidated", ""),
+            "conclusion_count": len(items),
+            "conclusions": items,
+        }
+
+    @mcp.tool()
+    @_mcp_span("write_memory")
+    async def write_memory(
+        conclusions: list[dict],
+        ctx: Context = None,
+    ) -> dict:
+        """Write or update conclusions in the Librarian's per-user preference memory.
+
+        Validates each conclusion against the schema and enforces the scaffolding
+        rule: derived_from may only reference conclusions of equal or higher certainty
+        (explicit > deductive > inductive > abductive). Malformed entries are rejected
+        at the tool boundary and never written.
+
+        Conclusions are merged by id — supplying an existing id updates that conclusion;
+        supplying a new id creates it.
+
+        Args:
+            conclusions: List of conclusion dicts. Required fields: id (c-xxxxxx),
+                level (explicit|deductive|inductive|abductive), domain
+                (ingest|enrich|retrieve|notify|present), statement (≤500 chars).
+                Optional: evidence, derived_from, confidence_trend, last_reinforced,
+                status (active|decaying|retired|corrected).
+        """
+        from yoloscribe_io import Conclusion, EvidenceEntry, MemoryFile
+
+        user = _user(ctx)
+        mf = MemoryFile(site=user.site, storage=_storage)
+
+        parsed: list[Conclusion] = []
+        parse_errors: list[str] = []
+        for raw in conclusions:
+            if not isinstance(raw, dict):
+                parse_errors.append(f"Non-dict entry skipped: {raw!r:.100}")
+                continue
+            cid = str(raw.get("id", "")).strip()
+            if not cid:
+                parse_errors.append("Conclusion missing required 'id' field")
+                continue
+            level = str(raw.get("level", "")).strip()
+            if level not in ("explicit", "deductive", "inductive", "abductive"):
+                parse_errors.append(f"'{cid}': invalid level '{level}'")
+                continue
+            domain = str(raw.get("domain", "")).strip()
+            if domain not in ("ingest", "enrich", "retrieve", "notify", "present"):
+                parse_errors.append(f"'{cid}': invalid domain '{domain}'")
+                continue
+            statement = str(raw.get("statement", "")).strip()
+            if not statement:
+                parse_errors.append(f"'{cid}': missing statement")
+                continue
+            evidence = [
+                EvidenceEntry(
+                    type=str(e.get("type", "")),
+                    ref=str(e.get("ref", "")),
+                    at=str(e.get("at", "")),
+                    note=str(e.get("note", "")),
+                )
+                for e in (raw.get("evidence") or [])
+                if isinstance(e, dict)
+            ]
+            parsed.append(Conclusion(
+                id=cid,
+                level=level,
+                domain=domain,
+                statement=statement,
+                evidence=evidence,
+                derived_from=[str(x) for x in (raw.get("derived_from") or [])],
+                confidence_trend=str(raw.get("confidence_trend", "")),
+                last_reinforced=str(raw.get("last_reinforced", "")),
+                status=str(raw.get("status", "active")),
+            ))
+
+        created, updated, rejected = mf.upsert(parsed)
+        return {
+            "created": created,
+            "updated": updated,
+            "rejected": rejected + parse_errors,
+        }
+
+    @mcp.tool()
+    @_mcp_span("read_signal_log")
+    async def read_signal_log(
+        limit: int = 50,
+        ctx: Context = None,
+    ) -> dict:
+        """Read recent entries from the Librarian's preference signal log.
+
+        The signal log is an append-only record of user actions (accept/reject/
+        instruction/agent_created/etc.) and agent run outcomes written by the
+        agent-runner. It is the only admissible evidence source for memory
+        conclusions.
+
+        Args:
+            limit: Maximum number of entries to return (most recent first).
+                0 returns all entries.
+        """
+        from yoloscribe_io import SignalLog
+        user = _user(ctx)
+        sl = SignalLog(site=user.site, storage=_storage)
+        content = sl.read(limit=limit)
+        entry_count = content.count("\n## ")
+        if content.startswith("## "):
+            entry_count += 1
+        return {
+            "content": content,
+            "entry_count": entry_count,
+        }
+
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
     return mcp.http_app(

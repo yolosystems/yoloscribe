@@ -1,3 +1,12 @@
+from .librarian import (
+    Conclusion,
+    EvidenceEntry,
+    MemoryFile,
+    SignalEntry,
+    SignalLog,
+    conclusion_to_dict,
+    scaffolding_rule_violations,
+)
 from .notifications import NO_DISPATCH_EVENTS, NotificationsMarkdownFile
 from .kb_index import KnowledgeBaseIndexMarkdownFile
 from .skill_page import (
@@ -53,6 +62,13 @@ from .media_asset import (
 )
 
 __all__ = [
+    "Conclusion",
+    "EvidenceEntry",
+    "MemoryFile",
+    "SignalEntry",
+    "SignalLog",
+    "conclusion_to_dict",
+    "scaffolding_rule_violations",
     "NO_DISPATCH_EVENTS",
     "NotificationsMarkdownFile",
     "KnowledgeBaseIndexMarkdownFile",
