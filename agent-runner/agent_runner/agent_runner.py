@@ -42,15 +42,21 @@ import boto3
 
 from yoloscribe_io import (
     AgentDefinitionError,
+    Conclusion,
+    MemoryFile,
     NotificationsMarkdownFile,
     S3StorageBackend,
+    SignalEntry,
+    SignalLog,
     TokenData,
     ToolToken,
     WikiPageMarkdownFile,
+    conclusion_to_dict,
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
 )
+from .memory_reasoner import HaikuMemoryReasoner, NullMemoryReasoner
 from .agents import (
     EvalAnnotatorAgent,
     IngestAgent,
@@ -74,6 +80,7 @@ S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 DDB_AGENT_LOCKS_TABLE = os.environ.get("DDB_AGENT_LOCKS_TABLE", "yoloscribe-agent-locks")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
+LIBRARIAN_MEMORY_ENABLED: bool = os.environ.get("LIBRARIAN_MEMORY_ENABLED", "true").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
 S3_VECTORS_BUCKET: str = os.environ.get("S3_VECTORS_BUCKET", "")
@@ -225,6 +232,60 @@ def _make_secrets_store(s3):
     from yolo_secrets import make_secrets_store
     sm = None if LOCAL_MODE else _session.client("secretsmanager", region_name=AWS_REGION)
     return make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=BUCKET, sm_client=sm)
+
+
+def _append_signal(
+    storage: S3StorageBackend,
+    site: str,
+    signal_type: str,
+    payload: dict,
+) -> None:
+    """Append a preference signal to .user/librarian/signal-log.md (fail-open)."""
+    if not LIBRARIAN_MEMORY_ENABLED:
+        return
+    try:
+        sl = SignalLog(site=site, storage=storage)
+        sl.append(SignalEntry(type=signal_type, payload=payload))
+    except Exception as exc:
+        log.warning("Failed to append librarian signal '%s': %s", signal_type, exc)
+
+
+def _run_memory_reasoner(
+    storage: S3StorageBackend,
+    site: str,
+    signal_type: str,
+    payload: dict,
+) -> None:
+    """Derive explicit/deductive conclusions from a signal and upsert into memory.md (fail-open)."""
+    if not LIBRARIAN_MEMORY_ENABLED:
+        return
+    try:
+        import yaml
+        mf = MemoryFile(site=site, storage=storage)
+        _, existing = mf.read()
+        existing_yaml = (
+            yaml.dump(
+                [conclusion_to_dict(c) for c in existing],
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+            if existing
+            else ""
+        )
+        reasoner = HaikuMemoryReasoner()
+        raw_conclusions = reasoner.derive(signal_type, payload, existing_yaml)
+        if not raw_conclusions:
+            return
+        from yoloscribe_io.librarian import _conclusion_from_dict
+        new_conclusions = [_conclusion_from_dict(d) for d in raw_conclusions if isinstance(d, dict)]
+        created, updated, rejected = mf.upsert(new_conclusions)
+        if rejected:
+            log.warning("MemoryReasoner: %d conclusion(s) rejected: %s", len(rejected), rejected)
+        if created or updated:
+            log.info("MemoryReasoner: %d created, %d updated for site %s", created, updated, site)
+    except Exception as exc:
+        log.warning("MemoryReasoner failed for site %s: %s", site, exc)
 
 
 def _enqueue_index_job(content_key: str) -> None:
@@ -1030,6 +1091,13 @@ def main() -> None:
             _trigger, time.monotonic() - _run_start,
             f"Error: {exc}",
         )
+        _append_signal(storage, _site, "agent_run_failure", {
+            "agent_md_key": AGENT_MD_KEY,
+            "content_key": CONTENT_KEY,
+            "trigger": _trigger,
+            "duration_s": f"{time.monotonic() - _run_start:.1f}",
+            "reason": str(exc)[:200],
+        })
         _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": str(exc)})
         return
     finally:
@@ -1054,6 +1122,16 @@ def main() -> None:
         storage, _run_log_key, agent_def.name, "success",
         agent_def.trigger, time.monotonic() - _run_start,
     )
+
+    _signal_payload = {
+        "agent_md_key": AGENT_MD_KEY,
+        "content_key": CONTENT_KEY,
+        "trigger": agent_def.trigger,
+        "duration_s": f"{time.monotonic() - _run_start:.1f}",
+        "tokens_used": str(tokens_used),
+    }
+    _append_signal(storage, _site, "agent_run_success", _signal_payload)
+    _run_memory_reasoner(storage, _site, "agent_run_success", _signal_payload)
 
     # Write eval annotation log for eval_log agents when OTEL is active.
     if getattr(agent_def, "eval_log", False) and os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
