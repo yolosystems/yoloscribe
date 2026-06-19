@@ -207,12 +207,14 @@ Current context:
 
         from strands import Agent
 
+        system_prompt = self.SYSTEM_PROMPT.format(
+            site=site,
+            page_path=page_path or "(root)",
+            file_path=file_path,
+        ) + self._extra_system_context(site=site)
+
         agent = Agent(
-            system_prompt=self.SYSTEM_PROMPT.format(
-                site=site,
-                page_path=page_path or "(root)",
-                file_path=file_path,
-            ),
+            system_prompt=system_prompt,
             model=build_strands_model(self._model_key),
             tools=tools,
             callback_handler=None,
@@ -240,6 +242,10 @@ Current context:
         response = agent(full_message)
         tokens_used = response.metrics.accumulated_usage.get("totalTokens", 0)
         return str(response), shared.get("updated_content"), shared.get("navigate_to"), tokens_used
+
+    def _extra_system_context(self, site: str) -> str:
+        """Hook for subclasses to append context to the system prompt. Returns '' by default."""
+        return ""
 
     # ── sub-agent tool factory ─────────────────────────────────────────────────
 

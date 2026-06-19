@@ -1689,6 +1689,44 @@ def create_mcp_app(
             "entry_count": entry_count,
         }
 
+    @mcp.tool()
+    @_mcp_span("read_archetypes")
+    async def read_archetypes(ctx: Context = None) -> dict:
+        """Read the Librarian's archetype index for this site.
+
+        Returns the raw markdown content of .user/librarian/archetypes.md.
+        The archetype index records canonical agent templates provisioned for
+        this site, enabling dedup checks before creating new agents.
+        """
+        from yoloscribe_io import ArchetypeFile
+        user = _user(ctx)
+        af = ArchetypeFile(site=user.site, storage=_storage)
+        content = af.read()
+        return {
+            "content": content,
+            "exists": bool(content),
+        }
+
+    @mcp.tool()
+    @_mcp_span("write_archetypes")
+    async def write_archetypes(content: str, ctx: Context = None) -> dict:
+        """Write the Librarian's archetype index for this site.
+
+        Replaces the full content of .user/librarian/archetypes.md. Used to
+        record a new archetype after provisioning an agent, or to edit/curate
+        the index manually.
+
+        Args:
+            content: Full updated Markdown for the archetypes file.
+        """
+        from yoloscribe_io import ArchetypeFile
+        user = _user(ctx)
+        if not content.strip():
+            return {"error": "content must not be empty"}
+        af = ArchetypeFile(site=user.site, storage=_storage)
+        af.write(content)
+        return {"written": True}
+
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
     return mcp.http_app(

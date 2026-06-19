@@ -142,6 +142,36 @@ class MemoryFile:
         return created, updated, rejected
 
 
+# ── ArchetypeFile ─────────────────────────────────────────────────────────────
+
+class ArchetypeFile:
+    """Reads and writes .user/librarian/archetypes.md for a site.
+
+    The archetypes file is an agent-maintained markdown document listing
+    canonical agent templates. The Librarian reads it before creating agents
+    to prevent duplicates, and writes to it after provisioning a new archetype.
+    The file is human-editable.
+    """
+
+    _RELATIVE_PATH = ".user/librarian/archetypes.md"
+
+    def __init__(self, site: str, storage: StorageBackend) -> None:
+        self._site = site
+        self._storage = storage
+        self._key = f"{site}/{self._RELATIVE_PATH}"
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    def read(self) -> str:
+        """Return the raw markdown content, or empty string if the file doesn't exist."""
+        return self._storage.read(self._key) or ""
+
+    def write(self, content: str) -> None:
+        self._storage.write(self._key, content)
+
+
 # ── SignalLog ─────────────────────────────────────────────────────────────────
 
 class SignalLog:

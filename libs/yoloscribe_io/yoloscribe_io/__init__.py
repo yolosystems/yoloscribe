@@ -1,4 +1,5 @@
 from .librarian import (
+    ArchetypeFile,
     Conclusion,
     EvidenceEntry,
     MemoryFile,
@@ -62,6 +63,7 @@ from .media_asset import (
 )
 
 __all__ = [
+    "ArchetypeFile",
     "Conclusion",
     "EvidenceEntry",
     "MemoryFile",
