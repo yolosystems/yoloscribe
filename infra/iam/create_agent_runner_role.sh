@@ -41,8 +41,6 @@ if [[ -n "${AWS_PROFILE:-}" ]]; then
   AWS_ARGS+=(--profile "$AWS_PROFILE")
 fi
 
-echo "Creating IAM role: $ROLE_NAME"
-
 TRUST_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
@@ -65,13 +63,18 @@ TRUST_POLICY=$(cat <<EOF
 EOF
 )
 
-aws "${AWS_ARGS[@]}" iam create-role \
-  --role-name "$ROLE_NAME" \
-  --assume-role-policy-document "$TRUST_POLICY" \
-  --description "IRSA role for yoloscribe agent-runner polling worker" \
-  --output json | jq -r '.Role.Arn'
+if aws "${AWS_ARGS[@]}" iam get-role --role-name "$ROLE_NAME" > /dev/null 2>&1; then
+  echo "IAM role '$ROLE_NAME' already exists — updating inline policy only."
+else
+  echo "Creating IAM role: $ROLE_NAME"
+  aws "${AWS_ARGS[@]}" iam create-role \
+    --role-name "$ROLE_NAME" \
+    --assume-role-policy-document "$TRUST_POLICY" \
+    --description "IRSA role for yoloscribe agent-runner polling worker" \
+    --output json | jq -r '.Role.Arn'
+fi
 
-echo "Attaching inline policy..."
+echo "Applying inline policy (idempotent)..."
 aws "${AWS_ARGS[@]}" iam put-role-policy \
   --role-name "$ROLE_NAME" \
   --policy-name "yoloscribe-agent-runner-access" \

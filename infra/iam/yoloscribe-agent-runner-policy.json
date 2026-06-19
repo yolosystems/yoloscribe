@@ -28,6 +28,17 @@
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",
       "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe/*/webhooks*"
+    },
+    {
+      "Sid": "DynamoDBAgentLocks",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/yoloscribe-agent-locks"
     }
   ]
 }

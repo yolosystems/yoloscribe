@@ -21,6 +21,32 @@
       "Condition": {
         "StringLike": {"s3:prefix": "${USER_ID}/*"}
       }
+    },
+    {
+      "Sid": "SQSSendAgentQueue",
+      "Effect": "Allow",
+      "Action": "sqs:SendMessage",
+      "Resource": "${SQS_QUEUE_ARN}"
+    },
+    {
+      "Sid": "SQSSendIndexingQueue",
+      "Effect": "Allow",
+      "Action": "sqs:SendMessage",
+      "Resource": "${SQS_INDEXING_QUEUE_ARN}"
+    },
+    {
+      "Sid": "DynamoDBAgentLocksUserScoped",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/yoloscribe-agent-locks",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "dynamodb:LeadingKeys": ["${USER_ID}"]
+        }
+      }
     }
   ]
 }

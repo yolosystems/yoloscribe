@@ -193,7 +193,7 @@ class OnWriteEventHandler(EventHandler):
         self._enqueue = enqueue
 
     def handle(self, event: Event) -> None:
-        if event.type != EventType.PAGE_WRITTEN:
+        if event.type not in (EventType.PAGE_WRITTEN, EventType.PAGE_CREATED):
             return
         content_key: str = event.payload.get("key", "")
         if not content_key.endswith("/content.md"):

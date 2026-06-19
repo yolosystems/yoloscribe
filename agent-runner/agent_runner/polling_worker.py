@@ -22,6 +22,7 @@ import sys
 import time
 
 import boto3
+from botocore.exceptions import ClientError
 
 from yoloscribe_io import AgentDefinitionError, NotificationsMarkdownFile, S3StorageBackend, SecretsManagerStore, Webhooks, parse_agent_md
 
@@ -32,6 +33,10 @@ log = logging.getLogger(__name__)
 
 SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
+DDB_AGENT_LOCKS_TABLE = os.environ.get("DDB_AGENT_LOCKS_TABLE", "yoloscribe-agent-locks")
+DYNAMODB_ENDPOINT_URL = os.environ.get("DYNAMODB_ENDPOINT_URL", "")
+# Seconds to hide a locked-page message before it becomes visible again.
+SQS_LOCK_REQUEUE_DELAY = int(os.environ.get("SQS_LOCK_REQUEUE_DELAY", "30"))
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_RUNNER_IMAGE = os.environ.get("AGENT_RUNNER_IMAGE", "ghcr.io/nate-yolodev/yoloscribe-agent-runner:latest")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -97,6 +102,7 @@ def _run_local(payload: dict) -> None:
             "USER_ID": user_id,
             "AWS_REGION": AWS_REGION,
             "YOLOSCRIBE_WEBHOOKS": _load_user_webhooks(user_id),
+            "DDB_AGENT_LOCKS_TABLE": DDB_AGENT_LOCKS_TABLE,
         }
     )
     if SQS_INDEXING_QUEUE_URL:
@@ -137,6 +143,7 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="SQS_INDEXING_QUEUE_URL", value=SQS_INDEXING_QUEUE_URL),
         k8s_client.V1EnvVar(name="SQS_QUEUE_URL", value=SQS_QUEUE_URL),
         k8s_client.V1EnvVar(name="YOLOSCRIBE_WEBHOOKS", value=_load_user_webhooks(user_id)),
+        k8s_client.V1EnvVar(name="DDB_AGENT_LOCKS_TABLE", value=DDB_AGENT_LOCKS_TABLE),
     ]
     if YOLOSCRIBE_MODEL:
         env_vars.append(k8s_client.V1EnvVar(name="YOLOSCRIBE_MODEL", value=YOLOSCRIBE_MODEL))
@@ -153,6 +160,27 @@ def _build_container(payload: dict):  # type: ignore[return]
         image=AGENT_RUNNER_IMAGE,
         command=["uv", "run", "agent-runner"],
         env=env_vars,
+    )
+
+
+def _build_enqueuer_container(payload: dict):  # type: ignore[return]
+    """Build a minimal container that runs agent-enqueuer (SQS send only)."""
+    from kubernetes import client as k8s_client  # noqa: PLC0415
+
+    user_id = payload.get("user_id", "default")
+    return k8s_client.V1Container(
+        name="agent-enqueuer",
+        image=AGENT_RUNNER_IMAGE,
+        command=["uv", "run", "agent-enqueuer"],
+        env=[
+            k8s_client.V1EnvVar(name="BUCKET", value=payload["bucket"]),
+            k8s_client.V1EnvVar(name="AGENT_MD_KEY", value=payload["agent_md_key"]),
+            k8s_client.V1EnvVar(name="CONTENT_KEY", value=payload["content_key"]),
+            k8s_client.V1EnvVar(name="AGENT_PROMPT", value=payload["prompt"]),
+            k8s_client.V1EnvVar(name="USER_ID", value=user_id),
+            k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
+            k8s_client.V1EnvVar(name="SQS_QUEUE_URL", value=SQS_QUEUE_URL),
+        ],
     )
 
 
@@ -229,7 +257,41 @@ def _write_notification_to_s3(s3, bucket: str, site: str, event_type: str, paylo
         log.error("Failed to write notification for site %s: %s", site, exc)
 
 
-def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -> None:
+def _acquire_page_lock(ddb, user_id: str, content_key: str) -> bool:
+    """Try to acquire a DDB page lock for the given content key.
+
+    Returns True if the lock was acquired (or DDB is unavailable — fail open).
+    Returns False if the page is already locked by another running job.
+    """
+    if ddb is None or not DDB_AGENT_LOCKS_TABLE:
+        return True
+    now = int(time.time())
+    try:
+        ddb.put_item(
+            TableName=DDB_AGENT_LOCKS_TABLE,
+            Item={
+                "user_id": {"S": user_id},
+                "page_path": {"S": content_key},
+                "expires_at": {"N": str(now + 3600)},
+            },
+            ConditionExpression="attribute_not_exists(user_id) OR expires_at < :now",
+            ExpressionAttributeValues={":now": {"N": str(now)}},
+        )
+        log.info("Acquired page lock: %s / %s", user_id, content_key)
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            log.info("Page locked by another job — requeueing: %s", content_key)
+            return False
+        log.warning("DDB lock error for %s — proceeding without lock", content_key, exc_info=True)
+        return True  # fail open: don't block if DDB is misconfigured
+    except Exception:
+        log.warning("DDB lock error for %s — proceeding without lock", content_key, exc_info=True)
+        return True
+
+
+def _process_message_k8s(batch_v1, s3, ddb, payload: dict, image_pull_secrets=None) -> bool:
+    """Dispatch the agent job. Returns True if the message should be requeued (lock conflict)."""
     user_id = payload.get("user_id", "default")
     bucket = payload["bucket"]
     agent_md_key = payload["agent_md_key"]
@@ -249,26 +311,34 @@ def _process_message_k8s(batch_v1, s3, payload: dict, image_pull_secrets=None) -
             s3, bucket, site, "agent_failure",
             {"agent": agent_md_key, "reason": f"Invalid agent definition: {exc}"},
         )
-        return
+        return False
 
     container = _build_container(payload)
     pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
 
     if agent_def.trigger == "schedule":
+        # CronJob: pod just enqueues an SQS message; the polling worker's lock
+        # check and serialization logic applies when that message is later dequeued.
+        enqueuer_container = _build_enqueuer_container(payload)
+        enqueuer_pod_spec = _pod_spec(enqueuer_container, user_id, image_pull_secrets=image_pull_secrets)
         cron_name = _safe_k8s_name("agentrunner", site, agent_name, user_id, max_len=52)
         _upsert_cronjob(
             batch_v1,
             name=cron_name,
-            pod_spec=pod_spec,
+            pod_spec=enqueuer_pod_spec,
             schedule=agent_def.schedule,
             timezone=agent_def.timezone,
         )
     else:
+        content_key = payload.get("content_key", "")
+        if not _acquire_page_lock(ddb, user_id, content_key):
+            return True  # requeue — another job is running for this page
         ts = str(int(time.time()))
         prefix = _safe_k8s_name("agentrunner", site, agent_name, user_id)
         max_prefix = 63 - 1 - len(ts)  # reserve room for "-{ts}"
         job_name = f"{prefix[:max_prefix].rstrip('-')}-{ts}"
         _create_job(batch_v1, name=job_name, pod_spec=pod_spec)
+    return False
 
 
 def main() -> None:
@@ -291,6 +361,7 @@ def main() -> None:
     if LOCAL_RUNNER:
         log.info("LOCAL_RUNNER mode — agents will run as subprocesses (no K8s)")
         batch_v1 = None
+        ddb = None
         _sm_client = None
     else:
         from kubernetes import client as k8s_client  # type: ignore[import-untyped]  # noqa: PLC0415
@@ -302,6 +373,11 @@ def main() -> None:
             k8s_config.load_kube_config()
         batch_v1 = k8s_client.BatchV1Api()
         _sm_client = _session.client("secretsmanager", region_name=AWS_REGION)
+
+        _ddb_kwargs: dict = {"region_name": AWS_REGION}
+        if DYNAMODB_ENDPOINT_URL:
+            _ddb_kwargs["endpoint_url"] = DYNAMODB_ENDPOINT_URL
+        ddb = _session.client("dynamodb", **_ddb_kwargs)
 
         # Inherit imagePullSecrets from this pod so spawned jobs can pull the same image.
         try:
@@ -323,17 +399,27 @@ def main() -> None:
             )
             for msg in resp.get("Messages", []):
                 receipt = msg["ReceiptHandle"]
+                requeued = False
                 try:
                     payload = json.loads(msg["Body"])
                     if LOCAL_RUNNER:
                         _run_local(payload)
                     else:
-                        _process_message_k8s(batch_v1, s3, payload, image_pull_secrets=image_pull_secrets)
+                        requeued = _process_message_k8s(batch_v1, s3, ddb, payload, image_pull_secrets=image_pull_secrets)
                 except Exception:
                     log.exception("Failed to process message %s", msg.get("MessageId"))
-                finally:
-                    # Always delete the message — failed messages must not loop
-                    # forever; use a DLQ if replay is needed.
+                if requeued:
+                    # Page is locked — return the message to the queue after a short delay.
+                    try:
+                        sqs.change_message_visibility(
+                            QueueUrl=SQS_QUEUE_URL,
+                            ReceiptHandle=receipt,
+                            VisibilityTimeout=SQS_LOCK_REQUEUE_DELAY,
+                        )
+                    except Exception:
+                        log.warning("Failed to requeue locked message %s", msg.get("MessageId"), exc_info=True)
+                else:
+                    # Delete the message — failed messages do not loop; use a DLQ for replay.
                     sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt)
         except Exception:
             log.exception("SQS receive error — retrying in 5s")

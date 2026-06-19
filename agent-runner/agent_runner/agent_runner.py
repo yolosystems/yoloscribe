@@ -72,6 +72,7 @@ SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 SQS_INDEXING_QUEUE_URL = os.environ.get("SQS_INDEXING_QUEUE_URL", "")
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
+DDB_AGENT_LOCKS_TABLE = os.environ.get("DDB_AGENT_LOCKS_TABLE", "yoloscribe-agent-locks")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
@@ -650,6 +651,24 @@ def _apply_read_limit(tools: list, max_reads: int) -> list:
     return result
 
 
+def _release_page_lock(user_id: str, content_key: str) -> None:
+    """Release the DDB page lock acquired by the polling worker. Best-effort; never raises."""
+    if LOCAL_MODE or not DDB_AGENT_LOCKS_TABLE or not content_key:
+        return
+    try:
+        ddb = _session.client("dynamodb", region_name=AWS_REGION)
+        ddb.delete_item(
+            TableName=DDB_AGENT_LOCKS_TABLE,
+            Key={
+                "user_id": {"S": user_id},
+                "page_path": {"S": content_key},
+            },
+        )
+        log.info("Released page lock for %s", content_key)
+    except Exception as exc:
+        log.warning("Failed to release page lock for %s: %s", content_key, exc)
+
+
 def _make_search_backend(s3) -> SearchBackend:
     """Build the search backend from environment configuration.
 
@@ -687,6 +706,7 @@ def _make_agent(
     user_id: str,
     notify_fn,
     content_key: str = "",
+    agent_md_key: str = "",
 ):
     """Select and instantiate the appropriate agent subclass for this run."""
     # trigger=on_notify and page_path=.user/ingest are strong invariants that
@@ -755,6 +775,7 @@ def _make_agent(
         search=search,
         max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
         content_key=content_key,
+        agent_md_key=agent_md_key,
     )
 
 
@@ -993,6 +1014,7 @@ def main() -> None:
                 user_id=USER_ID,
                 notify_fn=_notify,
                 content_key=CONTENT_KEY,
+                agent_md_key=AGENT_MD_KEY,
             )
             tokens_used = agent.run(AGENT_PROMPT)
 
@@ -1013,6 +1035,7 @@ def main() -> None:
     finally:
         _ot_ctx.detach(_span_token)
         _span.end()
+        _release_page_lock(USER_ID, CONTENT_KEY)
 
     if agent_def.trigger == "on_notify":
         log.info("on_notify agent run complete for %s", AGENT_MD_KEY)

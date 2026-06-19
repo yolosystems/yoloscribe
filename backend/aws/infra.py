@@ -118,6 +118,21 @@ async def provision_user_infrastructure(user_id: str, site_name: str) -> None:
                 "Resource": indexing_queue_arn,
             }
         )
+    ddb_locks_table = os.environ.get("DDB_AGENT_LOCKS_TABLE", "yoloscribe-agent-locks")
+    ddb_table_arn = f"arn:aws:dynamodb:{AWS_REGION}:{AWS_ACCOUNT_ID}:table/{ddb_locks_table}"
+    statements.append(
+        {
+            "Sid": "DynamoDBAgentLocksUserScoped",
+            "Effect": "Allow",
+            "Action": ["dynamodb:GetItem", "dynamodb:DeleteItem"],
+            "Resource": ddb_table_arn,
+            "Condition": {
+                "ForAllValues:StringEquals": {
+                    "dynamodb:LeadingKeys": [user_id]
+                }
+            },
+        }
+    )
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName="yoloscribe-user-access",

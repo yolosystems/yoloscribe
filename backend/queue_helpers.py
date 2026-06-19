@@ -11,11 +11,48 @@ log = logging.getLogger(__name__)
 _ON_WRITE_PATTERN = re.compile(r"^trigger:\s*on_write", re.MULTILINE)
 
 
-def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
+_ON_WRITE_PROMPT = (
+    "A page in your scope has been updated. "
+    "Review it and apply any necessary updates to your tracked pages."
+)
+
+
+def enqueue_agent_job(agent_md_key: str, content_key: str, user_id: str) -> None:
+    """Enqueue a single agent-runner job. Best-effort; never raises."""
+    from config import S3_BUCKET, SQS_QUEUE_URL, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+    try:
+        sqs.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps({
+                "bucket": S3_BUCKET,
+                "agent_md_key": agent_md_key,
+                "content_key": content_key,
+                "prompt": _ON_WRITE_PROMPT,
+                "user_id": user_id,
+            }),
+        )
+        log.info("Enqueued agent job %s for %s", agent_md_key, content_key)
+    except Exception:
+        log.warning("Failed to enqueue agent job %s", agent_md_key, exc_info=True)
+
+
+def enqueue_on_write_agents(
+    site: str,
+    content_key: str,
+    user_id: str,
+    *,
+    exclude_agent_md_key: str = "",
+) -> None:
     """Enqueue agent-runner jobs for any on_write agents subscribed to this page.
 
     Lists .agents/ under the written page's directory and queues a job via SQS
     for each agent.md with trigger: on_write. Best-effort; never raises.
+
+    exclude_agent_md_key: skip this agent key (used by accept_proposed to avoid
+    re-triggering the agent that originally wrote the proposal).
     """
     from config import S3_BUCKET, SQS_QUEUE_URL, s3, sqs
 
@@ -37,6 +74,9 @@ def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
         key = obj["Key"]
         if not key.endswith("/agent.md"):
             continue
+        if exclude_agent_md_key and key == exclude_agent_md_key:
+            log.info("Skipping originating agent %s on accept_proposed", key)
+            continue
         try:
             agent_text = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read().decode("utf-8")
         except Exception:
@@ -46,20 +86,7 @@ def enqueue_on_write_agents(site: str, content_key: str, user_id: str) -> None:
         if not _ON_WRITE_PATTERN.search(agent_text):
             continue
 
-        try:
-            sqs.send_message(
-                QueueUrl=SQS_QUEUE_URL,
-                MessageBody=json.dumps({
-                    "bucket": S3_BUCKET,
-                    "agent_md_key": key,
-                    "content_key": content_key,
-                    "prompt": "A page in your scope has been updated. Review it and apply any necessary updates to your tracked pages.",
-                    "user_id": user_id,
-                }),
-            )
-            log.info("Enqueued on_write agent %s for %s", key, content_key)
-        except Exception:
-            log.warning("Failed to enqueue on_write agent %s", key, exc_info=True)
+        enqueue_agent_job(key, content_key, user_id)
 
 
 def enqueue_ingest_agents(site: str, user_id: str) -> None:

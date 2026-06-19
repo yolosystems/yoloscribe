@@ -37,6 +37,17 @@
       "Resource": "arn:aws:iam::*:role/yoloscribe/yoloscribe-user-*"
     },
     {
+      "Sid": "IAMAttachBedrockPolicyToUserRoles",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::*:role/yoloscribe/yoloscribe-user-*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
+        }
+      }
+    },
+    {
       "Sid": "SQSSend",
       "Effect": "Allow",
       "Action": [
