@@ -28,6 +28,18 @@ They are certainty-scaffolded — use them accordingly:
   Maximum one suggestion per response. Do not repeat a suggestion the user has
   already declined in this conversation.
 
+**Writing to memory:**
+- When the user explicitly states a persistent preference, call write_memory
+  immediately with level=explicit. Do not wait for a signal.
+- When you can derive a conclusion that necessarily follows from an explicit
+  premise already in memory PLUS observable page structure (path, content),
+  call write_memory with level=deductive and set derived_from to the id(s) of
+  the explicit premise(s) it follows from.
+- Never write inductive or abductive conclusions via write_memory — those are
+  reserved for the background consolidation pass.
+- Use a unique id of the form c-{6 random lowercase hex chars}.
+- statement must be ≤ 500 characters and fully self-contained.
+
 When a user **confirms** an inductive suggestion: proceed with the action, then
 call write_signal with type=proposal_accepted and a brief description in the
 payload so future reasoning can reinforce the conclusion.
@@ -161,4 +173,96 @@ def _make_librarian_tools(site: str, storage) -> list:
             logger.warning("write_archetypes failed: %s", exc)
             return f"Could not write archetypes: {exc}"
 
-    return [write_signal, read_archetypes, write_archetypes]
+    @tool
+    def write_memory(conclusions: list[dict]) -> str:
+        """Write explicit or deductive conclusions to the Librarian memory file.
+
+        Use this to persist conclusions derived during this conversation:
+        - level=explicit: the user directly stated a persistent preference
+        - level=deductive: necessarily follows from an explicit premise already
+          in memory plus observable page structure; set derived_from accordingly
+
+        Never write inductive or abductive conclusions here — those are derived
+        by the background MemoryReasoner from signal patterns.
+
+        Conclusions are merged by id — an existing id updates that conclusion.
+        The scaffolding rule is enforced: derived_from may only reference
+        conclusions of equal or higher certainty.
+
+        Args:
+            conclusions: List of conclusion dicts. Required fields: id (c-xxxxxx),
+                level (explicit|deductive), domain (ingest|enrich|retrieve|
+                notify|present), statement (≤500 chars). Optional: evidence,
+                derived_from, status (default active).
+        """
+        from yoloscribe_io import Conclusion, EvidenceEntry, MemoryFile
+
+        if not conclusions:
+            return "No conclusions provided."
+        mf = MemoryFile(site=site, storage=storage)
+        parsed: list[Conclusion] = []
+        parse_errors: list[str] = []
+        for raw in conclusions:
+            if not isinstance(raw, dict):
+                parse_errors.append(f"Skipped non-dict entry: {raw!r:.80}")
+                continue
+            cid = str(raw.get("id", "")).strip()
+            if not cid:
+                parse_errors.append("Conclusion missing required 'id'")
+                continue
+            level = str(raw.get("level", "")).strip()
+            if level not in ("explicit", "deductive"):
+                parse_errors.append(
+                    f"'{cid}': level must be 'explicit' or 'deductive' "
+                    f"(got '{level}') — inductive/abductive are reserved for the background pass"
+                )
+                continue
+            domain = str(raw.get("domain", "")).strip()
+            if domain not in ("ingest", "enrich", "retrieve", "notify", "present"):
+                parse_errors.append(f"'{cid}': invalid domain '{domain}'")
+                continue
+            statement = str(raw.get("statement", "")).strip()
+            if not statement:
+                parse_errors.append(f"'{cid}': missing statement")
+                continue
+            if len(statement) > 500:
+                parse_errors.append(f"'{cid}': statement exceeds 500 chars ({len(statement)})")
+                continue
+            evidence = [
+                EvidenceEntry(
+                    type=str(e.get("type", "")),
+                    ref=str(e.get("ref", "")),
+                    at=str(e.get("at", "")),
+                    note=str(e.get("note", "")),
+                )
+                for e in (raw.get("evidence") or [])
+                if isinstance(e, dict)
+            ]
+            parsed.append(Conclusion(
+                id=cid,
+                level=level,
+                domain=domain,
+                statement=statement,
+                evidence=evidence,
+                derived_from=[str(x) for x in (raw.get("derived_from") or [])],
+                status=str(raw.get("status", "active")),
+            ))
+        if not parsed and parse_errors:
+            return "All conclusions rejected:\n" + "\n".join(f"- {e}" for e in parse_errors)
+        try:
+            created, updated, rejected = mf.upsert(parsed)
+        except Exception as exc:
+            logger.warning("write_memory failed for site %s: %s", site, exc)
+            return f"Memory write failed: {exc}"
+        parts = []
+        if created:
+            parts.append(f"{created} created")
+        if updated:
+            parts.append(f"{updated} updated")
+        result = "Memory updated: " + ", ".join(parts) + "." if parts else "No changes written."
+        if rejected or parse_errors:
+            all_rejected = rejected + parse_errors
+            result += " Rejected: " + "; ".join(all_rejected)
+        return result
+
+    return [write_signal, read_archetypes, write_archetypes, write_memory]
