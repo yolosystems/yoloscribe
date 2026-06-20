@@ -5,7 +5,7 @@ from opentelemetry import trace as _ot
 from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 
-from agents import ChatAgent
+from agents import LibrarianAgent
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs, token_budget_repo
 from models import ChatRequest, ChatResponse, TokenBudgetInfo
@@ -18,7 +18,7 @@ router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.chat")
 
 # Module-level singleton — instantiated once at startup.
-_chat_agent = ChatAgent(
+_chat_agent = LibrarianAgent(
     s3=s3,
     bucket=S3_BUCKET,
     sqs_client=sqs,

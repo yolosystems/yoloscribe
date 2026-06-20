@@ -16,6 +16,8 @@ from yoloscribe_io import (
     AgentDefinition,
     AgentMarkdownFile,
     S3StorageBackend,
+    SignalEntry,
+    SignalLog,
     SkillDefinition,
     SkillMarkdownFile,
     StorageBackend,
@@ -383,6 +385,20 @@ class SiteTools:
             agent_file.create(defn)
 
         location = f"#/{page_path}/.agents/{agent_name}" if page_path else f"#/.agents/{agent_name}"
+        try:
+            sl = SignalLog(site=self._site, storage=self._storage)
+            sl.append(SignalEntry(
+                type="agent_created",
+                payload={
+                    "agent_name": agent_name,
+                    "page_path": page_path or "(root)",
+                    "skills": ", ".join(skills) if skills else "",
+                    "trigger": trigger,
+                    "agent_type": agent_type or "page",
+                },
+            ))
+        except Exception:
+            pass
         return f"Agent '{agent_name}' created. View/edit at {location}"
 
     # ── Skills (write) ────────────────────────────────────────────────────────
