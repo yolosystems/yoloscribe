@@ -117,7 +117,7 @@ Full format (definition agents) — all metadata in YAML frontmatter, free-form 
 ---
 trigger: manual|schedule|on_write|on_notify
 name: {name}
-type: page|ingest|notification|eval_annotator  # optional; explicit agent class dispatch (omit to use heuristics)
+type: page|ingest|notification|eval_annotator|consolidation  # optional; explicit agent class dispatch (omit to use heuristics)
 schedule: 0 9 * * *   # required when trigger: schedule
 timezone: America/New_York  # optional; defaults to UTC
 skills:
@@ -141,6 +141,7 @@ eval_log: true         # optional; default false; enables eval annotation log po
 - `ingest` — ingest agent; processes content staged in `.user/ingest/` and routes it to wiki pages using semantic search against the wiki's own structure; must be placed on `.user/ingest`. The page `.user/ingest/content.md` serves as an owner-editable routing instructions file — plain-text hints (e.g. "meeting notes go under meetings/") that are injected into the agent's system prompt on every run and take priority over the agent's own judgement.
 - `notification` — notification agent; handles entries in `.user/notifications.md`; must use `trigger: on_notify` and be placed at the site root
 - `eval_annotator` — platform-provisioned annotation agent; reads a run log at `{page}/.agents/{name}/runs/{YYYY-MM-DD}-{8hex}.md`, extracts Rating/Notes/Correction fields, and calls the `annotate_trace` MCP tool to write span labels to Phoenix. NOT user-creatable; automatically provisioned as `phoenix-annotator` when any agent with `eval_log: true` is saved.
+- `consolidation` — platform-provisioned scheduled agent that runs the Librarian memory consolidation pass; derives inductive/abductive conclusions from accumulated signals, decays stale conclusions, and generates a population lint report. NOT user-creatable; automatically provisioned as `librarian-consolidation` when memory.md gets its first write.
 
 The `type:` field drives explicit dispatch in the agent-runner. When absent, the runner falls back to heuristics: `trigger == on_notify` → `notification`; `page_path == .user/ingest` → `ingest`; otherwise → `page`.
 
@@ -253,6 +254,8 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `YOLOSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
 | `YOLOSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
 | `YOLOSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
+| `YOLOSCRIBE_MEMORY_REASONER_MODEL` | agent-runner | Per-signal `HaikuMemoryReasoner` model key (default: `haiku`); Anthropic-provider keys only |
+| `YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL` | agent-runner | Nightly `ConsolidationMemoryReasoner` model key (default: `sonnet`); Anthropic-provider keys only |
 | `YOLOSCRIBE_MODEL_BASE_URL` | backend + agent-runner | Optional base URL for the Anthropic API client (e.g. a Bedrock Mantle endpoint); when set, all Anthropic model calls are directed to this URL instead of the default |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `PHOENIX_API_ENDPOINT` | backend + agent-runner | Base URL for the Arize Phoenix REST API (e.g. `http://phoenix:6006`); enables `annotate_trace` MCP tool and eval annotation log post-processing |
