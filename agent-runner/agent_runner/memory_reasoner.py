@@ -18,19 +18,20 @@ _ANTHROPIC_MODEL_REGISTRY: dict[str, str] = {
 }
 
 
-def _resolve_anthropic_model(*env_vars: str, default_key: str) -> str:
-    """Resolve an Anthropic model ID from env vars, falling back to default_key."""
-    for var in env_vars:
-        val = os.environ.get(var, "").strip()
-        if val:
-            model_id = _ANTHROPIC_MODEL_REGISTRY.get(val)
-            if model_id:
-                return model_id
-            log.warning(
-                "MemoryReasoner: env var %s=%r is not a recognised Anthropic model key "
-                "(valid: %s) — falling back to default '%s'",
-                var, val, ", ".join(_ANTHROPIC_MODEL_REGISTRY), default_key,
-            )
+def _resolve_anthropic_model(env_var: str, default_key: str) -> str:
+    """Resolve an Anthropic model ID from a single env var, falling back to default_key.
+
+    bedrock-* and glm keys are not valid — this client uses anthropic.Anthropic directly.
+    """
+    val = os.environ.get(env_var, default_key).strip() or default_key
+    model_id = _ANTHROPIC_MODEL_REGISTRY.get(val)
+    if model_id:
+        return model_id
+    log.warning(
+        "MemoryReasoner: %s=%r is not a recognised Anthropic model key "
+        "(valid: %s) — using default '%s'",
+        env_var, val, ", ".join(_ANTHROPIC_MODEL_REGISTRY), default_key,
+    )
     return _ANTHROPIC_MODEL_REGISTRY[default_key]
 
 
@@ -59,8 +60,10 @@ Signal types and what they mean:
 - proposal_accepted: user accepted a staged agent or content proposal
 - proposal_rejected: user rejected a staged proposal
 - user_instruction: user explicitly stated a preference in conversation
-- agent_created: user created a new agent definition
-- agent_deleted: user deleted an agent
+- agent_created: user created a new agent definition (via MCP or chat)
+- agent_deleted: user deleted an agent (via MCP or chat)
+- page_created: user created a new wiki page via the MCP tool suite
+- page_updated: user updated a wiki page directly via the MCP tool suite
 - notification_ignored: a notification was not acted on
 
 Required YAML schema for each conclusion in your response:
@@ -113,8 +116,8 @@ class NullMemoryReasoner(MemoryReasoner):
 class HaikuMemoryReasoner(MemoryReasoner):
     """Derives explicit/deductive conclusions per preference signal.
 
-    Model is resolved from YOLOSCRIBE_MEMORY_REASONER_MODEL → YOLOSCRIBE_MODEL
-    → default "haiku". Only Anthropic-provider keys are accepted.
+    Model defaults to haiku; override with YOLOSCRIBE_MEMORY_REASONER_MODEL.
+    Only Anthropic-provider keys are accepted (haiku|sonnet|opus).
     """
 
     _DEFAULT_KEY = "haiku"
@@ -134,7 +137,7 @@ class HaikuMemoryReasoner(MemoryReasoner):
             return []
 
         model_id = _resolve_anthropic_model(
-            "YOLOSCRIBE_MEMORY_REASONER_MODEL", "YOLOSCRIBE_MODEL",
+            "YOLOSCRIBE_MEMORY_REASONER_MODEL",
             default_key=self._DEFAULT_KEY,
         )
         client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 1}
@@ -224,8 +227,8 @@ def _consolidation_user_message(signal_log_text: str, existing_yaml: str) -> str
 class ConsolidationMemoryReasoner:
     """Derives inductive/abductive conclusions from the full signal log.
 
-    Model is resolved from YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL → YOLOSCRIBE_MODEL
-    → default "sonnet". Only Anthropic-provider keys are accepted.
+    Model defaults to sonnet; override with YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL.
+    Only Anthropic-provider keys are accepted (haiku|sonnet|opus).
     """
 
     _DEFAULT_KEY = "sonnet"
@@ -251,7 +254,7 @@ class ConsolidationMemoryReasoner:
             return [], []
 
         model_id = _resolve_anthropic_model(
-            "YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL", "YOLOSCRIBE_MODEL",
+            "YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL",
             default_key=self._DEFAULT_KEY,
         )
         client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 1}

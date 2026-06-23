@@ -236,6 +236,16 @@ def _validate_skill_name(skill_name: str) -> None:
         )
 
 
+def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
+    """Append a preference signal entry to the site signal log. Best-effort; never raises."""
+    try:
+        from yoloscribe_io import SignalEntry, SignalLog
+        sl = SignalLog(site=site, storage=_storage)
+        sl.append(SignalEntry(type=signal_type, payload=payload))
+    except Exception as exc:
+        log.warning("Failed to emit signal %s for site %s: %s", signal_type, site, exc)
+
+
 def _skill_key(site: str, skill_name: str) -> str:
     return f"{site}/.skills/{skill_name}/SKILL.md"
 
@@ -344,6 +354,7 @@ def create_mcp_app(
                 ContentType="application/json",
             )
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "page_created", {"page_path": page_path, "user_id": user.user_id})
         return {
             "page_path": page_path,
             "url": f"/{user.site}/{page_path}" if page_path else f"/{user.site}/",
@@ -423,6 +434,7 @@ def create_mcp_app(
         wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
         wiki.write(content, user_id=user.user_id)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "page_updated", {"page_path": page_path, "user_id": user.user_id})
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),
@@ -812,6 +824,10 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "agent_created", {
+            "agent_name": agent_name, "page_path": page_path,
+            "trigger": trigger, "user_id": user.user_id,
+        })
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -892,6 +908,10 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "agent_created", {
+            "agent_name": agent_name, "page_path": page_path,
+            "trigger": trigger, "user_id": user.user_id,
+        })
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
@@ -967,6 +987,10 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "agent_created", {
+            "agent_name": agent_name, "page_path": page_path,
+            "trigger": trigger, "user_id": user.user_id,
+        })
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
@@ -1043,6 +1067,10 @@ def create_mcp_app(
         s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
                              ContentType="text/markdown; charset=utf-8")
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "agent_created", {
+            "agent_name": agent_name, "page_path": page_path,
+            "trigger": "on_notify", "user_id": user.user_id,
+        })
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
                 "events": list(events), "created_at": _now_iso()}
 
@@ -1206,6 +1234,9 @@ def create_mcp_app(
 
         # Enqueue index job so the FTS entry for this agent is removed on next run.
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        _emit_signal(user.site, "agent_deleted", {
+            "agent_name": agent_name, "page_path": page_path, "user_id": user.user_id,
+        })
 
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
