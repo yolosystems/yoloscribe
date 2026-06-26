@@ -24,6 +24,16 @@
       ]
     },
     {
+      "Sid": "S3WriteAgentRunnerOutputs",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::yoloscribe-*/*/.agents/*/runs/*",
+        "arn:aws:s3:::yoloscribe-*/*/.user/librarian/*",
+        "arn:aws:s3:::yoloscribe-*/*/.user/notifications.md"
+      ]
+    },
+    {
       "Sid": "SMReadUserWebhooks",
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",

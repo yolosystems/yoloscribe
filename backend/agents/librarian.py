@@ -1,4 +1,4 @@
-"""LibrarianAgent — extends ChatAgent with per-user preference memory (Phase 1)."""
+"""LibrarianAgent — extends ChatAgent with per-user preference memory."""
 
 from __future__ import annotations
 
@@ -27,6 +27,14 @@ They are certainty-scaffolded — use them accordingly:
   suggestions only. NEVER act autonomously on inductive/abductive conclusions.
   Maximum one suggestion per response. Do not repeat a suggestion the user has
   already declined in this conversation.
+
+**Proactive provisioning (explicit/deductive tier only):**
+On the first user turn (when conversation history is empty), scan your active
+explicit and deductive conclusions for any that apply to the current page
+(page_path, content structure). If an applicable action is not yet in place
+(e.g., a required agent does not exist), propose ONE action using the creator
+tool with confirm_before_write, without waiting for the user to ask.
+Do not repeat proposals the user has declined in this conversation.
 
 **Writing to memory:**
 - When the user explicitly states a persistent preference, call write_memory
@@ -58,6 +66,43 @@ Active conclusions:
 """
 
 
+_CONSOLIDATION_AGENT_DEFN_DICT = {
+    "name": "librarian-consolidation",
+    "type": "consolidation",
+    "trigger": "schedule",
+    "schedule": "0 2 * * *",
+    "timezone": "UTC",
+    "description": (
+        "Platform-provisioned Librarian consolidation pass. Derives inductive and "
+        "abductive conclusions from accumulated signals, decays stale conclusions, "
+        "and generates a population lint report. Do not edit."
+    ),
+}
+
+
+def _provision_consolidation_agent(site: str, storage) -> None:
+    """Auto-provision the librarian-consolidation agent if not yet present."""
+    try:
+        from yoloscribe_io import AgentDefinition, Scope, build_agent_md
+
+        key = f"{site}/.agents/librarian-consolidation/agent.md"
+        if storage.list(key):
+            return
+        defn = AgentDefinition(
+            name="librarian-consolidation",
+            type="consolidation",
+            trigger="schedule",
+            schedule="0 2 * * *",
+            timezone="UTC",
+            description=_CONSOLIDATION_AGENT_DEFN_DICT["description"],
+        )
+        content = build_agent_md(defn)
+        storage.write(key, content)
+        logger.info("Provisioned librarian-consolidation agent for site %s", site)
+    except Exception as exc:
+        logger.debug("Failed to provision librarian-consolidation: %s", exc)
+
+
 class LibrarianAgent(ChatAgent):
     """Extends ChatAgent with per-user preference memory and archetype dedup.
 
@@ -75,6 +120,7 @@ class LibrarianAgent(ChatAgent):
             active = [c for c in conclusions if c.status == "active"]
             if not active:
                 return ""
+            _provision_consolidation_agent(site, self._storage)
             memory_yaml = yaml.dump(
                 [conclusion_to_dict(c) for c in active],
                 default_flow_style=False,

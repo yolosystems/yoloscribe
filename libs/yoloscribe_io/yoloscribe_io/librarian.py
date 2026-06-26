@@ -227,6 +227,67 @@ class SignalLog:
             sections.append("".join(current))
         return "".join(sections)
 
+    def read_all(self) -> str:
+        """Return the complete signal log without a limit."""
+        return self._storage.read(self._key) or ""
+
+    def rotate(self, hot_window_days: int, archive_key: str) -> int:
+        """Move entries older than hot_window_days to archive_key.
+
+        Returns the number of entries archived.
+        Entries are kept in the hot log newest-first; old entries move to an
+        archive segment at archive_key (also newest-first within that segment).
+        """
+        from datetime import timedelta
+
+        raw = self._storage.read(self._key) or ""
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=hot_window_days)
+
+        hot_sections: list[str] = []
+        archive_sections: list[str] = []
+        current: list[str] = []
+        current_ts: datetime | None = None
+
+        def _flush() -> None:
+            if not current:
+                return
+            block = "".join(current)
+            if current_ts is not None and current_ts < cutoff:
+                archive_sections.append(block)
+            else:
+                hot_sections.append(block)
+
+        for line in raw.splitlines(keepends=True):
+            if line.startswith("## "):
+                _flush()
+                current = [line]
+                # Try to parse the timestamp from "## YYYY-MM-DD HH:MM UTC — type"
+                m = re.match(r"## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC", line)
+                if m:
+                    try:
+                        current_ts = datetime.strptime(
+                            m.group(1), "%Y-%m-%d %H:%M"
+                        ).replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        current_ts = None
+                else:
+                    current_ts = None
+            else:
+                current.append(line)
+        _flush()
+
+        if not archive_sections:
+            return 0
+
+        # Write updated hot log.
+        self._storage.write(self._key, "".join(hot_sections))
+
+        # Prepend archived sections to the existing archive segment.
+        existing_archive = self._storage.read(archive_key) or ""
+        self._storage.write(archive_key, "".join(archive_sections) + existing_archive)
+
+        return len(archive_sections)
+
 
 # ── Parsing / serialization ───────────────────────────────────────────────────
 

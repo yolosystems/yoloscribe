@@ -13,7 +13,7 @@ from .storage import StorageBackend
 
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _VALID_TRIGGERS = frozenset({"manual", "schedule", "on_write", "on_notify"})
-_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification", "eval_annotator"})
+_VALID_AGENT_TYPES = frozenset({"page", "ingest", "notification", "eval_annotator", "consolidation"})
 
 
 # ── Error ─────────────────────────────────────────────────────────────────────

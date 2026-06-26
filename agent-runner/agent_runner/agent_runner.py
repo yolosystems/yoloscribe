@@ -58,6 +58,7 @@ from yoloscribe_io import (
 )
 from .memory_reasoner import HaikuMemoryReasoner, NullMemoryReasoner
 from .agents import (
+    ConsolidationAgent,
     EvalAnnotatorAgent,
     IngestAgent,
     NotificationAgent,
@@ -821,6 +822,20 @@ def _make_agent(
             search=search,
             max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
             content_key=content_key,
+        )
+
+    if agent_type == "consolidation":
+        return ConsolidationAgent(
+            agent_def=agent_def,
+            site=site,
+            page_path=page_path,
+            storage=storage,
+            mcp_tools=mcp_tools,
+            model=model,
+            user_id=user_id,
+            notify_fn=notify_fn,
+            search=search,
+            max_page_reads=AGENT_RUNNER_MAX_PAGE_READS,
         )
 
     return PageAgent(

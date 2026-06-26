@@ -1,4 +1,5 @@
 from .base import BaseAgent
+from .consolidation import ConsolidationAgent
 from .eval_annotator import EvalAnnotatorAgent
 from .ingest import IngestAgent
 from .notification import NotificationAgent
@@ -8,6 +9,7 @@ from .search import BedrockS3VectorsSearchBackend, NullSearchBackend, SearchBack
 __all__ = [
     "BaseAgent",
     "BedrockS3VectorsSearchBackend",
+    "ConsolidationAgent",
     "EvalAnnotatorAgent",
     "IngestAgent",
     "NotificationAgent",

@@ -147,4 +147,49 @@ class EvalAnnotatorAgent(BaseAgent):
             f"Call annotate_trace with the above values now."
         )
         result = agent(task)
+
+        # YOL-410: write eval_annotation signal and run memory reasoner inline.
+        try:
+            import os
+            import yaml
+            from yoloscribe_io import SignalEntry, SignalLog, MemoryFile, conclusion_to_dict
+            from yoloscribe_io.librarian import _conclusion_from_dict
+            from ..memory_reasoner import HaikuMemoryReasoner
+
+            agent_md_key = ""
+            if self._run_log_key and "/runs/" in self._run_log_key:
+                agent_md_key = self._run_log_key.split("/runs/")[0] + "/agent.md"
+
+            eval_payload = {
+                "agent_md_key": agent_md_key,
+                "page_path": self._page_path,
+                "rating": annotations["rating"],
+                "notes": annotations.get("notes", ""),
+                "correction": annotations.get("correction", ""),
+            }
+            sl = SignalLog(site=self._site, storage=self._storage)
+            sl.append(SignalEntry(type="eval_annotation", payload=eval_payload))
+
+            if os.environ.get("LIBRARIAN_MEMORY_ENABLED", "true").lower() in ("1", "true", "yes"):
+                mf = MemoryFile(site=self._site, storage=self._storage)
+                _, existing = mf.read()
+                existing_yaml = (
+                    yaml.dump(
+                        [conclusion_to_dict(c) for c in existing],
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+                    if existing
+                    else ""
+                )
+                raw = HaikuMemoryReasoner().derive("eval_annotation", eval_payload, existing_yaml)
+                if raw:
+                    new_conclusions = [
+                        _conclusion_from_dict(d) for d in raw if isinstance(d, dict)
+                    ]
+                    mf.upsert(new_conclusions)
+        except Exception as exc:
+            log.warning("EvalAnnotatorAgent: eval_annotation signal write failed: %s", exc)
+
         return result.metrics.accumulated_usage.get("totalTokens", 0)

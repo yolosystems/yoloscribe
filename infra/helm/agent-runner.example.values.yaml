@@ -15,3 +15,6 @@ config:
   awsRegion: "<region>"
   k8sNamespace: "<k8s-namespace>"
   anthropicSecretName: "<secrets-manager-secret-name>"
+  # modelBaseUrl: "https://bedrock-mantle.us-west-2.api.aws/v1"  # optional: Bedrock Mantle endpoint
+  # memoryReasonerModel: "haiku"       # optional: per-signal reasoner (default: haiku; Anthropic keys only)
+  # consolidationReasonerModel: "sonnet"  # optional: nightly consolidation pass (default: sonnet; Anthropic keys only)
