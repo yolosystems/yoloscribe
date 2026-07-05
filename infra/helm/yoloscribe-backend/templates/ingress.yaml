@@ -1,4 +1,36 @@
 {{- if .Values.ingress.enabled }}
+{{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ include "yoloscribe-backend.fullname" . }}
+  labels:
+    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
+spec:
+  scheme: {{ .Values.ingress.scheme | default "internet-facing" | quote }}
+  {{- if .Values.ingress.group.name }}
+  group:
+    name: {{ .Values.ingress.group.name | quote }}
+  {{- end }}
+  {{- if .Values.ingress.certificateArn }}
+  certificateARNs:
+    - {{ .Values.ingress.certificateArn | quote }}
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ include "yoloscribe-backend.fullname" . }}
+  labels:
+    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
+spec:
+  controller: eks.amazonaws.com/alb
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: {{ include "yoloscribe-backend.fullname" . }}
+---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,15 +39,22 @@ metadata:
   labels:
     {{- include "yoloscribe-backend.labels" . | nindent 4 }}
   annotations:
+    {{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
+    {{- toYaml (omit .Values.ingress.annotations "kubernetes.io/ingress.class") | nindent 4 }}
+    {{- else }}
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- end }}
     {{- if .Values.ingress.certificateArn }}
     alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
     {{- end }}
-    {{- if .Values.ingress.group.name }}
+    {{- if and .Values.ingress.group.name (ne .Values.ingress.controllerType "eks-auto-mode") }}
     alb.ingress.kubernetes.io/group.name: {{ .Values.ingress.group.name | quote }}
     alb.ingress.kubernetes.io/group.order: {{ .Values.ingress.group.order | default 20 | quote }}
     {{- end }}
 spec:
+  {{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
+  ingressClassName: {{ include "yoloscribe-backend.fullname" . }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:
