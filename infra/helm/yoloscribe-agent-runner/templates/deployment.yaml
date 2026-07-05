@@ -46,6 +46,14 @@ spec:
             - name: YOLOSCRIBE_MODEL_BASE_URL
               value: {{ .Values.config.modelBaseUrl | quote }}
             {{- end }}
+            {{- if .Values.config.model }}
+            - name: YOLOSCRIBE_MODEL
+              value: {{ .Values.config.model | quote }}
+            {{- end }}
+            {{- if .Values.config.runnerModel }}
+            - name: YOLOSCRIBE_RUNNER_MODEL
+              value: {{ .Values.config.runnerModel | quote }}
+            {{- end }}
             {{- if .Values.config.memoryReasonerModel }}
             - name: YOLOSCRIBE_MEMORY_REASONER_MODEL
               value: {{ .Values.config.memoryReasonerModel | quote }}
@@ -53,6 +61,10 @@ spec:
             {{- if .Values.config.consolidationReasonerModel }}
             - name: YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL
               value: {{ .Values.config.consolidationReasonerModel | quote }}
+            {{- end }}
+            {{- if .Values.config.phoenixApiEndpoint }}
+            - name: PHOENIX_API_ENDPOINT
+              value: {{ .Values.config.phoenixApiEndpoint | quote }}
             {{- end }}
             {{- if .Values.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT

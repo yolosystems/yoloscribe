@@ -25,11 +25,20 @@ config:
   # Optional Anthropic API base URL override (leave empty to use the Anthropic default).
   # Set to a Bedrock Mantle endpoint to route all Anthropic model calls through it.
   modelBaseUrl: ""
+  # Global model registry key fallback, shared with the backend (haiku|sonnet|opus|glm|bedrock-*).
+  # Leave empty to use "sonnet".
+  model: ""
+  # agent-runner-specific override: used when an agent.md has no `model:` frontmatter field.
+  # Falls back to `model` above, then "sonnet", when unset.
+  runnerModel: ""
   # Librarian memory reasoner model keys (Anthropic-provider keys only: haiku|sonnet|opus).
   # These reasoners call anthropic.Anthropic directly — bedrock-* and glm keys are not valid here.
   # Leave empty to use the defaults (memoryReasonerModel: haiku, consolidationReasonerModel: sonnet).
   memoryReasonerModel: ""
   consolidationReasonerModel: ""
+  # Arize Phoenix REST API base URL (e.g. http://phoenix-svc.arize.svc.cluster.local:6006).
+  # Enables the post-run trace fetcher for eval_log agents. Leave empty to disable.
+  phoenixApiEndpoint: ""
 
 # ── OTEL / Arize Phoenix tracing ─────────────────────────────────────────────
 # Set endpoint to the internal Phoenix service DNS name to enable tracing.

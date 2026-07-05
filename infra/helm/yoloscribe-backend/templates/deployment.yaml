@@ -125,6 +125,10 @@ spec:
             - name: YOLOSCRIBE_MODEL_BASE_URL
               value: {{ .Values.config.modelBaseUrl | quote }}
             {{- end }}
+            {{- if .Values.config.model }}
+            - name: YOLOSCRIBE_MODEL
+              value: {{ .Values.config.model | quote }}
+            {{- end }}
             {{- if .Values.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

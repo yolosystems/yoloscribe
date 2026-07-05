@@ -28,3 +28,4 @@ config:
   awsAccountId: "<aws-account-id>"
   awsRegion: "<region>"
   k8sNamespace: "<k8s-namespace>"
+  # model: "glm"  # optional: model registry key override (haiku|sonnet|opus|glm|bedrock-*)

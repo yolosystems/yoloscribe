@@ -78,6 +78,9 @@ config:
   # Optional Anthropic API base URL override (leave empty to use the Anthropic default).
   # Set to a Bedrock Mantle endpoint to route all Anthropic model calls through it.
   modelBaseUrl: ""
+  # Global model registry key fallback (haiku|sonnet|opus|glm|bedrock-haiku|bedrock-sonnet|bedrock-opus).
+  # Overrides the strands-agents default (see YOLOSCRIBE_MODEL in CLAUDE.md). Leave empty to use "sonnet".
+  model: ""
   # Auth provider — supabase (default) or cognito
   authProvider: "supabase"
   # Supabase (only used when authProvider=supabase)

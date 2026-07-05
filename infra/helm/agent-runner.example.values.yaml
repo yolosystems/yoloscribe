@@ -16,5 +16,8 @@ config:
   k8sNamespace: "<k8s-namespace>"
   anthropicSecretName: "<secrets-manager-secret-name>"
   # modelBaseUrl: "https://bedrock-mantle.us-west-2.api.aws/v1"  # optional: Bedrock Mantle endpoint
+  # model: "glm"           # optional: model registry key fallback, shared with the backend
+  # runnerModel: ""        # optional: overrides `model` when an agent.md has no `model:` frontmatter field
   # memoryReasonerModel: "haiku"       # optional: per-signal reasoner (default: haiku; Anthropic keys only)
   # consolidationReasonerModel: "sonnet"  # optional: nightly consolidation pass (default: sonnet; Anthropic keys only)
+  # phoenixApiEndpoint: "http://phoenix-svc.arize.svc.cluster.local:6006"  # optional: enables eval trace fetching
