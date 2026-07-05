@@ -1,6 +1,0 @@
-apiVersion: v2
-name: yoloscribe-discord-bot
-description: YoloScribe Discord bot
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

@@ -60,9 +60,9 @@ Claude Code discovers the OAuth endpoints automatically and prompts you to sign 
 
 **Available tools:** `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`, `search_wiki`, `search_semantic`, `agent_create`, `agent_get_status`, `agent_update_context`, `agent_get_context`, `agent_list`
 
-### Discord
+### Messaging bot (Discord)
 
-The Discord bot lets any channel message trigger a wiki update. Set it up once with a slash command:
+The messaging bot lets any channel message trigger a wiki update. Set it up once with a slash command:
 
 ```
 /yoloscribe setup <your-api-token>
@@ -76,7 +76,7 @@ After that, any message in the configured channel is routed to your wiki's chat 
 
 Messages without a prefix update the root page. The bot reacts with ⏳ on receipt and swaps to ✅ or ❌ on completion.
 
-The bot lives in `discord-bot/` and is deployed as a standalone Docker container.
+The bot lives in `messaging-bot/` and is deployed as a standalone Docker container. It supports multiple platform adapters via `ENABLED_ADAPTERS` (currently `discord`).
 
 ### Obsidian
 
@@ -156,7 +156,7 @@ frontend/        React SPA (Vite + TypeScript) — served from S3 + CloudFront
 backend/         FastAPI — wiki API, chat endpoint, remote MCP server at /mcp/v1
 agent-runner/    SQS worker — executes user-defined agents asynchronously
 indexer/         SQS worker — indexes content into S3 Vectors for semantic search
-discord-bot/     Discord bot — routes channel messages to the wiki chat API
+messaging-bot/   Messaging bot (Discord) — routes channel messages to the wiki chat API
 obsidian-plugin/ Obsidian plugin — bidirectional vault ↔ wiki sync
 libs/            Shared Python libraries (mcp_oauth, etc.)
 infra/           Helm charts, IAM policies, deploy scripts

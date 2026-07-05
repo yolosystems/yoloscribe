@@ -76,14 +76,15 @@ If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_
 
 Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below).
 
-#### Discord bot (optional)
+#### Messaging bot (optional)
 
-- Create an application at [discord.com/developers](https://discord.com/developers/applications)
+- Create a Discord application at [discord.com/developers](https://discord.com/developers/applications)
 - Create a bot user, enable the **Message Content** privileged intent, and copy the bot token (`DISCORD_BOT_TOKEN`)
-- Generate a 32-byte AES key for encrypting per-server API tokens: `python3 -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"` → set as `DISCORD_AES_KEY`
-- Set `YOLOSCRIBE_API_URL` to your backend's public URL
+- Generate a 32-byte AES key for encrypting per-server API tokens: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` → set as `MESSAGING_AES_KEY`
+- Set `YOLOSCRIBE_API_URL` to your backend's public URL, and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` to your Supabase project's values
+- Set `ENABLED_ADAPTERS` to the comma-separated list of platform adapters to enable (currently `discord`)
 
-The bot is deployed as a standalone container from `discord-bot/Dockerfile`.
+The bot is deployed as a standalone container from `messaging-bot/Dockerfile`.
 
 ---
 
