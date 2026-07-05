@@ -11,6 +11,7 @@ serviceAccount:
 
 ingress:
   host: api.<your-domain>
+  # controllerType: eks-auto-mode  # uncomment on an EKS Auto Mode cluster (default: aws-load-balancer-controller)
 
 config:
   supabaseUrl: "https://<supabase-project>.supabase.co"

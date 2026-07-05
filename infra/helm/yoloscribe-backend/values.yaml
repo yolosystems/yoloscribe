@@ -24,17 +24,34 @@ service:
   type: ClusterIP
   port: 8000
 
-# ── Ingress (AWS ALB via Load Balancer Controller) ────────────────────────────
+# ── Ingress (ALB via the self-managed AWS Load Balancer Controller, or
+#    EKS Auto Mode's built-in ALB support) ─────────────────────────────────────
 ingress:
   enabled: true
   host: ""
   certificateArn: ""
+  # "aws-load-balancer-controller" (default) — self-managed OSS controller,
+  #   configured entirely via annotations (kubernetes.io/ingress.class: alb, etc.)
+  # "eks-auto-mode" — EKS Auto Mode's built-in ALB support. Creates an
+  #   IngressClass + IngressClassParams (eks.amazonaws.com/v1) instead of using
+  #   the legacy ingress-class/group.name annotations, which Auto Mode doesn't
+  #   support. See https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html
+  controllerType: aws-load-balancer-controller
+  # ALB scheme. Used as the alb.ingress.kubernetes.io/scheme annotation in
+  # aws-load-balancer-controller mode, or IngressClassParams.spec.scheme in
+  # eks-auto-mode.
+  scheme: internet-facing
   # ALB Ingress Group — set group.name to share an ALB with mcp-helm.
   # Both charts must use the same group.name. YoloScribe owns the catch-all
   # path (/) so it should have the highest group.order number (lowest priority).
+  # In eks-auto-mode, group.order is not supported (Auto Mode doesn't expose an
+  # equivalent) — only group.name is used, via IngressClassParams.
   group:
     name: ""    # e.g. yolo-prod; leave empty for a dedicated ALB
-    order: 20   # lowest priority — catch-all route
+    order: 20   # lowest priority — catch-all route (aws-load-balancer-controller only)
+  # Annotations applied in aws-load-balancer-controller mode. In eks-auto-mode,
+  # kubernetes.io/ingress.class is dropped (replaced by spec.ingressClassName)
+  # but the rest still apply as documented ALB behavior annotations.
   annotations:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
