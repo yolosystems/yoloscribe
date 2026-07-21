@@ -64,6 +64,11 @@ SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+# Shared secret gating POST /internal/runs/mint — wholly internal to one deployment
+# (never handed to a third party), so rotation is just a redeploy. See internal_auth.py.
+# Defaults to "local" in LOCAL_MODE so the endpoint works out of the box, matching
+# LOCAL_MCP_API_KEY's own convention; production must set a real value explicitly.
+INTERNAL_MINT_SECRET = os.environ.get("INTERNAL_MINT_SECRET", "local" if LOCAL_MODE else "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -139,6 +144,13 @@ secrets_store = make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=S
 if not LOCAL_MODE and CLOUDFRONT_SIGNING_KEY_ID:
     from cloudfront_signing import load_signing_key  # noqa: E402
     load_signing_key(secrets_store)
+
+# ── Run-token signing key ──────────────────────────────────────────────────────
+# Loaded eagerly (auto-generated in LOCAL_MODE if absent) so /internal/runs/mint
+# and the MCP server's run-token auth path work without a per-request round-trip.
+
+import run_tokens  # noqa: E402
+run_tokens.load_signing_key(secrets_store, local_mode=LOCAL_MODE)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

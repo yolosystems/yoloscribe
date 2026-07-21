@@ -41,3 +41,9 @@ yoloscribe-notification-mcp = {path = "../notification-mcp"}
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "conformance: fast, in-process conformance checks (default `make conformance` target)",
+    "conformance_live: needs `docker compose up` (MinIO/ElasticMQ/dynamodb-local) — `make conformance-live`",
+]

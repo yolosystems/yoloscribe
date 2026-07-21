@@ -22,6 +22,7 @@ import re
 import urllib.parse
 from typing import Any
 
+import jwt
 from fastapi import HTTPException
 from fastmcp import Context, FastMCP
 from starlette.middleware import Middleware
@@ -29,9 +30,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import run_tokens
 from yoloscribe_io import (
     AgentDefinition,
     AgentDefinitionError,
+    NotificationsMarkdownFile,
     OnWriteEventHandler,
     WikiPageMarkdownFile,
     build_agent_md,
@@ -97,12 +100,32 @@ def _mcp_span(tool_name: str):
 
 
 class _MCPUser:
-    __slots__ = ("user_id", "email", "site")
+    """Authenticated MCP caller.
 
-    def __init__(self, user_id: str, email: str | None, site: str) -> None:
+    `path_scope=None` means a full user JWT (Supabase/Cognito) — the site
+    owner, unrestricted, today's behavior. When set (a run-token caller),
+    `_check_scope` enforces it as a containment floor on every write tool;
+    `run_id`/`agent_name` are populated only for run-token callers (audit).
+    """
+
+    __slots__ = ("user_id", "email", "site", "path_scope", "run_id", "agent_name")
+
+    def __init__(
+        self,
+        user_id: str,
+        email: str | None,
+        site: str,
+        *,
+        path_scope: list[run_tokens.PathScopeEntry] | None = None,
+        run_id: str = "",
+        agent_name: str = "",
+    ) -> None:
         self.user_id = user_id
         self.email = email
         self.site = site
+        self.path_scope = path_scope
+        self.run_id = run_id
+        self.agent_name = agent_name
 
 
 def _user(ctx: Context) -> _MCPUser:
@@ -146,16 +169,18 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # In LOCAL_MODE, validate against the static API key and resolve the
-        # site from LOCAL_SITE_NAME / LOCAL_USER_ID — no JWT validation needed.
-        if self._local_mode:
-            auth = request.headers.get("authorization", "")
-            if not auth.lower().startswith("bearer ") or auth[7:] != self._local_api_key:
-                return JSONResponse(
-                    {"error": f"Invalid API key. Use: Authorization: Bearer {self._local_api_key}"},
-                    status_code=401,
-                    headers={"WWW-Authenticate": self._www_authenticate()},
-                )
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            return JSONResponse(
+                {"error": f"Invalid API key. Use: Authorization: Bearer {self._local_api_key}"}
+                if self._local_mode else {"error": "Missing or invalid Authorization header"},
+                status_code=401,
+                headers={"WWW-Authenticate": self._www_authenticate()},
+            )
+        token = auth[7:]
+
+        # Local static API key — cheap exact-match check, tried first.
+        if self._local_mode and token == self._local_api_key:
             request.state.mcp_user = _MCPUser(
                 user_id=self._local_user_id,
                 email=None,
@@ -163,15 +188,38 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
             )
             return await call_next(request)
 
-        auth = request.headers.get("authorization", "")
-        if not auth.lower().startswith("bearer "):
+        # Run token — a cheap unverified-header peek (no signature check yet)
+        # decides whether this looks like a run token before attempting to
+        # decode/verify it, so a malformed or wrong-provider bearer token
+        # doesn't get misreported as a run-token failure.
+        if self._is_run_token(token):
+            try:
+                claims = run_tokens.decode_run_token(token)
+            except Exception as exc:
+                return JSONResponse(
+                    {"error": f"Invalid run token: {exc}"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": self._www_authenticate()},
+                )
+            request.state.mcp_user = _MCPUser(
+                user_id=claims.user_id,
+                email=None,
+                site=claims.site,
+                path_scope=claims.path_scope,
+                run_id=claims.run_id,
+                agent_name=claims.agent_name,
+            )
+            return await call_next(request)
+
+        if self._local_mode:
+            # Not the static key and not a run token — LOCAL_MODE has no
+            # Supabase/Cognito provider to fall back to.
             return JSONResponse(
-                {"error": "Missing or invalid Authorization header"},
+                {"error": f"Invalid API key. Use: Authorization: Bearer {self._local_api_key}"},
                 status_code=401,
                 headers={"WWW-Authenticate": self._www_authenticate()},
             )
 
-        token = auth[7:]
         try:
             claims = self._auth_provider.decode_jwt(token)
             user_id: str = claims.user_id
@@ -192,6 +240,16 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
 
         request.state.mcp_user = _MCPUser(user_id=user_id, email=email, site=site)
         return await call_next(request)
+
+    @staticmethod
+    def _is_run_token(token: str) -> bool:
+        run_token_kid = run_tokens.current_kid()
+        if not run_token_kid:
+            return False
+        try:
+            return jwt.get_unverified_header(token).get("kid") == run_token_kid
+        except Exception:
+            return False
 
 
 # ── S3 key helpers ─────────────────────────────────────────────────────────────
@@ -236,6 +294,31 @@ def _validate_skill_name(skill_name: str) -> None:
         )
 
 
+_OPERATION_KINDS = frozenset({"read", "write-content", "write-settings", "write-agent", "delete", "notify"})
+
+
+def _check_scope(user: "_MCPUser", page_path: str, operation: str) -> None:
+    """Enforce path_scope for run-token-authenticated callers. No-op for full-JWT users.
+
+    See projects/yoloscribe/ideas/delegation-token in the wiki §3 for the design
+    (effective access = user_rights ∩ path_scope; path_scope is the per-run floor).
+    """
+    if user.path_scope is None:
+        return  # full user JWT — site owner, unrestricted, as today
+    for entry in user.path_scope:
+        prefix = entry.path_prefix
+        in_scope = prefix == "" or page_path == prefix or page_path.startswith(prefix + "/")
+        if in_scope and operation in entry.operations:
+            return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Run token for agent '{user.agent_name}' is not scoped for "
+            f"'{operation}' on '{page_path or '(root)'}'."
+        ),
+    )
+
+
 def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
     """Append a preference signal entry to the site signal log. Best-effort; never raises."""
     try:
@@ -244,6 +327,37 @@ def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
         sl.append(SignalEntry(type=signal_type, payload=payload))
     except Exception as exc:
         log.warning("Failed to emit signal %s for site %s: %s", signal_type, site, exc)
+
+
+def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: str) -> None:
+    """Append a notification entry and dispatch to matching on_notify agents.
+
+    Shared by the `notify` tool and `propose_page_change` (which fires
+    confirm_page_change directly rather than making a nested MCP call).
+    Best-effort dispatch: a failed SQS enqueue never blocks the notification
+    entry itself from being written.
+    """
+    from config import SQS_QUEUE_URL, sqs
+
+    def _enqueue(agent_md_key: str, notifications_key: str, prompt: str, enqueue_user_id: str) -> None:
+        if sqs is None or not SQS_QUEUE_URL:
+            return
+        try:
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "bucket": bucket,
+                    "agent_md_key": agent_md_key,
+                    "content_key": notifications_key,
+                    "prompt": prompt,
+                    "user_id": enqueue_user_id,
+                }),
+            )
+        except Exception as exc:
+            log.warning("Failed to enqueue on_notify agent %s: %s", agent_md_key, exc)
+
+    notif = NotificationsMarkdownFile(site, _storage, enqueue=_enqueue)
+    notif.notify(event_type, {k: str(v) for k, v in payload.items()}, user_id=user_id)
 
 
 def _skill_key(site: str, skill_name: str) -> str:
@@ -339,6 +453,7 @@ def create_mcp_app(
         """
         _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "write-content")
         wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
         wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
         wiki.create(content, user_id=user.user_id)
@@ -376,6 +491,7 @@ def create_mcp_app(
         """
         _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         key = _content_key(user.site, page_path)
         try:
             resp = s3_client.get_object(Bucket=bucket, Key=key)
@@ -385,6 +501,7 @@ def create_mcp_app(
         result: dict[str, Any] = {
             "page_path": page_path,
             "content": content,
+            "etag": resp.get("ETag", ""),
             "last_updated": resp["LastModified"].isoformat(),
         }
         if include_metadata:
@@ -419,6 +536,7 @@ def create_mcp_app(
         page_path: str,
         content: str,
         message: str = "",
+        expected_etag: str = "",
         ctx: Context = None,
     ) -> dict:
         """Update an existing wiki page's content.
@@ -427,12 +545,21 @@ def create_mcp_app(
             page_path: Path to update. Empty string for root page.
             content: New full markdown content.
             message: Optional change summary for audit purposes.
+            expected_etag: Optional etag from a prior wiki_read. When supplied,
+                the write only succeeds if the page hasn't changed since that
+                read (optimistic concurrency) — on mismatch, returns
+                {"conflict": true} instead of writing. Omit to write unconditionally.
         """
         _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "write-content")
         wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
         wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
-        wiki.write(content, user_id=user.user_id)
+        if expected_etag:
+            if not wiki.write_conditional(content, expected_etag, user_id=user.user_id):
+                return {"page_path": page_path, "conflict": True}
+        else:
+            wiki.write(content, user_id=user.user_id)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "page_updated", {"page_path": page_path, "user_id": user.user_id})
         return {
@@ -459,6 +586,7 @@ def create_mcp_app(
 
         _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "delete")
         result = _archive(
             s3=s3_client,
             bucket=bucket,
@@ -482,6 +610,7 @@ def create_mcp_app(
         from archive_helpers import empty_archive as _empty
 
         user = _user(ctx)
+        _check_scope(user, "", "delete")
         return _empty(s3=s3_client, bucket=bucket, site=user.site)
 
     @mcp.tool()
@@ -502,6 +631,7 @@ def create_mcp_app(
         if page_path:
             _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         limit = min(max(1, limit), 500)
         prefix = f"{user.site}/{page_path}/" if page_path else f"{user.site}/"
 
@@ -559,6 +689,7 @@ def create_mcp_app(
         if page_path:
             _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         key = _content_key(user.site, page_path)
         limit = max(1, min(limit, 50))
 
@@ -604,6 +735,7 @@ def create_mcp_app(
         if page_path:
             _validate_page_path(page_path)
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         key = _content_key(user.site, page_path)
 
         try:
@@ -674,6 +806,13 @@ def create_mcp_app(
         from hybrid_search import hybrid_search as _hybrid
 
         user = _user(ctx)
+        # Deliberately not path_scope-checked: search is inherently cross-page (a
+        # Page agent's own path_scope covers only its own page, but PageAgent/
+        # IngestAgent both need site-wide search for routing/reference context).
+        # The site boundary (user.site) still applies unconditionally — this is a
+        # narrower guarantee than other read tools, not an open one. Revisit if a
+        # dedicated "search" operation kind or per-agent-type search scoping is
+        # needed later.
         limit = min(max(1, limit), 100)
         if doc_type not in ("content", "agent", "all"):
             doc_type = "content"
@@ -692,6 +831,228 @@ def create_mcp_app(
             doc_type=doc_type,
         )
         return {"results": results, "total_hits": len(results)}
+
+    # ── Ingest queue ──────────────────────────────────────────────────────────
+    # Staged ingest files live at {site}/.user/ingest/{filename} (excluding
+    # content.md, the owner routing-instructions file, and the processed/
+    # subdirectory) — not reachable through wiki_* tools since _PAGE_PATH_RE
+    # rejects any path segment starting with "." (see module docstring §0).
+    # Mirrors agent-runner's own IngestAgent tool methods, now server-side.
+
+    _INGEST_PREFIX = ".user/ingest/"
+    _PROCESSED_PREFIX = ".user/ingest/processed/"
+
+    @mcp.tool()
+    @_mcp_span("ingest_list_pending")
+    async def ingest_list_pending(ctx: Context = None) -> dict:
+        """List unprocessed files waiting in the ingest queue (.user/ingest/)."""
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "read")
+        prefix = f"{user.site}/{_INGEST_PREFIX}"
+        processed_prefix = f"{user.site}/{_PROCESSED_PREFIX}"
+        pending: list[str] = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in s3_page.get("Contents", []):
+                key = obj["Key"]
+                rel = key[len(prefix):]
+                if not rel or rel == "content.md" or key.startswith(processed_prefix):
+                    continue
+                if "/.agents/" in rel or rel.startswith(".agents/"):
+                    continue
+                pending.append(rel)
+        return {"pending": pending}
+
+    @mcp.tool()
+    @_mcp_span("ingest_read_pending")
+    async def ingest_read_pending(filename: str, ctx: Context = None) -> dict:
+        """Read the text content of a pending ingest file by its filename."""
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "read")
+        filename = filename.strip().lstrip("/")
+        key = f"{user.site}/{_INGEST_PREFIX}{filename}"
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=key)
+        except s3_client.exceptions.NoSuchKey:
+            raise ValueError(f"File not found: {filename}")
+        return {"filename": filename, "content": resp["Body"].read().decode("utf-8")}
+
+    @mcp.tool()
+    @_mcp_span("ingest_read_pending_bytes")
+    async def ingest_read_pending_bytes(filename: str, ctx: Context = None) -> dict:
+        """Read a binary pending ingest file (PDF, DOCX, etc.), base64-encoded.
+
+        Use for files that need local extraction (pypdf/python-docx/etc.) —
+        extraction stays client-side; only the raw bytes cross this boundary.
+        """
+        import base64
+
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "read")
+        filename = filename.strip().lstrip("/")
+        key = f"{user.site}/{_INGEST_PREFIX}{filename}"
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=key)
+        except s3_client.exceptions.NoSuchKey:
+            raise ValueError(f"File not found: {filename}")
+        data = resp["Body"].read()
+        return {
+            "filename": filename,
+            "content_base64": base64.b64encode(data).decode("ascii"),
+            "content_type": resp.get("ContentType", "application/octet-stream"),
+        }
+
+    @mcp.tool()
+    @_mcp_span("ingest_mark_processed")
+    async def ingest_mark_processed(filename: str, ctx: Context = None) -> dict:
+        """Move a processed ingest file to the processed archive (.user/ingest/processed/)."""
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "write-content")
+        filename = filename.strip().lstrip("/")
+        src_key = f"{user.site}/{_INGEST_PREFIX}{filename}"
+        dst_key = f"{user.site}/{_PROCESSED_PREFIX}{filename}"
+        try:
+            s3_client.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": src_key}, Key=dst_key)
+            s3_client.delete_object(Bucket=bucket, Key=src_key)
+        except Exception as exc:
+            raise ValueError(f"Error moving {filename}: {exc}") from exc
+        return {"filename": filename, "processed": True}
+
+    @mcp.tool()
+    @_mcp_span("ingest_read_owner_instructions")
+    async def ingest_read_owner_instructions(ctx: Context = None) -> dict:
+        """Read the owner's routing instructions from .user/ingest/content.md.
+
+        These instructions take priority over the ingest agent's own judgement.
+        Returns an empty string if the owner hasn't configured any instructions.
+        """
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "read")
+        key = f"{user.site}/{_INGEST_PREFIX}content.md"
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=key)
+            content = resp["Body"].read().decode("utf-8")
+        except Exception:
+            content = ""
+        return {"content": content.strip()}
+
+    @mcp.tool()
+    @_mcp_span("ingest_write_extracted")
+    async def ingest_write_extracted(filename: str, extracted_markdown: str, ctx: Context = None) -> dict:
+        """Save extracted text for a binary ingest file as {filename}.extracted.md and enqueue indexing."""
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "write-content")
+        filename = filename.strip().lstrip("/")
+        extracted_key = f"{user.site}/{_INGEST_PREFIX}{filename}.extracted.md"
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=extracted_key,
+            Body=extracted_markdown.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        _maybe_enqueue_index(extracted_key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
+        return {"filename": filename, "extracted_key": extracted_key}
+
+    # ── Run log ────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    @_mcp_span("run_log_append")
+    async def run_log_append(
+        agent_name: str,
+        page_path: str,
+        status: str,
+        trigger: str,
+        duration_s: float,
+        detail: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Prepend an entry to an agent's run_log.md (not reachable via wiki_* — .agents/ is internal).
+
+        Args:
+            agent_name: Name of the agent whose run this is.
+            page_path: Page the agent is attached to; empty string for the root page.
+            status: "success" or "failed".
+            trigger: The trigger that started this run (manual, schedule, on_write, on_notify).
+            duration_s: Run duration in seconds.
+            detail: Optional free-text detail (e.g. an error message on failure).
+        """
+        user = _user(ctx)
+        _check_scope(user, page_path, "write-content")
+        key = _agent_key(user.site, page_path, agent_name).rsplit("/", 1)[0] + "/run_log.md"
+        now = _now_iso()
+        lines = [
+            f"## {agent_name} — {now}",
+            "",
+            f"**Status:** {status}  ",
+            f"**Trigger:** {trigger}  ",
+            f"**Duration:** {duration_s:.1f}s  ",
+        ]
+        if detail:
+            lines += ["", detail]
+        lines += ["", ""]
+        entry = "\n".join(lines)
+        try:
+            existing = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+        except Exception:
+            existing = ""
+        s3_client.put_object(
+            Bucket=bucket, Key=key, Body=(entry + existing).encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        return {"agent_name": agent_name, "page_path": page_path, "logged_at": now}
+
+    # ── Proposal staging ──────────────────────────────────────────────────────
+
+    @mcp.tool()
+    @_mcp_span("propose_page_change")
+    async def propose_page_change(page_path: str, content: str, agent_name: str, ctx: Context = None) -> dict:
+        """Stage a proposed content change for owner review (confirm_before_write mode).
+
+        Writes .proposed.content.md + .proposed.content.meta.json without touching
+        the live page, and fires a confirm_page_change notification. This is how
+        a Page agent with confirm_before_write: true submits its work — never a
+        substitute for wiki_update in normal write mode.
+        """
+        _validate_page_path(page_path)
+        user = _user(ctx)
+        _check_scope(user, page_path, "write-content")
+        base_key = _content_key(user.site, page_path)
+        proposed_key = base_key[: -len("content.md")] + ".proposed.content.md"
+        meta_key = base_key[: -len("content.md")] + ".proposed.content.meta.json"
+        agent_md_key = _agent_key(user.site, page_path, agent_name)
+        s3_client.put_object(
+            Bucket=bucket, Key=proposed_key, Body=content.encode("utf-8"),
+            ContentType="text/markdown; charset=utf-8",
+        )
+        s3_client.put_object(
+            Bucket=bucket, Key=meta_key, Body=json.dumps({"agent_md_key": agent_md_key}).encode("utf-8"),
+            ContentType="application/json",
+        )
+        _do_notify(bucket, user.site, "confirm_page_change", {
+            "agent": agent_name, "content_key": base_key, "proposed_key": proposed_key,
+        }, user.user_id)
+        return {"proposed_key": proposed_key, "meta_key": meta_key}
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    @_mcp_span("notify")
+    async def notify(event_type: str, payload: dict, ctx: Context = None) -> dict:
+        """Append a notification entry to .user/notifications.md and dispatch matching on_notify agents.
+
+        This is the only way to write .user/notifications.md — it is
+        platform-controlled and not reachable via wiki_* tools.
+
+        Args:
+            event_type: Notification event type (e.g. "ingest_start", "ingest_end",
+                "ingest_unrouted", "agent_failure"). agent_success/agent_failure
+                never trigger on_notify dispatch (loop-prevention, enforced server-side).
+            payload: Event-specific fields, coerced to strings.
+        """
+        user = _user(ctx)
+        _check_scope(user, "", "notify")
+        _do_notify(bucket, user.site, event_type, payload, user.user_id)
+        return {"notified": True}
 
     # ── Agent management ──────────────────────────────────────────────────────
     # Agent definitions are stored as agent.md files in S3:
@@ -787,6 +1148,7 @@ def create_mcp_app(
             page_path = ""
         elif page_path:
             _validate_page_path(page_path)
+        _check_scope(user, page_path, "write-agent")
 
         defn = AgentDefinition(
             name=agent_name,
@@ -876,6 +1238,7 @@ def create_mcp_app(
                 "Page agents cannot use trigger 'on_notify'. "
                 "Use agent_create_notification for notification agents."
             )
+        _check_scope(user, page_path, "write-agent")
 
         defn = AgentDefinition(
             name=agent_name,
@@ -957,6 +1320,7 @@ def create_mcp_app(
             )
 
         page_path = ".user/ingest"
+        _check_scope(user, page_path, "write-agent")
         defn = AgentDefinition(
             name=agent_name,
             description=description,
@@ -1040,6 +1404,7 @@ def create_mcp_app(
             )
 
         page_path = ""
+        _check_scope(user, page_path, "write-agent")
         defn = AgentDefinition(
             name=agent_name,
             description=description,
@@ -1088,6 +1453,7 @@ def create_mcp_app(
             page_path: Page the agent is attached to; empty string for the root page.
         """
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         key = _agent_key(user.site, page_path, agent_name)
         try:
             resp = s3_client.get_object(Bucket=bucket, Key=key)
@@ -1132,6 +1498,7 @@ def create_mcp_app(
             confirm_before_write: Set or clear the propose-mode flag.
         """
         user = _user(ctx)
+        _check_scope(user, page_path, "write-agent")
         key = _agent_key(user.site, page_path, agent_name)
         try:
             resp = s3_client.get_object(Bucket=bucket, Key=key)
@@ -1189,6 +1556,7 @@ def create_mcp_app(
             page_path: Page the agent is attached to; empty string for the root page.
         """
         user = _user(ctx)
+        _check_scope(user, page_path, "write-agent")
 
         # Read trigger before deleting so we know whether to clean up a CronJob.
         was_scheduled = False
@@ -1255,6 +1623,7 @@ def create_mcp_app(
             site_wide: When True, returns all agents across all pages in the site.
         """
         user = _user(ctx)
+        _check_scope(user, page_path, "read")
         agents: list[dict] = []
 
         if site_wide:
@@ -1309,6 +1678,7 @@ def create_mcp_app(
         Returns each skill's name, description, and referenced tools.
         """
         user = _user(ctx)
+        _check_scope(user, "", "read")
         prefix = f"{user.site}/.skills/"
         skills: list[dict] = []
         paginator = s3_client.get_paginator("list_objects_v2")
@@ -1350,6 +1720,7 @@ def create_mcp_app(
         """
         _validate_skill_name(skill_name)
         user = _user(ctx)
+        _check_scope(user, "", "write-agent")
         key = _skill_key(user.site, skill_name)
         existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
         if existing.get("KeyCount", 0) > 0:
@@ -1379,6 +1750,7 @@ def create_mcp_app(
         """
         _validate_skill_name(skill_name)
         user = _user(ctx)
+        _check_scope(user, "", "write-agent")
         key = _skill_key(user.site, skill_name)
         try:
             s3_client.head_object(Bucket=bucket, Key=key)
@@ -1407,6 +1779,7 @@ def create_mcp_app(
         """
         _validate_skill_name(skill_name)
         user = _user(ctx)
+        _check_scope(user, "", "write-agent")
         prefix = _skill_key(user.site, skill_name).rsplit("/", 1)[0] + "/"
         paginator = s3_client.get_paginator("list_objects_v2")
         to_delete = []
@@ -1417,6 +1790,24 @@ def create_mcp_app(
             raise ValueError(f"Skill '{skill_name}' not found")
         s3_client.delete_objects(Bucket=bucket, Delete={"Objects": to_delete, "Quiet": True})
         return {"skill_name": skill_name, "deleted": True}
+
+    @mcp.tool()
+    @_mcp_span("skill_read")
+    async def skill_read(skill_name: str, ctx: Context = None) -> dict:
+        """Read a skill's full SKILL.md content.
+
+        Args:
+            skill_name: Name of the skill to read.
+        """
+        _validate_skill_name(skill_name)
+        user = _user(ctx)
+        _check_scope(user, "", "read")
+        key = _skill_key(user.site, skill_name)
+        try:
+            resp = s3_client.get_object(Bucket=bucket, Key=key)
+        except s3_client.exceptions.NoSuchKey:
+            raise ValueError(f"Skill '{skill_name}' not found.")
+        return {"skill_name": skill_name, "content": resp["Body"].read().decode("utf-8")}
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
@@ -1432,6 +1823,7 @@ def create_mcp_app(
         user to create a new skill.
         """
         user = _user(ctx)
+        _check_scope(user, "", "read")
         prefix = f"{user.site}/.skills/"
         tools: list[dict] = []
         paginator = s3_client.get_paginator("list_objects_v2")
@@ -1691,6 +2083,65 @@ def create_mcp_app(
             "rejected": rejected + parse_errors,
         }
 
+    # ── Ambient memory resources (S0.3 spike) ───────────────────────────────────
+    #
+    # These expose the same data as read_memory/write_memory (tools, which the
+    # model must be explicitly told to call) as MCP *resources* instead. Note:
+    # the Claude Agent SDK's MCP integration is tools-only as of 2026-07 (no
+    # list_resources/read_resource API, no auto-injection into context) — these
+    # resources are real and readable by any MCP client that does support
+    # resources, but S0.3's chat spike fetches them itself via the raw mcp
+    # client and folds the content into system_prompt, rather than relying on
+    # SDK-native ambient injection. See projects/yolo-brain/implementation-plan
+    # "Future: Ambient Memory Context" in the wiki for the full note.
+
+    @mcp.resource("memory://current")
+    @_mcp_span("memory_current")
+    async def memory_current(ctx: Context) -> str:
+        """The site's current Librarian preference memory, as a resource."""
+        from yoloscribe_io import MemoryFile, conclusion_to_dict
+        user = _user(ctx)
+        mf = MemoryFile(site=user.site, storage=_storage)
+        fm, conclusions = mf.read()
+        return json.dumps({
+            "owner": user.site,
+            "schema_version": fm.get("schema_version", 1),
+            "last_consolidated": fm.get("last_consolidated", ""),
+            "conclusions": [conclusion_to_dict(c) for c in conclusions],
+        })
+
+    @mcp.resource("page-index://current")
+    @_mcp_span("page_index_current")
+    async def page_index_current(ctx: Context) -> str:
+        """A stub page index for the site: one node per existing wiki page.
+
+        NOT a real Yolo Brain PageIndex — no upsert-on-write lifecycle, no
+        user-preference-ordered topic tree, just a flat listing derived from
+        wiki_list's own S3 enumeration. A real PageIndex doesn't exist
+        anywhere yet (Yolo Brain implementation plan, Phase 1); this is the
+        minimal stand-in S0.3 needs to test resource-shaped memory content.
+        """
+        user = _user(ctx)
+        prefix = f"{user.site}/"
+        nodes: list[dict] = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in s3_page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("/content.md"):
+                    continue
+                relative = key[len(prefix):]
+                if _is_internal(relative):
+                    continue
+                path = "" if relative == "content.md" else relative[: -len("/content.md")]
+                nodes.append({
+                    "topic": path or "(root)",
+                    "pointer": path,
+                    "system": "yoloscribe",
+                    "updated_at": obj["LastModified"].isoformat(),
+                })
+        return json.dumps({"nodes": nodes})
+
     @mcp.tool()
     @_mcp_span("read_signal_log")
     async def read_signal_log(
@@ -1719,6 +2170,25 @@ def create_mcp_app(
             "content": content,
             "entry_count": entry_count,
         }
+
+    @mcp.tool()
+    @_mcp_span("emit_signal")
+    async def emit_signal(signal_type: str, payload: dict, ctx: Context = None) -> dict:
+        """Append an entry to the Librarian's preference signal log.
+
+        For decision signals that produce no write (e.g. notification_suppressed,
+        proposal_accepted/proposal_rejected, user_instruction, ingest_unrouted) —
+        these have no mutation to piggyback a signal on, so callers must emit
+        them explicitly via this tool.
+
+        Args:
+            signal_type: The signal type (e.g. "agent_run_success", "ingest_start").
+            payload: Signal-specific fields.
+        """
+        user = _user(ctx)
+        _check_scope(user, "", "write-content")
+        _emit_signal(user.site, signal_type, payload)
+        return {"emitted": True}
 
     @mcp.tool()
     @_mcp_span("read_archetypes")
