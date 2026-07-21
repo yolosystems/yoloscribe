@@ -30,6 +30,7 @@ from routers import (
     content_router,
     health_router,
     ingest_router,
+    internal_router,
     mcp_oauth_router,
     message_router,
     messaging_router,
@@ -82,6 +83,7 @@ _OPENAPI_TAGS = [
     {"name": "obsidian", "description": "Purpose-built sync API for the YoloScribe Obsidian plugin."},
     {"name": "webhooks", "description": "Internal webhooks called by Supabase / external systems, and outbound webhook management."},
     {"name": "mcp", "description": "Remote MCP server for AI coding agents (Claude Code, etc.)."},
+    {"name": "internal", "description": "Internal backend-to-backend endpoints (e.g. agent-runner run-token minting). Not part of the public API."},
 ]
 
 # ── App ────────────────────────────────────────────────────────────────────────
@@ -179,6 +181,7 @@ else:
 app.include_router(health_router)
 app.include_router(assets_router)
 app.include_router(ingest_router)
+app.include_router(internal_router)
 app.include_router(content_router)
 app.include_router(obsidian_router)
 app.include_router(pages_router)
