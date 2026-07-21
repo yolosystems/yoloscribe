@@ -35,3 +35,9 @@ dev-dependencies = [
 mcp-oauth = {path = "../libs/mcp_oauth"}
 yolo-secrets = {path = "../libs/yolo_secrets"}
 yoloscribe-io = {path = "../libs/yoloscribe_io"}
+
+[dependency-groups]
+# S0.3 spike only (projects/yoloscribe/feature-backlog/agent-runtime-rearchitecture
+# in the wiki) — installed via `uv sync --group spike`, not part of the default
+# install. Not a production dependency until/unless Phase 2 adopts the SDK.
+spike = ["claude-agent-sdk"]

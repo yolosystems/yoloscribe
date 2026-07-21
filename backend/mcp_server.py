@@ -1691,6 +1691,65 @@ def create_mcp_app(
             "rejected": rejected + parse_errors,
         }
 
+    # ── Ambient memory resources (S0.3 spike) ───────────────────────────────────
+    #
+    # These expose the same data as read_memory/write_memory (tools, which the
+    # model must be explicitly told to call) as MCP *resources* instead. Note:
+    # the Claude Agent SDK's MCP integration is tools-only as of 2026-07 (no
+    # list_resources/read_resource API, no auto-injection into context) — these
+    # resources are real and readable by any MCP client that does support
+    # resources, but S0.3's chat spike fetches them itself via the raw mcp
+    # client and folds the content into system_prompt, rather than relying on
+    # SDK-native ambient injection. See projects/yolo-brain/implementation-plan
+    # "Future: Ambient Memory Context" in the wiki for the full note.
+
+    @mcp.resource("memory://current")
+    @_mcp_span("memory_current")
+    async def memory_current(ctx: Context) -> str:
+        """The site's current Librarian preference memory, as a resource."""
+        from yoloscribe_io import MemoryFile, conclusion_to_dict
+        user = _user(ctx)
+        mf = MemoryFile(site=user.site, storage=_storage)
+        fm, conclusions = mf.read()
+        return json.dumps({
+            "owner": user.site,
+            "schema_version": fm.get("schema_version", 1),
+            "last_consolidated": fm.get("last_consolidated", ""),
+            "conclusions": [conclusion_to_dict(c) for c in conclusions],
+        })
+
+    @mcp.resource("page-index://current")
+    @_mcp_span("page_index_current")
+    async def page_index_current(ctx: Context) -> str:
+        """A stub page index for the site: one node per existing wiki page.
+
+        NOT a real Yolo Brain PageIndex — no upsert-on-write lifecycle, no
+        user-preference-ordered topic tree, just a flat listing derived from
+        wiki_list's own S3 enumeration. A real PageIndex doesn't exist
+        anywhere yet (Yolo Brain implementation plan, Phase 1); this is the
+        minimal stand-in S0.3 needs to test resource-shaped memory content.
+        """
+        user = _user(ctx)
+        prefix = f"{user.site}/"
+        nodes: list[dict] = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for s3_page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in s3_page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("/content.md"):
+                    continue
+                relative = key[len(prefix):]
+                if _is_internal(relative):
+                    continue
+                path = "" if relative == "content.md" else relative[: -len("/content.md")]
+                nodes.append({
+                    "topic": path or "(root)",
+                    "pointer": path,
+                    "system": "yoloscribe",
+                    "updated_at": obj["LastModified"].isoformat(),
+                })
+        return json.dumps({"nodes": nodes})
+
     @mcp.tool()
     @_mcp_span("read_signal_log")
     async def read_signal_log(
