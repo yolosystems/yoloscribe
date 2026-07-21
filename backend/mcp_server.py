@@ -320,13 +320,19 @@ def _check_scope(user: "_MCPUser", page_path: str, operation: str) -> None:
 
 
 def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
-    """Append a preference signal entry to the site signal log. Best-effort; never raises."""
+    """Append a preference signal entry to the site signal log, and best-effort
+    fan out to any configured SignalSink(s) (e.g. YoloBrain, a webhook). Never raises."""
     try:
         from yoloscribe_io import SignalEntry, SignalLog
         sl = SignalLog(site=site, storage=_storage)
         sl.append(SignalEntry(type=signal_type, payload=payload))
     except Exception as exc:
         log.warning("Failed to emit signal %s for site %s: %s", signal_type, site, exc)
+    try:
+        from config import signal_sink
+        signal_sink.emit(site, signal_type, payload)
+    except Exception as exc:
+        log.warning("SignalSink dispatch failed for %s/%s: %s", site, signal_type, exc)
 
 
 def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: str) -> None:

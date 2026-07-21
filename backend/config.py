@@ -137,6 +137,14 @@ _sm = None if LOCAL_MODE else boto_session.client("secretsmanager", region_name=
 from yolo_secrets import make_secrets_store  # noqa: E402
 secrets_store = make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=S3_BUCKET, sm_client=_sm)
 
+# ── Signal sink ────────────────────────────────────────────────────────────────
+# Fans out knowledge-management signals (backend/mcp_server.py::_emit_signal)
+# to per-site-configured external collectors (e.g. a generic webhook, later
+# YoloBrain). A site with nothing configured is a no-op — see signal_sinks/.
+
+from signal_sinks import create_signal_sink  # noqa: E402
+signal_sink = create_signal_sink(secrets_store)
+
 # ── CloudFront signed-cookie signing key ───────────────────────────────────────
 # Loaded eagerly at startup so /media-auth can sign cookies without a per-request
 # Secrets Manager round-trip.  Skipped in LOCAL_MODE (no CloudFront locally).

@@ -12,6 +12,7 @@ from .oauth import router as oauth_router
 from .obsidian import router as obsidian_router
 from .pages import router as pages_router
 from .settings import router as settings_router
+from .signal_sinks import router as signal_sinks_router
 from .site import router as site_router
 from .token_budget import router as token_budget_router
 from .tokens import router as tokens_router
@@ -35,6 +36,7 @@ __all__ = [
     "obsidian_router",
     "pages_router",
     "settings_router",
+    "signal_sinks_router",
     "site_router",
     "token_budget_router",
     "tokens_router",

@@ -41,6 +41,7 @@ from routers import (
     search_router,
     versions_router,
     settings_router,
+    signal_sinks_router,
     site_router,
     token_budget_router,
     tokens_router,
@@ -73,6 +74,7 @@ _OPENAPI_TAGS = [
     {"name": "tools", "description": "List and manage top-level MCP tool definitions."},
     {"name": "skills", "description": "List and manage per-site skill definitions."},
     {"name": "settings", "description": "Read and update per-page access-control settings."},
+    {"name": "signal-sinks", "description": "Configure per-site knowledge-management signal-sink webhook targets."},
     {"name": "access", "description": "Request access to a private or shared page."},
     {"name": "chat", "description": "Send a message to the ChatAgent orchestrator."},
     {"name": "site", "description": "Provision, inspect, and delete user sites."},
@@ -186,6 +188,7 @@ app.include_router(content_router)
 app.include_router(obsidian_router)
 app.include_router(pages_router)
 app.include_router(settings_router)
+app.include_router(signal_sinks_router)
 app.include_router(chat_router)
 app.include_router(tools_router)
 app.include_router(oauth_router)
