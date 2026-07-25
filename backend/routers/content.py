@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
+import km_signals
 import sse_broadcaster
+from signal_sinks import dispatch as emit_km_signal
 from yoloscribe_io import AgentDefinition, AgentDefinitionError, build_agent_md, parse_agent_md
 from auth import JWTClaims, decode_jwt, get_jwt_claims, get_site_for_user, get_user_context, require_site_owner, _bearer
 from config import MAX_CONTENT_BYTES, MAX_SHARED_WRITE_BYTES, S3_BUCKET, s3
@@ -348,6 +350,7 @@ async def accept_proposed_route(
         site, wiki.key, claims.user_id, exclude_agent_md_key=originating_agent
     )
     sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "agent"})
+    emit_km_signal(site, *km_signals.proposal_accepted_signal(page_path))
 
     return Response(content='{"status":"accepted"}', status_code=200, media_type="application/json")
 
@@ -374,6 +377,7 @@ async def reject_proposed_route(
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
     _delete_proposed(site, page_path)
+    emit_km_signal(site, *km_signals.proposal_rejected_signal(page_path))
     return Response(content='{"status":"rejected"}', status_code=200, media_type="application/json")
 
 

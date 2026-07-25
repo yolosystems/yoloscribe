@@ -46,6 +46,7 @@ from s3_storage import storage as _storage
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
 from queue_helpers import enqueue_agent_job
 from auth_providers.base import AuthProvider, UserSiteRepository
+import km_signals
 
 log = logging.getLogger(__name__)
 
@@ -320,13 +321,30 @@ def _check_scope(user: "_MCPUser", page_path: str, operation: str) -> None:
 
 
 def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
-    """Append a preference signal entry to the site signal log. Best-effort; never raises."""
+    """Append a signal entry to the site's local Librarian signal log.
+
+    Local-only: this feeds YoloScribe's own standalone Librarian, which keys off
+    YoloScribe's internal signal types (``page_created``/``agent_created``/…).
+    External fan-out of the richer KM taxonomy is a separate concern — see
+    ``_emit_km_signal``. Best-effort; never raises.
+    """
     try:
         from yoloscribe_io import SignalEntry, SignalLog
         sl = SignalLog(site=site, storage=_storage)
         sl.append(SignalEntry(type=signal_type, payload=payload))
     except Exception as exc:
         log.warning("Failed to emit signal %s for site %s: %s", signal_type, site, exc)
+
+
+def _emit_km_signal(site: str, signal_type: str, params: dict) -> None:
+    """Fan out a typed KM signal to any configured SignalSink(s) — sink-only.
+
+    Thin wrapper over ``signal_sinks.dispatch`` (the shared off-write-path,
+    best-effort fan-out) so the MCP tool bodies read consistently alongside
+    the local ``_emit_signal`` calls. Never raises.
+    """
+    from signal_sinks import dispatch
+    dispatch(site, signal_type, params)
 
 
 def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: str) -> None:
@@ -358,6 +376,25 @@ def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: 
 
     notif = NotificationsMarkdownFile(site, _storage, enqueue=_enqueue)
     notif.notify(event_type, {k: str(v) for k, v in payload.items()}, user_id=user_id)
+    # Forward the appropriately-typed KM signal (best-effort, sink-only). Most
+    # events are a notification_sent; the two decision events routed through
+    # notify (NO_DISPATCH_EVENTS / YOL-494) carry their own KM types instead.
+    # page_path is present for page-scoped events (page_shared, confirm_page_change);
+    # site-level events omit it and the signal is emitted without a target.
+    page_path = str(payload.get("page_path") or payload.get("page") or "").strip("/")
+    if event_type == "notification_suppressed":
+        _emit_km_signal(site, *km_signals.notification_suppressed_signal(
+            event=str(payload.get("event", "")),
+            reason=str(payload.get("reason", "")),
+            page_path=page_path,
+        ))
+    elif event_type == "user_instruction":
+        _emit_km_signal(site, *km_signals.user_instruction_signal(
+            instruction=str(payload.get("instruction", "")),
+            domain=str(payload.get("domain", "general")),
+        ))
+    else:
+        _emit_km_signal(site, *km_signals.notification_sent_signal(event_type, page_path))
 
 
 def _skill_key(site: str, skill_name: str) -> str:
@@ -470,6 +507,7 @@ def create_mcp_app(
             )
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "page_created", {"page_path": page_path, "user_id": user.user_id})
+        _emit_km_signal(user.site, *km_signals.page_structured_signal(page_path, content))
         return {
             "page_path": page_path,
             "url": f"/{user.site}/{page_path}" if page_path else f"/{user.site}/",
@@ -562,6 +600,7 @@ def create_mcp_app(
             wiki.write(content, user_id=user.user_id)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "page_updated", {"page_path": page_path, "user_id": user.user_id})
+        _emit_km_signal(user.site, *km_signals.content_routed_signal(page_path))
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),
@@ -1043,10 +1082,20 @@ def create_mcp_app(
         This is the only way to write .user/notifications.md — it is
         platform-controlled and not reachable via wiki_* tools.
 
+        Two decision events are also accepted here and recorded as no-dispatch
+        entries (they never wake an agent) so they can fan out to configured
+        signal sinks as typed KM signals:
+          notification_suppressed — an agent chose NOT to notify. payload:
+            {event, reason, page_path?} (reason is the learning signal).
+          user_instruction — the user told the agent how to behave. payload:
+            {instruction, domain?} (domain buckets it, e.g. "retrieve"/"present").
+
         Args:
             event_type: Notification event type (e.g. "ingest_start", "ingest_end",
-                "ingest_unrouted", "agent_failure"). agent_success/agent_failure
-                never trigger on_notify dispatch (loop-prevention, enforced server-side).
+                "ingest_unrouted", "agent_failure", "notification_suppressed",
+                "user_instruction"). agent_success/agent_failure and the two
+                decision events never trigger on_notify dispatch (loop-prevention,
+                enforced server-side).
             payload: Event-specific fields, coerced to strings.
         """
         user = _user(ctx)
@@ -1190,6 +1239,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
+        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
+            page_path, defn.type, defn.skills, defn.trigger))
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -1275,6 +1326,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
+        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
+            page_path, defn.type, defn.skills, defn.trigger))
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
@@ -1355,6 +1408,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
+        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
+            page_path, defn.type, defn.skills, defn.trigger))
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
@@ -1436,6 +1491,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": "on_notify", "user_id": user.user_id,
         })
+        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
+            page_path, defn.type, defn.skills, defn.trigger))
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
                 "events": list(events), "created_at": _now_iso()}
 
