@@ -14,8 +14,18 @@ log = logging.getLogger(__name__)
 _ON_NOTIFY_PATTERN = re.compile(r"^trigger:\s*on_notify", re.MULTILINE)
 
 # These event types are appended to notifications.md but must never trigger
-# on_notify agent dispatch — doing so would create an infinite feedback loop.
-NO_DISPATCH_EVENTS: frozenset[str] = frozenset({"agent_success", "agent_failure"})
+# on_notify agent dispatch. Two reasons live here:
+#   - loop guard: agent_success / agent_failure are written *by* agent runs;
+#     dispatching an agent on them would create an infinite feedback loop.
+#   - decision signals: notification_suppressed / user_instruction are recorded
+#     as no-dispatch log entries so they can fan out to configured SignalSinks
+#     (see km_signals / YOL-494) without themselves waking any agent.
+NO_DISPATCH_EVENTS: frozenset[str] = frozenset({
+    "agent_success",
+    "agent_failure",
+    "notification_suppressed",
+    "user_instruction",
+})
 
 
 class NotificationsMarkdownFile(MarkdownFile):

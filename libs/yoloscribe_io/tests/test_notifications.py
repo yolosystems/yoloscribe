@@ -69,6 +69,13 @@ def test_no_dispatch_includes_agent_failure():
     assert "agent_failure" in NO_DISPATCH_EVENTS
 
 
+def test_no_dispatch_includes_decision_signals():
+    # YOL-494: recorded as no-dispatch log entries so they fan out to signal
+    # sinks without waking any on_notify agent.
+    assert "notification_suppressed" in NO_DISPATCH_EVENTS
+    assert "user_instruction" in NO_DISPATCH_EVENTS
+
+
 # ── NotificationsMarkdownFile — construction ──────────────────────────────────
 
 def test_key_is_user_notifications():
