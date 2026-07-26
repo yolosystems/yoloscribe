@@ -322,10 +322,12 @@ def _check_scope(user: "_MCPUser", page_path: str, operation: str) -> None:
 def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
     """Append a signal entry to the site's local Librarian signal log.
 
-    Local-only: this feeds YoloScribe's own standalone Librarian, which keys off
-    YoloScribe's internal signal types (``page_created``/``agent_created``/…).
-    External fan-out of the richer KM taxonomy is a separate concern — see
-    ``_emit_km_signal``. Best-effort; never raises.
+    DEPRECATED — the standalone Librarian is being subsumed by YoloBrain, which
+    now receives the mutation signals via the KM ``SignalSink`` (see
+    ``_emit_km_signal``). The mutation tool bodies no longer call this; the only
+    remaining caller is the explicit ``emit_signal`` MCP tool, and the whole
+    local-signal/memory substrate is slated for removal with the Librarian.
+    Best-effort; never raises.
     """
     try:
         from yoloscribe_io import SignalEntry, SignalLog
@@ -339,8 +341,7 @@ def _emit_km_signal(site: str, signal_type: str, params: dict) -> None:
     """Fan out a typed KM signal to any configured SignalSink(s) — sink-only.
 
     Thin wrapper over ``signal_sinks.dispatch`` (the shared off-write-path,
-    best-effort fan-out) so the MCP tool bodies read consistently alongside
-    the local ``_emit_signal`` calls. Never raises.
+    best-effort fan-out). Never raises.
     """
     from signal_sinks import dispatch
     dispatch(site, signal_type, params)
@@ -485,7 +486,6 @@ def create_mcp_app(
                 ContentType="application/json",
             )
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "page_created", {"page_path": page_path, "user_id": user.user_id})
         # KM page_structured + notification-bus fan-out fire via the factory's
         # handlers on wiki.create() above (PAGE_CREATED event).
         return {
@@ -578,7 +578,6 @@ def create_mcp_app(
         else:
             wiki.write(content, user_id=user.user_id)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "page_updated", {"page_path": page_path, "user_id": user.user_id})
         # KM content_routed + notification-bus fan-out fire via the factory's
         # handlers on the write above (PAGE_WRITTEN event).
         return {
@@ -1209,10 +1208,6 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "agent_created", {
-            "agent_name": agent_name, "page_path": page_path,
-            "trigger": trigger, "user_id": user.user_id,
-        })
         # KM agent_provisioned + notification-bus fan-out fire via the factory's
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
@@ -1294,10 +1289,6 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "agent_created", {
-            "agent_name": agent_name, "page_path": page_path,
-            "trigger": trigger, "user_id": user.user_id,
-        })
         # KM agent_provisioned + notification-bus fan-out fire via the factory's
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
@@ -1374,10 +1365,6 @@ def create_mcp_app(
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "agent_created", {
-            "agent_name": agent_name, "page_path": page_path,
-            "trigger": trigger, "user_id": user.user_id,
-        })
         # KM agent_provisioned + notification-bus fan-out fire via the factory's
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
@@ -1455,10 +1442,6 @@ def create_mcp_app(
 
         make_agent_file(user.site, page_path, agent_name).create(defn)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "agent_created", {
-            "agent_name": agent_name, "page_path": page_path,
-            "trigger": "on_notify", "user_id": user.user_id,
-        })
         # KM agent_provisioned + notification-bus fan-out fire via the factory's
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
@@ -1627,10 +1610,8 @@ def create_mcp_app(
 
         # Enqueue index job so the FTS entry for this agent is removed on next run.
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
-        _emit_signal(user.site, "agent_deleted", {
-            "agent_name": agent_name, "page_path": page_path, "user_id": user.user_id,
-        })
-
+        # agent.deleted → notification bus fires via the factory's handler on
+        # .delete() above (AGENT_DELETED event).
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
     @mcp.tool()
