@@ -45,7 +45,7 @@ from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
 from queue_helpers import enqueue_notify_agent
 from auth_providers.base import AuthProvider, UserSiteRepository
 import km_signals
-from mcp_file_factory import make_agent_file, make_wiki_page
+from mcp_file_factory import make_agent_file, make_skill_file, make_wiki_page
 
 log = logging.getLogger(__name__)
 
@@ -1550,16 +1550,12 @@ def create_mcp_app(
             events=defn.events,
         )
         try:
-            content = build_agent_md(updated)
+            build_agent_md(updated)  # validate before writing
         except AgentDefinitionError as exc:
             raise ValueError(str(exc)) from exc
 
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        # Factory-built save() emits agent.updated → notification bus.
+        make_agent_file(user.site, page_path, agent_name).save(updated)
         if updated.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         elif defn.trigger == "schedule" and updated.trigger != "schedule":
@@ -1620,6 +1616,10 @@ def create_mcp_app(
             except Exception as exc:
                 log.warning("Failed to delete agent vectors for %s: %s", agent_name, exc)
 
+        # Emit agent.deleted (→ notification bus) via the file object while
+        # agent.md still exists, then bulk-delete the whole agent directory
+        # (runs/, .chunks/, …); delete_objects is idempotent for agent.md.
+        make_agent_file(user.site, page_path, agent_name).delete()
         s3_client.delete_objects(Bucket=bucket, Delete={"Objects": all_objects})
 
         if was_scheduled:
@@ -1752,12 +1752,9 @@ def create_mcp_app(
             raise ValueError(
                 f"Skill '{skill_name}' already exists. Use skill_update to modify it."
             )
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        # create_raw preserves the caller's exact SKILL.md bytes and emits
+        # skill.created → notification bus.
+        make_skill_file(user.site, skill_name).create_raw(content)
         return {"skill_name": skill_name, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -1783,12 +1780,9 @@ def create_mcp_app(
             raise ValueError(
                 f"Skill '{skill_name}' does not exist. Use skill_create to create it."
             )
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        # save_raw preserves the caller's exact SKILL.md bytes and emits
+        # skill.changed → notification bus.
+        make_skill_file(user.site, skill_name).save_raw(content)
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
     @mcp.tool()
@@ -1813,6 +1807,9 @@ def create_mcp_app(
                 to_delete.append({"Key": obj["Key"]})
         if not to_delete:
             raise ValueError(f"Skill '{skill_name}' not found")
+        # Emit skill.deleted (→ notification bus) via the file object, then bulk-
+        # delete the whole skill directory (SKILL.md, mcp.json, …).
+        make_skill_file(user.site, skill_name).delete()
         s3_client.delete_objects(Bucket=bucket, Delete={"Objects": to_delete, "Quiet": True})
         return {"skill_name": skill_name, "deleted": True}
 

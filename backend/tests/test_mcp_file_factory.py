@@ -19,6 +19,7 @@ from yoloscribe_io import (
     AgentMarkdownFile,
     NotificationBusHandler,
     OnWriteEventHandler,
+    SkillMarkdownFile,
     WikiPageMarkdownFile,
 )
 from yoloscribe_io.storage import LocalStorageBackend
@@ -78,3 +79,39 @@ def test_wiki_write_fires_km_content_routed_but_not_bus(monkeypatch):
     assert km_calls and km_calls[0][1] == "content_routed"
     # page.written stays on the on_write fast-path — NOT routed to the bus
     assert (store.read("s/.user/notifications.md") or "") == ""
+
+
+def test_agent_update_and_delete_reach_bus(monkeypatch):
+    store, enqueued, km_calls, bus = _ctx(monkeypatch)
+
+    def wire_agent():
+        a = AgentMarkdownFile(site="s", page_path="projects/x", agent_name="a", storage=store)
+        a.add_handler(bus)
+        a.add_handler(KMSignalHandler())
+        return a
+
+    wire_agent().create(AgentDefinition(name="a", description="d", trigger="manual", type="page"))
+    wire_agent().save(AgentDefinition(name="a", description="d2", trigger="manual", type="page"))
+    wire_agent().delete()
+    raw = store.read("s/.user/notifications.md") or ""
+    assert "agent_created" in raw and "agent_updated" in raw and "agent_deleted" in raw
+    # only agent.created carries a KM signal (agent_provisioned); update/delete don't
+    assert [c[1] for c in km_calls] == ["agent_provisioned"]
+
+
+def test_skill_create_update_delete_reach_bus_verbatim(monkeypatch):
+    store, enqueued, km_calls, bus = _ctx(monkeypatch)
+    custom = "---\nname: linear\ntools:\n  - linear_get_issue\nkeep: me\n---\n\n# Linear\n"
+
+    def wire_skill():
+        s = SkillMarkdownFile(site="s", skill_name="linear", storage=store)
+        s.add_handler(bus)
+        return s
+
+    wire_skill().create_raw(custom)
+    assert store.read("s/.skills/linear/SKILL.md") == custom   # verbatim, no re-serialize
+    wire_skill().save_raw(custom + "\nmore\n")
+    wire_skill().delete()
+    raw = store.read("s/.user/notifications.md") or ""
+    assert "skill_created" in raw and "skill_changed" in raw and "skill_deleted" in raw
+    assert km_calls == []   # skills have no KM signal type
