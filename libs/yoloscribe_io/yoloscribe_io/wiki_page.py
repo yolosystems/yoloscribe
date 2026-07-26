@@ -145,13 +145,19 @@ class WikiPageMarkdownFile(MarkdownFile):
         return saved
 
     def create(self, initial_content: str = "", user_id: str = "") -> None:
-        """Write initial content and emit page.created."""
+        """Write initial content and emit page.created.
+
+        The event payload carries `content` so the KM-signal subscriber can
+        derive the page's section structure without re-reading storage; the
+        notification-bus subscriber filters it back out.
+        """
         self._storage.write(self.key, initial_content)
         self._raw_content = initial_content
         self._emit(EventType.PAGE_CREATED, {
             "key": self.key,
             "site": self._site,
             "page_path": self._page_path,
+            "content": initial_content,
             "user_id": user_id,
         })
 

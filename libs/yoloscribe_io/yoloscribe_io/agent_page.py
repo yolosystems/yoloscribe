@@ -292,7 +292,12 @@ class AgentMarkdownFile(MarkdownFile):
         return parse_agent_md(self.raw_content)
 
     def create(self, defn: AgentDefinition) -> None:
-        """Write initial agent.md and emit agent.created."""
+        """Write initial agent.md and emit agent.created.
+
+        The event payload carries the definition's `agent_type`/`skills`/
+        `trigger` so the KM-signal subscriber can build the `agent_provisioned`
+        signal without re-parsing the agent.md.
+        """
         raw = build_agent_md(defn)
         self._storage.write(self.key, raw)
         self._raw_content = raw
@@ -301,6 +306,9 @@ class AgentMarkdownFile(MarkdownFile):
             "site": self._site,
             "page_path": self._page_path,
             "agent_name": self._agent_name,
+            "agent_type": defn.type,
+            "skills": list(defn.skills),
+            "trigger": defn.trigger,
         })
 
     def save(self, defn: AgentDefinition) -> None:

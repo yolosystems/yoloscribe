@@ -8,7 +8,7 @@ from .librarian import (
     conclusion_to_dict,
     scaffolding_rule_violations,
 )
-from .notifications import NO_DISPATCH_EVENTS, NotificationsMarkdownFile
+from .notifications import NO_DISPATCH_EVENTS, NotificationBusHandler, NotificationsMarkdownFile
 from .kb_index import KnowledgeBaseIndexMarkdownFile
 from .skill_page import (
     SKILL_NAME_RE,
@@ -72,6 +72,7 @@ __all__ = [
     "conclusion_to_dict",
     "scaffolding_rule_violations",
     "NO_DISPATCH_EVENTS",
+    "NotificationBusHandler",
     "NotificationsMarkdownFile",
     "KnowledgeBaseIndexMarkdownFile",
     "SKILL_NAME_RE",
