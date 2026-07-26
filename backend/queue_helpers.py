@@ -39,6 +39,35 @@ def enqueue_agent_job(agent_md_key: str, content_key: str, user_id: str) -> None
         log.warning("Failed to enqueue agent job %s", agent_md_key, exc_info=True)
 
 
+def enqueue_notify_agent(
+    agent_md_key: str, notifications_key: str, prompt: str, user_id: str
+) -> None:
+    """Enqueue a single on_notify agent-runner job. Best-effort; never raises.
+
+    Matches ``NotificationsMarkdownFile``'s injected-enqueue signature so it can
+    be handed to the notification bus (``NotificationBusHandler`` / ``_do_notify``)
+    without a closure.
+    """
+    from config import S3_BUCKET, SQS_QUEUE_URL, sqs
+
+    if sqs is None or not SQS_QUEUE_URL:
+        return
+    try:
+        sqs.send_message(
+            QueueUrl=SQS_QUEUE_URL,
+            MessageBody=json.dumps({
+                "bucket": S3_BUCKET,
+                "agent_md_key": agent_md_key,
+                "content_key": notifications_key,
+                "prompt": prompt,
+                "user_id": user_id,
+            }),
+        )
+        log.info("Enqueued on_notify agent %s", agent_md_key)
+    except Exception:
+        log.warning("Failed to enqueue on_notify agent %s", agent_md_key, exc_info=True)
+
+
 def enqueue_on_write_agents(
     site: str,
     content_key: str,

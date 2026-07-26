@@ -35,8 +35,6 @@ from yoloscribe_io import (
     AgentDefinition,
     AgentDefinitionError,
     NotificationsMarkdownFile,
-    OnWriteEventHandler,
-    WikiPageMarkdownFile,
     build_agent_md,
     parse_agent_md,
 )
@@ -44,9 +42,10 @@ from yoloscribe_io.agent_page import AGENT_NAME_RE
 from yoloscribe_io.markdown_file import _parse_frontmatter
 from s3_storage import storage as _storage
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
-from queue_helpers import enqueue_agent_job
+from queue_helpers import enqueue_notify_agent
 from auth_providers.base import AuthProvider, UserSiteRepository
 import km_signals
+from mcp_file_factory import make_agent_file, make_wiki_page
 
 log = logging.getLogger(__name__)
 
@@ -355,26 +354,7 @@ def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: 
     Best-effort dispatch: a failed SQS enqueue never blocks the notification
     entry itself from being written.
     """
-    from config import SQS_QUEUE_URL, sqs
-
-    def _enqueue(agent_md_key: str, notifications_key: str, prompt: str, enqueue_user_id: str) -> None:
-        if sqs is None or not SQS_QUEUE_URL:
-            return
-        try:
-            sqs.send_message(
-                QueueUrl=SQS_QUEUE_URL,
-                MessageBody=json.dumps({
-                    "bucket": bucket,
-                    "agent_md_key": agent_md_key,
-                    "content_key": notifications_key,
-                    "prompt": prompt,
-                    "user_id": enqueue_user_id,
-                }),
-            )
-        except Exception as exc:
-            log.warning("Failed to enqueue on_notify agent %s: %s", agent_md_key, exc)
-
-    notif = NotificationsMarkdownFile(site, _storage, enqueue=_enqueue)
+    notif = NotificationsMarkdownFile(site, _storage, enqueue=enqueue_notify_agent)
     notif.notify(event_type, {k: str(v) for k, v in payload.items()}, user_id=user_id)
     # Forward the appropriately-typed KM signal (best-effort, sink-only). Most
     # events are a notification_sent; the two decision events routed through
@@ -491,8 +471,7 @@ def create_mcp_app(
         _validate_page_path(page_path)
         user = _user(ctx)
         _check_scope(user, page_path, "write-content")
-        wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
-        wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
+        wiki = make_wiki_page(user.site, page_path)
         wiki.create(content, user_id=user.user_id)
         # Write default private settings.json if one doesn't exist yet.
         sk = _settings_key(user.site, page_path)
@@ -507,7 +486,8 @@ def create_mcp_app(
             )
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "page_created", {"page_path": page_path, "user_id": user.user_id})
-        _emit_km_signal(user.site, *km_signals.page_structured_signal(page_path, content))
+        # KM page_structured + notification-bus fan-out fire via the factory's
+        # handlers on wiki.create() above (PAGE_CREATED event).
         return {
             "page_path": page_path,
             "url": f"/{user.site}/{page_path}" if page_path else f"/{user.site}/",
@@ -591,8 +571,7 @@ def create_mcp_app(
         _validate_page_path(page_path)
         user = _user(ctx)
         _check_scope(user, page_path, "write-content")
-        wiki = WikiPageMarkdownFile(site=user.site, page_path=page_path, storage=_storage)
-        wiki.add_handler(OnWriteEventHandler(storage=_storage, enqueue=enqueue_agent_job))
+        wiki = make_wiki_page(user.site, page_path)
         if expected_etag:
             if not wiki.write_conditional(content, expected_etag, user_id=user.user_id):
                 return {"page_path": page_path, "conflict": True}
@@ -600,7 +579,8 @@ def create_mcp_app(
             wiki.write(content, user_id=user.user_id)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "page_updated", {"page_path": page_path, "user_id": user.user_id})
-        _emit_km_signal(user.site, *km_signals.content_routed_signal(page_path))
+        # KM content_routed + notification-bus fan-out fire via the factory's
+        # handlers on the write above (PAGE_WRITTEN event).
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),
@@ -1225,13 +1205,7 @@ def create_mcp_app(
                     "Pass overwrite=True to replace it."
                 )
 
-        content = build_agent_md(defn)
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),
-            ContentType="text/markdown; charset=utf-8",
-        )
+        make_agent_file(user.site, page_path, agent_name).create(defn)
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
@@ -1239,8 +1213,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
-        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
-            page_path, defn.type, defn.skills, defn.trigger))
+        # KM agent_provisioned + notification-bus fan-out fire via the factory's
+        # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
     @mcp.tool()
@@ -1316,9 +1290,7 @@ def create_mcp_app(
                     "Pass overwrite=True to replace it."
                 )
 
-        content = build_agent_md(defn)
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
-                             ContentType="text/markdown; charset=utf-8")
+        make_agent_file(user.site, page_path, agent_name).create(defn)
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
@@ -1326,8 +1298,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
-        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
-            page_path, defn.type, defn.skills, defn.trigger))
+        # KM agent_provisioned + notification-bus fan-out fire via the factory's
+        # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
@@ -1398,9 +1370,7 @@ def create_mcp_app(
                     "Pass overwrite=True to replace it."
                 )
 
-        content = build_agent_md(defn)
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
-                             ContentType="text/markdown; charset=utf-8")
+        make_agent_file(user.site, page_path, agent_name).create(defn)
         if defn.trigger == "schedule":
             enqueue_schedule_bootstrap(key, user.user_id)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
@@ -1408,8 +1378,8 @@ def create_mcp_app(
             "agent_name": agent_name, "page_path": page_path,
             "trigger": trigger, "user_id": user.user_id,
         })
-        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
-            page_path, defn.type, defn.skills, defn.trigger))
+        # KM agent_provisioned + notification-bus fan-out fire via the factory's
+        # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
@@ -1483,16 +1453,14 @@ def create_mcp_app(
                     "Pass overwrite=True to replace it."
                 )
 
-        content = build_agent_md(defn)
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content.encode("utf-8"),
-                             ContentType="text/markdown; charset=utf-8")
+        make_agent_file(user.site, page_path, agent_name).create(defn)
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         _emit_signal(user.site, "agent_created", {
             "agent_name": agent_name, "page_path": page_path,
             "trigger": "on_notify", "user_id": user.user_id,
         })
-        _emit_km_signal(user.site, *km_signals.agent_provisioned_signal(
-            page_path, defn.type, defn.skills, defn.trigger))
+        # KM agent_provisioned + notification-bus fan-out fire via the factory's
+        # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
                 "events": list(events), "created_at": _now_iso()}
 
