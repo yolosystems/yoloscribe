@@ -8,6 +8,7 @@ from typing import Callable
 
 from yoloscribe_io import AgentDefinition
 
+from ..mcp_client import AgentRunnerMCPClient
 from .search import SearchBackend, NullSearchBackend
 
 log = logging.getLogger(__name__)
@@ -38,11 +39,13 @@ class BaseAgent(ABC):
         notify_fn: Callable[[str, dict, str], None],
         search: SearchBackend | None = None,
         max_page_reads: int = 10,
+        mcp: AgentRunnerMCPClient | None = None,
     ) -> None:
         self.agent_def = agent_def
         self._site = site
         self._page_path = page_path
         self._storage = storage
+        self._mcp = mcp
         self._mcp_tools = mcp_tools
         self._model = model
         self._user_id = user_id

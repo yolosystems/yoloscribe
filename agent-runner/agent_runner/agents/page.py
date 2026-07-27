@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Callable
 
 from strands_tools import http_request
-from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
+from yoloscribe_io import AgentDefinition
 
+from ..mcp_client import AgentRunnerMCPClient
 from .base import BaseAgent
 from .search import SearchBackend
 
@@ -35,7 +35,7 @@ class PageAgent(BaseAgent):
         agent_def: AgentDefinition,
         site: str,
         page_path: str,
-        wiki: WikiPageMarkdownFile,
+        mcp: AgentRunnerMCPClient,
         storage,
         mcp_tools: list,
         model,
@@ -57,8 +57,8 @@ class PageAgent(BaseAgent):
             notify_fn=notify_fn,
             search=search,
             max_page_reads=max_page_reads,
+            mcp=mcp,
         )
-        self._wiki = wiki
         self._content_key = content_key
         self._agent_md_key = agent_md_key
 
@@ -66,16 +66,16 @@ class PageAgent(BaseAgent):
 
     def page_read(self) -> str:
         """Read the current content of this wiki page."""
-        return self._wiki.read()
+        return self._mcp.wiki_read(self._page_path)[0]
 
     def page_write(self, content: str) -> str:
         """Write updated content to this wiki page."""
-        self._wiki.write(content)
+        self._mcp.wiki_write(self._page_path, content)
         return "Content written."
 
     def wiki_search(self, query: str) -> str:
         """Search the wiki semantically and return matching page excerpts."""
-        results = self._search.search(query, self._site, limit=10)
+        results = self._mcp.search(query, limit=10)
         if not results:
             return "No matching pages found."
         lines = [
@@ -107,7 +107,7 @@ class PageAgent(BaseAgent):
 
     def _run_propose_mode(self, prompt: str, tools: list) -> int:
         agent = self._make_strands_agent(tools)
-        content = self._wiki.read()
+        content = self._mcp.wiki_read(self._page_path)[0]
         full_prompt = (
             f"{prompt}\n\n"
             f"Current content:\n```markdown\n{content}\n```\n\n"
@@ -116,27 +116,17 @@ class PageAgent(BaseAgent):
         response = agent(full_prompt)
         updated = _strip_preamble(str(response))
 
-        proposed_key = self._content_key[:-len("content.md")] + ".proposed.content.md"
-        meta_key = self._content_key[:-len("content.md")] + ".proposed.content.meta.json"
-        self._storage.write(proposed_key, updated)
-        self._storage.write(meta_key, json.dumps({"agent_md_key": self._agent_md_key}))
-        log.info("Propose mode: wrote %d chars to %s", len(updated), proposed_key)
-        self._notify(
-            "confirm_page_change",
-            {
-                "agent": self.agent_def.name,
-                "content_key": self._content_key,
-                "proposed_key": proposed_key,
-            },
-            self._user_id,
-        )
+        # propose_page_change stages .proposed.content.md and fires
+        # confirm_page_change server-side (no separate storage write / notify).
+        self._mcp.propose_page_change(self._page_path, updated, self.agent_def.name)
+        log.info("Propose mode: staged %d chars for %s", len(updated), self._page_path)
         return response.metrics.accumulated_usage.get("totalTokens", 0)
 
     def _run_write_mode(self, prompt: str, tools: list) -> int:
         agent = self._make_strands_agent(tools)
 
         for attempt in range(_MAX_WRITE_RETRIES):
-            content, etag = self._wiki.read_with_etag()
+            content, etag = self._mcp.wiki_read(self._page_path)
             full_prompt = (
                 f"{prompt}\n\n"
                 f"Current content:\n```markdown\n{content}\n```\n\n"
@@ -145,7 +135,7 @@ class PageAgent(BaseAgent):
             response = agent(full_prompt)
             updated = _strip_preamble(str(response))
 
-            if self._wiki.write_conditional(updated, etag, user_id=self._user_id):
+            if self._mcp.wiki_write(self._page_path, updated, expected_etag=etag):
                 return response.metrics.accumulated_usage.get("totalTokens", 0)
 
             if attempt == _MAX_WRITE_RETRIES - 1:

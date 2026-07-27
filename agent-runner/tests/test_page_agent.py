@@ -1,29 +1,33 @@
 """Tests for PageAgent tool surface and utilities (YOL-296)."""
 from __future__ import annotations
 
-from yoloscribe_io import WikiPageMarkdownFile
 from yoloscribe_io.storage import LocalStorageBackend
 
 from agent_runner.agents.page import PageAgent, _strip_preamble
 from agent_runner.agents.search import NullSearchBackend, SearchResult
+from agent_runner.mcp_client import StorageMCPClient
 from tests.conftest import make_def, make_notify
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _make_agent(storage: LocalStorageBackend, page_path: str = "notes", **def_kwargs) -> PageAgent:
-    wiki = WikiPageMarkdownFile(site="s", page_path=page_path, storage=storage)
+def _make_agent(storage: LocalStorageBackend, page_path: str = "notes", search=None, **def_kwargs) -> PageAgent:
+    search = search or NullSearchBackend()
+    notify = make_notify()
+    # PageAgent now does all IO through the client interface; the legacy
+    # StorageMCPClient over LocalStorageBackend keeps the behavior identical.
+    mcp = StorageMCPClient(storage, "s", search, notify, "u1")
     return PageAgent(
         agent_def=make_def(**def_kwargs),
         site="s",
         page_path=page_path,
-        wiki=wiki,
+        mcp=mcp,
         storage=storage,
         mcp_tools=[],
         model=None,
         user_id="u1",
-        notify_fn=make_notify(),
-        search=NullSearchBackend(),
+        notify_fn=notify,
+        search=search,
     )
 
 
@@ -79,19 +83,7 @@ def test_wiki_search_formats_results():
             return [SearchResult(page_path="notes/jazz", excerpt="Jazz is great.", score=0.9)]
 
     storage = LocalStorageBackend()
-    wiki = WikiPageMarkdownFile(site="s", page_path="notes", storage=storage)
-    agent = PageAgent(
-        agent_def=make_def(),
-        site="s",
-        page_path="notes",
-        wiki=wiki,
-        storage=storage,
-        mcp_tools=[],
-        model=None,
-        user_id="u1",
-        notify_fn=make_notify(),
-        search=_FakeSearch(),
-    )
+    agent = _make_agent(storage, search=_FakeSearch())
     result = agent.wiki_search("jazz")
     assert "notes/jazz" in result
     assert "Jazz is great." in result

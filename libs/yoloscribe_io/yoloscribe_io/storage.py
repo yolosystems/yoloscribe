@@ -138,10 +138,15 @@ class LocalStorageBackend(StorageBackend):
     """In-memory storage backend for testing — no AWS required."""
 
     def __init__(self, initial: dict[str, str] | None = None) -> None:
-        self._store: dict[str, str] = dict(initial or {})
+        self._store: dict[str, str] = {}
         self._bytes_store: dict[str, bytes] = {}
         self._etags: dict[str, str] = {}
         self._counter = 0
+        # Seed entries get a faked etag on store — mirroring how S3 assigns an
+        # etag on PUT — so read_with_etag / write_conditional work for them too.
+        for key, content in (initial or {}).items():
+            self._store[key] = content
+            self._etags[key] = self._mint_etag()
 
     def _mint_etag(self) -> str:
         self._counter += 1

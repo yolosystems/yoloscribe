@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import pytest
 from agent_runner.agents.page import PageAgent
-from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
+from agent_runner.agents.search import NullSearchBackend
+from agent_runner.mcp_client import StorageMCPClient
+from yoloscribe_io import AgentDefinition
 from yoloscribe_io.storage import LocalStorageBackend
 
 from .support.report import REPORT, RResult
@@ -43,14 +45,14 @@ def test_r4_proposal_safety():
         description="Propose a rewrite.",
         confirm_before_write=True,
     )
-    wiki = WikiPageMarkdownFile(site=site, page_path="", storage=storage)
+    mcp = StorageMCPClient(storage, site, NullSearchBackend(), notify_fn, "test-user")
     model = ScriptedModel([_PROPOSED])
 
     agent = PageAgent(
         agent_def=agent_def,
         site=site,
         page_path="",
-        wiki=wiki,
+        mcp=mcp,
         storage=storage,
         mcp_tools=[],
         model=model,

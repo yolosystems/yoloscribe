@@ -50,13 +50,13 @@ from yoloscribe_io import (
     SignalLog,
     TokenData,
     ToolToken,
-    WikiPageMarkdownFile,
     conclusion_to_dict,
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
 )
 from .memory_reasoner import HaikuMemoryReasoner, NullMemoryReasoner
+from .mcp_client import StorageMCPClient
 from .agents import (
     ConsolidationAgent,
     EvalAnnotatorAgent,
@@ -760,7 +760,7 @@ def _make_agent(
     agent_def,
     site: str,
     page_path: str,
-    wiki: WikiPageMarkdownFile,
+    mcp,
     storage: S3StorageBackend,
     mcp_tools: list,
     model,
@@ -842,7 +842,7 @@ def _make_agent(
         agent_def=agent_def,
         site=site,
         page_path=page_path,
-        wiki=wiki,
+        mcp=mcp,
         storage=storage,
         mcp_tools=mcp_tools,
         model=model,
@@ -915,7 +915,6 @@ def main() -> None:
     # Derive the wiki page path from CONTENT_KEY (strips "{site}/" prefix and "/content.md" suffix).
     _content_rel = CONTENT_KEY[len(_site) + 1:]
     _page_path = "" if _content_rel == "content.md" else _content_rel[: -len("/content.md")]
-    wiki = WikiPageMarkdownFile(site=_site, page_path=_page_path, storage=storage)
 
     # Build a lightweight SQS enqueue function for on_notify dispatch.
     # NotificationsMarkdownFile handles dispatch internally when enqueue is provided.
@@ -1077,12 +1076,18 @@ def main() -> None:
 
             search = _make_search_backend(s3)
 
+            # The runner's IO client. Legacy direct-S3 adapter (default) during
+            # the strangler-fig migration; HttpMCPClient (run token) swaps in
+            # under the AGENT_RUNNER_ACCESS=mcp flag once mint wiring lands (P1.2
+            # increment 4 / P1.6). Agents talk only to the client interface.
+            mcp_client = StorageMCPClient(storage, _site, search, _notify, USER_ID)
+
             # 4. Create the typed agent and run it.
             agent = _make_agent(
                 agent_def=agent_def,
                 site=_site,
                 page_path=_page_path,
-                wiki=wiki,
+                mcp=mcp_client,
                 storage=storage,
                 mcp_tools=mcp_tools,
                 model=model,

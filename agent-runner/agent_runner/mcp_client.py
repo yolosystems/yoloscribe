@@ -318,3 +318,115 @@ class FakeMCPClient(AgentRunnerMCPClient):
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:
         self.notifications.append((event_type, dict(payload)))
+
+
+# ── StorageMCPClient — legacy direct-S3 adapter (strangler-fig; P1.6) ──────────
+
+_INGEST_PREFIX = ".user/ingest/"
+_PROCESSED_PREFIX = ".user/ingest/processed/"
+_SYSTEM_SEGMENTS = (".agents/", ".user/", ".archive/", ".skills/")
+
+
+class StorageMCPClient(AgentRunnerMCPClient):
+    """AgentRunnerMCPClient implemented over the direct-S3 ``storage`` backend.
+
+    The legacy adapter that keeps the runner working during the strangler-fig
+    migration: agents talk only to the ``AgentRunnerMCPClient`` interface, and
+    the runner selects this (default, ``AGENT_RUNNER_ACCESS=s3``) or
+    ``HttpMCPClient`` (``=mcp``) per the P1.6 flag. It centralizes the IO the
+    agent classes used to do inline and is deleted once all sites are on ``mcp``.
+    """
+
+    def __init__(self, storage, site: str, search, notify_fn, user_id: str = "") -> None:
+        self._storage = storage
+        self._site = site
+        self._search = search
+        self._notify_fn = notify_fn
+        self._user_id = user_id
+
+    def _wiki(self, page_path: str):
+        from yoloscribe_io import WikiPageMarkdownFile
+        return WikiPageMarkdownFile(site=self._site, page_path=page_path, storage=self._storage)
+
+    # wiki
+    def wiki_read(self, page_path: str) -> tuple[str, str]:
+        content, etag = self._wiki(page_path).read_with_etag()
+        return (content or "", etag or "")
+
+    def wiki_write(self, page_path: str, content: str, expected_etag: str = "") -> bool:
+        wiki = self._wiki(page_path)
+        if expected_etag:
+            return wiki.write_conditional(content, expected_etag, user_id=self._user_id)
+        wiki.write(content, user_id=self._user_id)
+        return True
+
+    def wiki_create(self, page_path: str, content: str) -> None:
+        self._wiki(page_path).write(content, user_id=self._user_id)
+
+    def wiki_list_pages(self) -> list[str]:
+        prefix = f"{self._site}/"
+        pages = []
+        for key in self._storage.list(prefix):
+            if not key.endswith("/content.md"):
+                continue
+            rel = key[len(prefix):]
+            if any(seg in f"/{rel}" for seg in _SYSTEM_SEGMENTS):
+                continue
+            pages.append(rel[: -len("/content.md")] if rel != "content.md" else "")
+        return sorted(pages)
+
+    def propose_page_change(self, page_path: str, content: str, agent_name: str) -> None:
+        import json as _json
+        base = f"{self._site}/{page_path}/" if page_path else f"{self._site}/"
+        proposed_key = f"{base}.proposed.content.md"
+        meta_key = f"{base}.proposed.content.meta.json"
+        agent_md_key = f"{base}.agents/{agent_name}/agent.md"
+        self._storage.write(proposed_key, content)
+        self._storage.write(meta_key, _json.dumps({"agent_md_key": agent_md_key}))
+        self._notify_fn(
+            "confirm_page_change",
+            {"agent": agent_name, "content_key": f"{base}content.md", "proposed_key": proposed_key},
+            self._user_id,
+        )
+
+    def search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        results = self._search.search(query, self._site, limit=limit)
+        return [SearchHit(r.page_path, r.score, r.excerpt) for r in results]
+
+    # ingest
+    def ingest_list_pending(self) -> list[str]:
+        prefix = f"{self._site}/{_INGEST_PREFIX}"
+        processed_prefix = f"{self._site}/{_PROCESSED_PREFIX}"
+        pending = []
+        for key in self._storage.list(prefix):
+            rel = key[len(prefix):]
+            if not rel or rel == "content.md" or key.startswith(processed_prefix):
+                continue
+            if "/.agents/" in rel or rel.startswith(".agents/"):
+                continue
+            pending.append(rel)
+        return sorted(pending)
+
+    def ingest_read(self, filename: str) -> str | None:
+        return self._storage.read(f"{self._site}/{_INGEST_PREFIX}{filename.lstrip('/')}")
+
+    def ingest_read_bytes(self, filename: str) -> bytes | None:
+        return self._storage.read_bytes(f"{self._site}/{_INGEST_PREFIX}{filename.lstrip('/')}")
+
+    def ingest_mark_processed(self, filename: str) -> None:
+        filename = filename.lstrip("/")
+        self._storage.move(
+            f"{self._site}/{_INGEST_PREFIX}{filename}",
+            f"{self._site}/{_PROCESSED_PREFIX}{filename}",
+        )
+
+    def ingest_write_extracted(self, filename: str, markdown: str) -> None:
+        key = f"{self._site}/{_INGEST_PREFIX}{filename.lstrip('/')}.extracted.md"
+        self._storage.write_bytes(key, markdown.encode("utf-8"), "text/markdown")
+
+    def ingest_read_owner_instructions(self) -> str:
+        return (self._storage.read(f"{self._site}/{_INGEST_PREFIX}content.md") or "").strip()
+
+    # notifications
+    def notify(self, event_type: str, payload: dict) -> None:
+        self._notify_fn(event_type, payload, self._user_id)
