@@ -7,8 +7,6 @@ can take.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from agent_runner.mcp_client import FakeMCPClient, SearchHit, _parse_tool_result
@@ -104,30 +102,35 @@ def test_notify_records_events():
 
 
 # ── HttpMCPClient result parsing ──────────────────────────────────────────────
+# Shapes below mirror the real Strands MCPToolResult verified live against the
+# backend: a dict with {status, content, structuredContent, isError}, where
+# content blocks are {"text": ...} (no "type" key) and structuredContent holds
+# the FastMCP return (a bare value wrapped as {"result": ...}).
 
-def test_parse_structured_content_unwraps_result():
-    res = SimpleNamespace(status="success", structuredContent={"result": {"content": "hi", "etag": "e1"}})
+def test_parse_structured_content_unwraps_wrapped_result():
+    res = {"status": "success", "isError": False, "structuredContent": {"result": {"content": "hi", "etag": "e1"}}}
     assert _parse_tool_result("wiki_read", res) == {"content": "hi", "etag": "e1"}
 
 
 def test_parse_structured_content_plain_dict():
-    res = SimpleNamespace(status="success", structuredContent={"content": "hi"})
-    assert _parse_tool_result("wiki_read", res) == {"content": "hi"}
+    res = {"status": "success", "isError": False,
+           "structuredContent": {"content": "hi", "etag": '"abc"'}}
+    assert _parse_tool_result("wiki_read", res) == {"content": "hi", "etag": '"abc"'}
 
 
-def test_parse_text_json_block():
-    res = SimpleNamespace(status="success", structuredContent=None,
-                          content=[{"type": "text", "text": '{"conflict": true}'}])
+def test_parse_text_json_block_when_no_structured():
+    res = {"status": "success", "isError": False, "structuredContent": None,
+           "content": [{"text": '{"conflict": true}'}]}
     assert _parse_tool_result("wiki_update", res) == {"conflict": True}
 
 
 def test_parse_plain_text_fallback():
-    res = SimpleNamespace(status="success", structuredContent=None,
-                          content=[{"type": "text", "text": "not json"}])
+    res = {"status": "success", "isError": False, "structuredContent": None,
+           "content": [{"text": "not json"}]}
     assert _parse_tool_result("x", res) == "not json"
 
 
 def test_parse_error_raises():
-    res = SimpleNamespace(status="error", content=[{"type": "text", "text": "scope denied"}])
+    res = {"status": "error", "isError": True, "content": [{"text": "scope denied"}]}
     with pytest.raises(RuntimeError, match="scope denied"):
         _parse_tool_result("wiki_update", res)

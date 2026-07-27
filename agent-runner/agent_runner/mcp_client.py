@@ -204,30 +204,37 @@ class HttpMCPClient(AgentRunnerMCPClient):
         self._call("notify", {"event_type": event_type, "payload": payload})
 
 
+def _block_text(block: Any) -> str:
+    if isinstance(block, dict):
+        return block.get("text", "") or ""
+    return getattr(block, "text", "") or ""
+
+
 def _parse_tool_result(name: str, result: Any) -> Any:
     """Extract a tool's return value (dict/str) from a Strands MCPToolResult.
 
-    FastMCP tools return dicts; MCP delivers them as structured content and/or a
-    text block of JSON. Prefer structuredContent, fall back to json-decoding the
-    concatenated text, else the raw text.
+    Strands delivers the result as a TypedDict:
+    ``{status, toolUseId, content, structuredContent, isError}`` — FastMCP puts
+    the real return in ``structuredContent`` (a bare value is wrapped as
+    ``{"result": ...}``) and mirrors it as a JSON text block in ``content``.
+    Prefer structuredContent; fall back to json-decoding the text; else raw text.
+    A dict result and the object-attribute form are both handled defensively.
     """
-    if getattr(result, "status", "success") == "error":
-        blocks = getattr(result, "content", []) or []
-        msg = " ".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+    if isinstance(result, dict):
+        status, is_error = result.get("status"), result.get("isError")
+        structured, blocks = result.get("structuredContent"), result.get("content") or []
+    else:
+        status, is_error = getattr(result, "status", "success"), getattr(result, "isError", False)
+        structured, blocks = getattr(result, "structuredContent", None), getattr(result, "content", []) or []
+
+    if is_error or status == "error":
+        msg = " ".join(_block_text(b) for b in blocks).strip()
         raise RuntimeError(f"MCP tool {name!r} failed: {msg or 'unknown error'}")
 
-    structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
-        # FastMCP wraps a bare return under {"result": ...}
-        return structured.get("result", structured)
+        return structured.get("result", structured)  # unwrap a wrapped bare return
 
-    text_parts: list[str] = []
-    for block in getattr(result, "content", []) or []:
-        if isinstance(block, dict) and block.get("type") == "text":
-            text_parts.append(block.get("text", ""))
-        elif getattr(block, "type", None) == "text":
-            text_parts.append(getattr(block, "text", ""))
-    text = "".join(text_parts).strip()
+    text = "".join(_block_text(b) for b in blocks).strip()
     if not text:
         return {}
     try:
