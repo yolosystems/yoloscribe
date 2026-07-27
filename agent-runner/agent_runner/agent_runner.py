@@ -56,7 +56,7 @@ from yoloscribe_io import (
     parse_skill_md,
 )
 from .memory_reasoner import HaikuMemoryReasoner, NullMemoryReasoner
-from .mcp_client import StorageMCPClient
+from .mcp_client import HttpMCPClient, StorageMCPClient
 from .agents import (
     ConsolidationAgent,
     EvalAnnotatorAgent,
@@ -84,6 +84,12 @@ LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "ye
 LIBRARIAN_MEMORY_ENABLED: bool = os.environ.get("LIBRARIAN_MEMORY_ENABLED", "true").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
+# Strangler-fig flag (P1.6): "s3" (default) = legacy direct-S3 IO via
+# StorageMCPClient; "mcp" = all IO through the YoloScribe MCP with the run token
+# minted by polling_worker at dispatch (MCP_URL / RUN_TOKEN passed in the env).
+AGENT_RUNNER_ACCESS: str = os.environ.get("AGENT_RUNNER_ACCESS", "s3").lower()
+MCP_URL: str = os.environ.get("MCP_URL", "")
+RUN_TOKEN: str = os.environ.get("RUN_TOKEN", "")
 S3_VECTORS_BUCKET: str = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME: str = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
@@ -1077,11 +1083,17 @@ def main() -> None:
 
             search = _make_search_backend(s3)
 
-            # The runner's IO client. Legacy direct-S3 adapter (default) during
-            # the strangler-fig migration; HttpMCPClient (run token) swaps in
-            # under the AGENT_RUNNER_ACCESS=mcp flag once mint wiring lands (P1.2
-            # increment 4 / P1.6). Agents talk only to the client interface.
-            mcp_client = StorageMCPClient(storage, _site, search, _notify, USER_ID)
+            # The runner's IO client. Under AGENT_RUNNER_ACCESS=mcp, all IO goes
+            # through the YoloScribe MCP with the run token minted by
+            # polling_worker (session kept open on the ExitStack for the run);
+            # otherwise the legacy direct-S3 adapter (strangler-fig default,
+            # P1.6). Agents talk only to the client interface either way.
+            if AGENT_RUNNER_ACCESS == "mcp" and MCP_URL and RUN_TOKEN:
+                mcp_client = stack.enter_context(HttpMCPClient(MCP_URL, RUN_TOKEN))
+                log.info("Runner IO via MCP run token (%s)", MCP_URL)
+            else:
+                mcp_client = StorageMCPClient(storage, _site, search, _notify, USER_ID)
+                log.info("Runner IO via legacy direct-S3 adapter (AGENT_RUNNER_ACCESS=%s)", AGENT_RUNNER_ACCESS)
 
             # 4. Create the typed agent and run it.
             agent = _make_agent(

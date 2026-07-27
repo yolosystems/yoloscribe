@@ -48,6 +48,11 @@ PHOENIX_API_ENDPOINT = os.environ.get("PHOENIX_API_ENDPOINT", "")
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
+# Strangler-fig (P1.6): "mcp" mints a run token at dispatch and points the runner
+# at the YoloScribe MCP; "s3" (default) keeps the legacy direct-S3 path.
+AGENT_RUNNER_ACCESS = os.environ.get("AGENT_RUNNER_ACCESS", "s3").lower()
+MINT_API_BASE = os.environ.get("MINT_API_BASE", "")  # backend base URL for /internal/runs/mint
+INTERNAL_MINT_SECRET = os.environ.get("INTERNAL_MINT_SECRET", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 
@@ -88,6 +93,58 @@ def _safe_k8s_name(*parts: str, max_len: int = 63) -> str:
 
 
 # ── Local runner ───────────────────────────────────────────────────────────────
+
+def _run_scope(payload: dict, agent_def) -> tuple[str, str, str]:
+    """(site, agent_type, page_path) for the run token, from the payload + agent.md.
+
+    agent_type matches agent_runner._make_agent's dispatch so the minted scope's
+    per-type floor lines up with the agent that actually runs.
+    """
+    agent_md_key = payload["agent_md_key"]
+    site = agent_md_key.split("/")[0]
+    content_key = payload.get("content_key", "")
+    rel = content_key[len(site) + 1:] if content_key.startswith(f"{site}/") else content_key
+    page_path = "" if rel == "content.md" else (rel[: -len("/content.md")] if rel.endswith("/content.md") else "")
+    if agent_def.trigger == "on_notify":
+        agent_type = "notification"
+    elif page_path == ".user/ingest":
+        agent_type = "ingest"
+    else:
+        agent_type = getattr(agent_def, "type", "") or "page"
+    return site, agent_type, page_path
+
+
+def _mint_run_credentials(payload: dict, agent_def) -> None:
+    """Under AGENT_RUNNER_ACCESS=mcp, mint a run token and stash (token, mcp_url)
+    into the payload for the dispatch env. Best-effort: on any failure the runner
+    falls back to the legacy s3 path rather than the job failing outright."""
+    if AGENT_RUNNER_ACCESS != "mcp" or not MINT_API_BASE or not INTERNAL_MINT_SECRET:
+        return
+    import httpx
+
+    site, agent_type, page_path = _run_scope(payload, agent_def)
+    agent_name = payload["agent_md_key"].split("/")[-2]
+    try:
+        resp = httpx.post(
+            f"{MINT_API_BASE.rstrip('/')}/internal/runs/mint",
+            headers={"X-Internal-Auth": INTERNAL_MINT_SECRET},
+            json={
+                "site": site,
+                "user_id": payload.get("user_id", "default"),
+                "agent_name": agent_name,
+                "agent_type": agent_type,
+                "page_path": page_path,
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        payload["_run_token"] = data["token"]
+        payload["_mcp_url"] = data["mcp_url"]
+        log.info("Minted run token for %s (%s scope)", agent_name, agent_type)
+    except Exception as exc:
+        log.warning("Run-token mint failed for %s — falling back to s3: %s", agent_name, exc)
+
 
 def _run_local(payload: dict) -> None:
     """Run the agent runner in a subprocess (local dev mode, no K8s)."""
@@ -155,6 +212,12 @@ def _build_container(payload: dict):  # type: ignore[return]
         env_vars.append(k8s_client.V1EnvVar(name="OTEL_EXPORTER_OTLP_HEADERS", value=OTEL_EXPORTER_OTLP_HEADERS))
     if PHOENIX_API_ENDPOINT:
         env_vars.append(k8s_client.V1EnvVar(name="PHOENIX_API_ENDPOINT", value=PHOENIX_API_ENDPOINT))
+    # Run token minted at dispatch (AGENT_RUNNER_ACCESS=mcp) — the runner does
+    # all IO through the MCP with this token instead of direct S3.
+    if payload.get("_run_token") and payload.get("_mcp_url"):
+        env_vars.append(k8s_client.V1EnvVar(name="AGENT_RUNNER_ACCESS", value="mcp"))
+        env_vars.append(k8s_client.V1EnvVar(name="MCP_URL", value=payload["_mcp_url"]))
+        env_vars.append(k8s_client.V1EnvVar(name="RUN_TOKEN", value=payload["_run_token"]))
     return k8s_client.V1Container(
         name="agent-runner",
         image=AGENT_RUNNER_IMAGE,
@@ -312,6 +375,10 @@ def _process_message_k8s(batch_v1, s3, ddb, payload: dict, image_pull_secrets=No
             {"agent": agent_md_key, "reason": f"Invalid agent definition: {exc}"},
         )
         return False
+
+    # Mint a scoped run token at pickup (D1: mint-at-pickup) so it can't expire
+    # while the message waits in SQS; passed to the runner via _build_container.
+    _mint_run_credentials(payload, agent_def)
 
     container = _build_container(payload)
     pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
