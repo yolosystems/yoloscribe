@@ -146,9 +146,23 @@ def _mint_run_credentials(payload: dict, agent_def) -> None:
         log.warning("Run-token mint failed for %s — falling back to s3: %s", agent_name, exc)
 
 
-def _run_local(payload: dict) -> None:
+def _run_local(payload: dict, s3=None) -> None:
     """Run the agent runner in a subprocess (local dev mode, no K8s)."""
     user_id = payload.get("user_id", "default")
+
+    # Under AGENT_RUNNER_ACCESS=mcp, mint a run token and hand the runner the
+    # agent.md so all its IO flows through the MCP (mirrors the K8s dispatch path).
+    if AGENT_RUNNER_ACCESS == "mcp" and s3 is not None:
+        raw_agent_md = S3StorageBackend(payload["bucket"], s3).read(payload["agent_md_key"]) or ""
+        try:
+            agent_def = parse_agent_md(raw_agent_md)
+        except AgentDefinitionError as exc:
+            log.error("Invalid agent.md at %s: %s", payload["agent_md_key"], exc)
+            return
+        _mint_run_credentials(payload, agent_def)
+        if payload.get("_run_token"):
+            payload["_agent_md_content"] = raw_agent_md
+
     env = os.environ.copy()
     env.update(
         {
@@ -170,6 +184,12 @@ def _run_local(payload: dict) -> None:
         env["AWS_PROFILE"] = AWS_PROFILE
     if PHOENIX_API_ENDPOINT:
         env["PHOENIX_API_ENDPOINT"] = PHOENIX_API_ENDPOINT
+    if payload.get("_run_token") and payload.get("_mcp_url"):
+        env["AGENT_RUNNER_ACCESS"] = "mcp"
+        env["MCP_URL"] = payload["_mcp_url"]
+        env["RUN_TOKEN"] = payload["_run_token"]
+        if payload.get("_agent_md_content"):
+            env["AGENT_MD_CONTENT"] = payload["_agent_md_content"]
 
     log.info(
         "LOCAL_RUNNER: running agent-runner for %s / %s",
@@ -218,6 +238,8 @@ def _build_container(payload: dict):  # type: ignore[return]
         env_vars.append(k8s_client.V1EnvVar(name="AGENT_RUNNER_ACCESS", value="mcp"))
         env_vars.append(k8s_client.V1EnvVar(name="MCP_URL", value=payload["_mcp_url"]))
         env_vars.append(k8s_client.V1EnvVar(name="RUN_TOKEN", value=payload["_run_token"]))
+        if payload.get("_agent_md_content"):
+            env_vars.append(k8s_client.V1EnvVar(name="AGENT_MD_CONTENT", value=payload["_agent_md_content"]))
     return k8s_client.V1Container(
         name="agent-runner",
         image=AGENT_RUNNER_IMAGE,
@@ -379,6 +401,10 @@ def _process_message_k8s(batch_v1, s3, ddb, payload: dict, image_pull_secrets=No
     # Mint a scoped run token at pickup (D1: mint-at-pickup) so it can't expire
     # while the message waits in SQS; passed to the runner via _build_container.
     _mint_run_credentials(payload, agent_def)
+    if payload.get("_run_token"):
+        # Hand the runner the agent.md we already read for the mint scope so it
+        # parses that instead of reading S3 itself (R1: no runner-side S3 read).
+        payload["_agent_md_content"] = raw_agent_md
 
     container = _build_container(payload)
     pod_spec = _pod_spec(container, user_id, image_pull_secrets=image_pull_secrets)
@@ -470,7 +496,7 @@ def main() -> None:
                 try:
                     payload = json.loads(msg["Body"])
                     if LOCAL_RUNNER:
-                        _run_local(payload)
+                        _run_local(payload, s3=s3)
                     else:
                         requeued = _process_message_k8s(batch_v1, s3, ddb, payload, image_pull_secrets=image_pull_secrets)
                 except Exception:

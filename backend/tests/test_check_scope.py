@@ -15,7 +15,10 @@ from mcp_server import _MCPUser, _check_scope
 def _page_user(page_path: str = "features/auth") -> _MCPUser:
     return _MCPUser(
         user_id="u", email=None, site="s",
-        path_scope=[run_tokens.PathScopeEntry(page_path, ["read", "write-content"])],
+        path_scope=[
+            run_tokens.PathScopeEntry(page_path, ["read", "write-content"]),
+            run_tokens.PathScopeEntry("", ["notify"]),
+        ],
         run_id="r1", agent_name="page-agent",
     )
 
@@ -23,7 +26,7 @@ def _page_user(page_path: str = "features/auth") -> _MCPUser:
 def _ingest_user() -> _MCPUser:
     return _MCPUser(
         user_id="u", email=None, site="s",
-        path_scope=[run_tokens.PathScopeEntry("", ["read", "write-content"])],
+        path_scope=[run_tokens.PathScopeEntry("", ["read", "write-content", "notify"])],
         run_id="r2", agent_name="ingest-agent",
     )
 
@@ -68,9 +71,14 @@ class TestPageToken:
         with pytest.raises(HTTPException):
             _check_scope(_page_user("features/auth"), "features/auth", "delete")
 
-    def test_notify_denied(self):
+    def test_notify_allowed(self):
+        # Lifecycle (agent_success / agent_failure) — granted at root, no-dispatch.
+        _check_scope(_page_user("features/auth"), "", "notify")
+
+    def test_write_content_at_root_denied(self):
+        # The root scope entry grants ONLY notify — never a content write there.
         with pytest.raises(HTTPException):
-            _check_scope(_page_user("features/auth"), "features/auth", "notify")
+            _check_scope(_page_user("features/auth"), "", "write-content")
 
     def test_sibling_path_prefix_collision_denied(self):
         # "features/auth-v2" must not be treated as within scope of "features/auth".
@@ -103,9 +111,9 @@ class TestIngestToken:
         with pytest.raises(HTTPException):
             _check_scope(_ingest_user(), "features/auth", "write-settings")
 
-    def test_notify_denied(self):
-        with pytest.raises(HTTPException):
-            _check_scope(_ingest_user(), "", "notify")
+    def test_notify_allowed(self):
+        # Ingest lifecycle signals (ingest_start / ingest_end / ingest_unrouted).
+        _check_scope(_ingest_user(), "", "notify")
 
 
 class TestNotificationToken:

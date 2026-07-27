@@ -101,6 +101,19 @@ class AgentRunnerMCPClient(ABC):
     def notify(self, event_type: str, payload: dict) -> None:
         """Append a notification / decision-signal entry and dispatch on_notify agents."""
 
+    # ── run log ───────────────────────────────────────────────────────────────
+    @abstractmethod
+    def run_log_append(
+        self,
+        agent_name: str,
+        page_path: str,
+        status: str,
+        trigger: str,
+        duration_s: float,
+        detail: str = "",
+    ) -> None:
+        """Prepend a run entry to the agent's run_log.md (best-effort; never raises)."""
+
 
 # ── HttpMCPClient — the real transport ────────────────────────────────────────
 
@@ -203,6 +216,19 @@ class HttpMCPClient(AgentRunnerMCPClient):
     def notify(self, event_type: str, payload: dict) -> None:
         self._call("notify", {"event_type": event_type, "payload": payload})
 
+    # run log
+    def run_log_append(
+        self, agent_name: str, page_path: str, status: str,
+        trigger: str, duration_s: float, detail: str = "",
+    ) -> None:
+        try:
+            self._call("run_log_append", {
+                "agent_name": agent_name, "page_path": page_path, "status": status,
+                "trigger": trigger, "duration_s": duration_s, "detail": detail,
+            })
+        except Exception as exc:
+            log.warning("run_log_append failed for %s: %s", agent_name, exc)
+
 
 def _block_text(block: Any) -> str:
     if isinstance(block, dict):
@@ -271,6 +297,7 @@ class FakeMCPClient(AgentRunnerMCPClient):
         self._search_results = list(search_results or [])
         self.notifications: list[tuple[str, dict]] = []
         self.proposals: dict[str, tuple[str, str]] = {}  # page_path -> (content, agent_name)
+        self.run_logs: list[dict] = []
 
     def _next_etag(self) -> str:
         self._etag_seq += 1
@@ -325,6 +352,16 @@ class FakeMCPClient(AgentRunnerMCPClient):
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:
         self.notifications.append((event_type, dict(payload)))
+
+    # run log
+    def run_log_append(
+        self, agent_name: str, page_path: str, status: str,
+        trigger: str, duration_s: float, detail: str = "",
+    ) -> None:
+        self.run_logs.append({
+            "agent_name": agent_name, "page_path": page_path, "status": status,
+            "trigger": trigger, "duration_s": duration_s, "detail": detail,
+        })
 
 
 # ── StorageMCPClient — legacy direct-S3 adapter (strangler-fig; P1.6) ──────────
@@ -437,3 +474,31 @@ class StorageMCPClient(AgentRunnerMCPClient):
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:
         self._notify_fn(event_type, payload, self._user_id)
+
+    # run log
+    def run_log_append(
+        self, agent_name: str, page_path: str, status: str,
+        trigger: str, duration_s: float, detail: str = "",
+    ) -> None:
+        import datetime
+        base = (
+            f"{self._site}/{page_path}/.agents/{agent_name}"
+            if page_path else f"{self._site}/.agents/{agent_name}"
+        )
+        run_log_key = f"{base}/run_log.md"
+        now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines = [
+            f"## {agent_name} — {now}", "",
+            f"**Status:** {status}  ",
+            f"**Trigger:** {trigger}  ",
+            f"**Duration:** {duration_s:.1f}s",
+        ]
+        if detail:
+            lines += ["", detail]
+        lines += ["", "---", ""]
+        entry = "\n".join(lines) + "\n"
+        try:
+            existing = self._storage.read(run_log_key) or ""
+            self._storage.write(run_log_key, entry + existing)
+        except Exception as exc:
+            log.warning("Failed to write run_log %s: %s", run_log_key, exc)
