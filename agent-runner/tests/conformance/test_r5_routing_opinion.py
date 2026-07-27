@@ -28,6 +28,8 @@ import os
 
 import pytest
 from agent_runner.agents.ingest import IngestAgent
+from agent_runner.agents.search import NullSearchBackend
+from agent_runner.mcp_client import StorageMCPClient
 from yoloscribe_io import AgentDefinition
 from yoloscribe_io.storage import LocalStorageBackend
 
@@ -60,6 +62,7 @@ def test_r5_routing_opinion():
         agent_def=agent_def,
         site=site,
         page_path=".user/ingest",
+        mcp=StorageMCPClient(storage, site, NullSearchBackend(), lambda *a, **k: None, "test-user"),
         storage=storage,
         mcp_tools=[],
         model=None,
@@ -122,6 +125,7 @@ def _run_live_judgment_check() -> bool:
         agent_def=agent_def,
         site=site,
         page_path=".user/ingest",
+        mcp=StorageMCPClient(storage, site, NullSearchBackend(), lambda *a, **k: None, "test-user"),
         storage=storage,
         mcp_tools=[],
         model=model,

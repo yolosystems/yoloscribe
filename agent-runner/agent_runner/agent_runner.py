@@ -799,6 +799,7 @@ def _make_agent(
             agent_def=agent_def,
             site=site,
             page_path=page_path,
+            mcp=mcp,
             storage=storage,
             mcp_tools=mcp_tools,
             model=model,

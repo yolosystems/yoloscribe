@@ -64,10 +64,12 @@ def test_r2_signal_fidelity():
     storage.write(f"{site}/.user/ingest/note.md", "Meeting notes about the roadmap.")
 
     ingest_def = AgentDefinition(name="ingester", trigger="schedule", type="ingest")
+    ingest_mcp = StorageMCPClient(storage, site, NullSearchBackend(), notify_fn, "test-user")
     ingest_agent = IngestAgent(
         agent_def=ingest_def,
         site=site,
         page_path=".user/ingest",
+        mcp=ingest_mcp,
         storage=storage,
         mcp_tools=[],
         model=ScriptedModel(

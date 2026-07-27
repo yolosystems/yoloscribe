@@ -6,6 +6,7 @@ from yoloscribe_io.storage import LocalStorageBackend
 
 from agent_runner.agents.ingest import IngestAgent
 from agent_runner.agents.search import NullSearchBackend
+from agent_runner.mcp_client import StorageMCPClient
 from tests.conftest import make_def, make_notify
 
 SITE = "s"
@@ -17,15 +18,20 @@ def _make_agent(
     notify_fn=None,
     **def_kwargs,
 ) -> IngestAgent:
+    notify = notify_fn or make_notify()
+    # IngestAgent now does all IO through the client interface; the legacy
+    # StorageMCPClient over LocalStorageBackend keeps the behavior identical.
+    mcp = StorageMCPClient(storage, SITE, NullSearchBackend(), notify, "u1")
     return IngestAgent(
         agent_def=make_def(trigger="schedule", **def_kwargs),
         site=SITE,
         page_path=".user/ingest",
+        mcp=mcp,
         storage=storage,
         mcp_tools=[],
         model=None,
         user_id="u1",
-        notify_fn=notify_fn or make_notify(),
+        notify_fn=notify,
         search=NullSearchBackend(),
         max_page_reads=max_page_reads,
     )

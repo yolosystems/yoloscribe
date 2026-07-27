@@ -8,8 +8,9 @@ import re
 from typing import Callable
 
 from strands import tool
-from yoloscribe_io import AgentDefinition, WikiPageMarkdownFile
+from yoloscribe_io import AgentDefinition
 
+from ..mcp_client import AgentRunnerMCPClient
 from .base import BaseAgent
 from .search import SearchBackend
 
@@ -87,6 +88,7 @@ class IngestAgent(BaseAgent):
         agent_def: AgentDefinition,
         site: str,
         page_path: str,
+        mcp: AgentRunnerMCPClient,
         storage,
         mcp_tools: list,
         model,
@@ -107,6 +109,7 @@ class IngestAgent(BaseAgent):
             notify_fn=notify_fn,
             search=search,
             max_page_reads=max_page_reads,
+            mcp=mcp,
         )
         self._read_counter: list[int] = [0]
         self._owner_instructions: str = ""
@@ -117,18 +120,7 @@ class IngestAgent(BaseAgent):
     @tool
     def ingest_list_pending(self) -> str:
         """List unprocessed files waiting in the ingest queue."""
-        prefix = f"{self._site}/{_INGEST_PREFIX}"
-        processed_prefix = f"{self._site}/{_PROCESSED_PREFIX}"
-        keys = self._storage.list(prefix)
-        pending = []
-        for key in keys:
-            # Exclude the ingest content.md, processed/ subdirectory, and agent files.
-            rel = key[len(prefix):]
-            if not rel or rel == "content.md" or key.startswith(processed_prefix):
-                continue
-            if "/.agents/" in rel or rel.startswith(".agents/"):
-                continue
-            pending.append(rel)
+        pending = self._mcp.ingest_list_pending()
         if not pending:
             return "No pending files."
         return "\n".join(pending)
@@ -136,9 +128,7 @@ class IngestAgent(BaseAgent):
     @tool
     def ingest_read(self, filename: str) -> str:
         """Read the content of a pending ingest file by its filename."""
-        filename = filename.strip().lstrip("/")
-        key = f"{self._site}/{_INGEST_PREFIX}{filename}"
-        content = self._storage.read(key)
+        content = self._mcp.ingest_read(filename.strip().lstrip("/"))
         if content is None:
             return f"File not found: {filename}"
         return content
@@ -147,38 +137,17 @@ class IngestAgent(BaseAgent):
     def ingest_mark_processed(self, filename: str) -> str:
         """Move a processed ingest file to the processed archive."""
         filename = filename.strip().lstrip("/")
-        src_key = f"{self._site}/{_INGEST_PREFIX}{filename}"
-        dst_key = f"{self._site}/{_PROCESSED_PREFIX}{filename}"
         try:
-            self._storage.move(src_key, dst_key)
+            self._mcp.ingest_mark_processed(filename)
         except Exception as e:
             return f"Error moving {filename}: {e}"
-        log.info("Marked as processed: %s → %s", src_key, dst_key)
+        log.info("Marked as processed: %s", filename)
         return f"Marked as processed: {filename}"
 
     @tool
     def wiki_list_pages(self) -> str:
         """List all wiki page paths in this site."""
-        prefix = f"{self._site}/"
-        keys = self._storage.list(prefix)
-        pages = []
-        for key in keys:
-            if not key.endswith("/content.md"):
-                continue
-            rel = key[len(prefix):]
-            if (
-                "/.agents/" in rel
-                or "/.user/" in rel
-                or "/.archive/" in rel
-                or "/.skills/" in rel
-                or rel.startswith(".agents/")
-                or rel.startswith(".user/")
-                or rel.startswith(".archive/")
-                or rel.startswith(".skills/")
-            ):
-                continue
-            page_path = rel[: -len("/content.md")] if rel != "content.md" else "(root)"
-            pages.append(page_path)
+        pages = [p or "(root)" for p in self._mcp.wiki_list_pages()]
         if not pages:
             return "No wiki pages found."
         return "Wiki pages:\n" + "\n".join(f"- {p}" for p in sorted(pages))
@@ -197,7 +166,7 @@ class IngestAgent(BaseAgent):
                      routed — e.g. "Processed 2 files: added recipe to cooking/american-south,
                      created new page tech-research-tracker/wasm."
         """
-        self._notify("ingest_end", {"summary": summary}, self._user_id)
+        self._mcp.notify("ingest_end", {"summary": summary})
         log.info("IngestAgent emitted ingest_end: %s", summary[:120])
         return "Ingest complete notification sent."
 
@@ -212,14 +181,14 @@ class IngestAgent(BaseAgent):
             message: A plain-text explanation of what was received and why it
                      could not be routed.
         """
-        self._notify("ingest_unrouted", {"message": message}, self._user_id)
+        self._mcp.notify("ingest_unrouted", {"message": message})
         log.info("IngestAgent sent ingest_unrouted notification: %s", message[:100])
         return "Owner notified. Leave the file unprocessed so the owner can review it."
 
     @tool
     def wiki_search(self, query: str) -> str:
         """Search the wiki semantically and return matching page excerpts."""
-        results = self._search.search(query, self._site, limit=10)
+        results = self._mcp.search(query, limit=10)
         if not results:
             return "No matching pages found."
         lines = [
@@ -237,9 +206,7 @@ class IngestAgent(BaseAgent):
                 "Complete your task based on what you have already read."
             )
         self._read_counter[0] += 1
-        page_path = page_path.strip().strip("/")
-        wiki = WikiPageMarkdownFile(site=self._site, page_path=page_path, storage=self._storage)
-        return wiki.read()
+        return self._mcp.wiki_read(page_path.strip().strip("/"))[0]
 
     @tool
     def wiki_write(self, page_path: str, content: str) -> str:
@@ -250,8 +217,7 @@ class IngestAgent(BaseAgent):
             return error
         content = self._rewrite_internal_links(content)
         self._ensure_parent_pages(page_path)
-        wiki = WikiPageMarkdownFile(site=self._site, page_path=page_path, storage=self._storage)
-        wiki.write(content)
+        self._mcp.wiki_write(page_path, content)
         log.info("IngestAgent wrote to %s/%s", self._site, page_path)
         return f"Written to {page_path}."
 
@@ -267,8 +233,7 @@ class IngestAgent(BaseAgent):
             mode: 'extract' returns text only; 'index-only' indexes without returning text;
                   'both' (default) does both.
         """
-        s3_key = f"{self._site}/{_INGEST_PREFIX}{filename}"
-        file_bytes = self._storage.read_bytes(s3_key)
+        file_bytes = self._mcp.ingest_read_bytes(filename)
         if file_bytes is None:
             return f"File not found: {filename}"
 
@@ -277,19 +242,19 @@ class IngestAgent(BaseAgent):
         except Exception as e:
             return f"Error extracting {filename}: {e}"
 
-        extracted_key = f"{self._site}/{_INGEST_PREFIX}{filename}.extracted.md"
         try:
-            self._storage.write_bytes(extracted_key, extracted_md.encode("utf-8"), "text/markdown")
+            self._mcp.ingest_write_extracted(filename, extracted_md)
         except Exception as e:
             return f"Error saving extracted text for {filename}: {e}"
 
+        extracted_key = f"{self._site}/{_INGEST_PREFIX}{filename}.extracted.md"
         if mode in ("index-only", "both"):
             try:
                 self._enqueue_fn(extracted_key)
             except Exception as e:
                 log.warning("Failed to enqueue indexing job for %s: %s", extracted_key, e)
 
-        log.info("Indexed document %s → %s (%d chars)", s3_key, extracted_key, len(extracted_md))
+        log.info("Indexed document %s → %s (%d chars)", filename, extracted_key, len(extracted_md))
 
         if mode == "index-only":
             return f"Indexed {filename}: {len(extracted_md)} chars extracted, indexing job enqueued."
@@ -320,11 +285,9 @@ class IngestAgent(BaseAgent):
         parts = page_path.split("/")
         for i in range(1, len(parts)):
             parent_path = "/".join(parts[:i])
-            parent_key = f"{self._site}/{parent_path}/content.md"
-            if self._storage.read(parent_key) is None:
+            if not self._mcp.wiki_read(parent_path)[0]:
                 title = parts[i - 1].replace("-", " ").title()
-                stub = f"# {title}\n"
-                self._storage.write(parent_key, stub)
+                self._mcp.wiki_create(parent_path, f"# {title}\n")
                 log.info("IngestAgent created parent page stub: %s", parent_path)
 
     def _rewrite_internal_links(self, content: str) -> str:
@@ -362,9 +325,7 @@ class IngestAgent(BaseAgent):
 
     def _read_owner_instructions(self) -> str:
         """Read the owner's routing instructions from .user/ingest/content.md."""
-        key = f"{self._site}/.user/ingest/content.md"
-        content = self._storage.read(key)
-        return (content or "").strip()
+        return self._mcp.ingest_read_owner_instructions()
 
     def _build_system_prompt(self) -> str:
         parts = []
@@ -432,7 +393,7 @@ class IngestAgent(BaseAgent):
 
     def run(self, prompt: str) -> int:
         self._owner_instructions = self._read_owner_instructions()
-        self._notify("ingest_start", {"message": "Processing ingest queue"}, self._user_id)
+        self._mcp.notify("ingest_start", {"message": "Processing ingest queue"})
 
         tools = [
             self.ingest_list_pending,
