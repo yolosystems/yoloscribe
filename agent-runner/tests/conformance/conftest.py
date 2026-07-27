@@ -41,6 +41,12 @@ def pytest_configure(config: pytest.Config) -> None:
         "conformance_live: needs `docker compose up -d minio minio-init dynamodb-local "
         "dynamodb-init elasticmq` (see repo root Makefile: `make conformance-live`)",
     )
+    config.addinivalue_line(
+        "markers",
+        "conformance_backend: needs a running YoloScribe backend exposing /mcp/v1 + "
+        "/internal/runs/mint; driven by CONFORMANCE_MCP_BASE/MINT_SECRET/SITE/USER_ID env "
+        "(self-skips when unset). Not gated on the MinIO/DynamoDB infra check.",
+    )
 
 
 def _live_infra_available() -> bool:

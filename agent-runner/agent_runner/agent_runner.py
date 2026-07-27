@@ -42,21 +42,15 @@ import boto3
 
 from yoloscribe_io import (
     AgentDefinitionError,
-    Conclusion,
-    MemoryFile,
     NotificationsMarkdownFile,
     S3StorageBackend,
-    SignalEntry,
-    SignalLog,
     TokenData,
     ToolToken,
-    WikiPageMarkdownFile,
-    conclusion_to_dict,
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
 )
-from .memory_reasoner import HaikuMemoryReasoner, NullMemoryReasoner
+from .mcp_client import HttpMCPClient, StorageMCPClient
 from .agents import (
     ConsolidationAgent,
     EvalAnnotatorAgent,
@@ -69,6 +63,10 @@ from .agents import (
 
 BUCKET = os.environ["BUCKET"]
 AGENT_MD_KEY = os.environ["AGENT_MD_KEY"]
+# The agent.md body, supplied by polling_worker (which already reads+parses it to
+# derive the run-token scope). When present the runner parses this instead of
+# reading S3 — the first step in making the runner's own IO S3-free (R1).
+AGENT_MD_CONTENT = os.environ.get("AGENT_MD_CONTENT", "")
 CONTENT_KEY = os.environ["CONTENT_KEY"]
 AGENT_PROMPT = os.environ["AGENT_PROMPT"]
 USER_ID = os.environ.get("USER_ID", "default")
@@ -81,9 +79,14 @@ S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "")
 SQS_ENDPOINT_URL = os.environ.get("SQS_ENDPOINT_URL", "")
 DDB_AGENT_LOCKS_TABLE = os.environ.get("DDB_AGENT_LOCKS_TABLE", "yoloscribe-agent-locks")
 LOCAL_MODE: bool = os.environ.get("LOCAL_MODE", "").lower() in ("1", "true", "yes")
-LIBRARIAN_MEMORY_ENABLED: bool = os.environ.get("LIBRARIAN_MEMORY_ENABLED", "true").lower() in ("1", "true", "yes")
 LOCAL_MCP_CONFIG_PATH: str = os.environ.get("LOCAL_MCP_CONFIG_PATH", "/app/local-mcp-servers.json")
 AGENT_RUNNER_MAX_PAGE_READS: int = int(os.environ.get("AGENT_RUNNER_MAX_PAGE_READS", "10"))
+# Strangler-fig flag (P1.6): "s3" (default) = legacy direct-S3 IO via
+# StorageMCPClient; "mcp" = all IO through the YoloScribe MCP with the run token
+# minted by polling_worker at dispatch (MCP_URL / RUN_TOKEN passed in the env).
+AGENT_RUNNER_ACCESS: str = os.environ.get("AGENT_RUNNER_ACCESS", "s3").lower()
+MCP_URL: str = os.environ.get("MCP_URL", "")
+RUN_TOKEN: str = os.environ.get("RUN_TOKEN", "")
 S3_VECTORS_BUCKET: str = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME: str = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
@@ -233,60 +236,6 @@ def _make_secrets_store(s3):
     from yolo_secrets import make_secrets_store
     sm = None if LOCAL_MODE else _session.client("secretsmanager", region_name=AWS_REGION)
     return make_secrets_store(local_mode=LOCAL_MODE, s3_client=s3, bucket=BUCKET, sm_client=sm)
-
-
-def _append_signal(
-    storage: S3StorageBackend,
-    site: str,
-    signal_type: str,
-    payload: dict,
-) -> None:
-    """Append a preference signal to .user/librarian/signal-log.md (fail-open)."""
-    if not LIBRARIAN_MEMORY_ENABLED:
-        return
-    try:
-        sl = SignalLog(site=site, storage=storage)
-        sl.append(SignalEntry(type=signal_type, payload=payload))
-    except Exception as exc:
-        log.warning("Failed to append librarian signal '%s': %s", signal_type, exc)
-
-
-def _run_memory_reasoner(
-    storage: S3StorageBackend,
-    site: str,
-    signal_type: str,
-    payload: dict,
-) -> None:
-    """Derive explicit/deductive conclusions from a signal and upsert into memory.md (fail-open)."""
-    if not LIBRARIAN_MEMORY_ENABLED:
-        return
-    try:
-        import yaml
-        mf = MemoryFile(site=site, storage=storage)
-        _, existing = mf.read()
-        existing_yaml = (
-            yaml.dump(
-                [conclusion_to_dict(c) for c in existing],
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False,
-            )
-            if existing
-            else ""
-        )
-        reasoner = HaikuMemoryReasoner()
-        raw_conclusions = reasoner.derive(signal_type, payload, existing_yaml)
-        if not raw_conclusions:
-            return
-        from yoloscribe_io.librarian import _conclusion_from_dict
-        new_conclusions = [_conclusion_from_dict(d) for d in raw_conclusions if isinstance(d, dict)]
-        created, updated, rejected = mf.upsert(new_conclusions)
-        if rejected:
-            log.warning("MemoryReasoner: %d conclusion(s) rejected: %s", len(rejected), rejected)
-        if created or updated:
-            log.info("MemoryReasoner: %d created, %d updated for site %s", created, updated, site)
-    except Exception as exc:
-        log.warning("MemoryReasoner failed for site %s: %s", site, exc)
 
 
 def _enqueue_index_job(content_key: str) -> None:
@@ -760,7 +709,7 @@ def _make_agent(
     agent_def,
     site: str,
     page_path: str,
-    wiki: WikiPageMarkdownFile,
+    mcp,
     storage: S3StorageBackend,
     mcp_tools: list,
     model,
@@ -799,6 +748,7 @@ def _make_agent(
             agent_def=agent_def,
             site=site,
             page_path=page_path,
+            mcp=mcp,
             storage=storage,
             mcp_tools=mcp_tools,
             model=model,
@@ -842,7 +792,7 @@ def _make_agent(
         agent_def=agent_def,
         site=site,
         page_path=page_path,
-        wiki=wiki,
+        mcp=mcp,
         storage=storage,
         mcp_tools=mcp_tools,
         model=model,
@@ -853,36 +803,6 @@ def _make_agent(
         content_key=content_key,
         agent_md_key=agent_md_key,
     )
-
-
-def _write_run_log(
-    storage: S3StorageBackend,
-    run_log_key: str,
-    agent_name: str,
-    status: str,
-    trigger: str,
-    duration_s: float,
-    detail: str = "",
-) -> None:
-    """Prepend a run log entry to the agent's run_log.md (best-effort; never raises)."""
-    import datetime
-    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = [
-        f"## {agent_name} — {now}",
-        "",
-        f"**Status:** {status}  ",
-        f"**Trigger:** {trigger}  ",
-        f"**Duration:** {duration_s:.1f}s",
-    ]
-    if detail:
-        lines += ["", detail]
-    lines += ["", "---", ""]
-    entry = "\n".join(lines) + "\n"
-    try:
-        existing = storage.read(run_log_key) or ""
-        storage.write(run_log_key, entry + existing)
-    except Exception as exc:
-        log.warning("Failed to write run_log %s: %s", run_log_key, exc)
 
 
 def main() -> None:
@@ -910,12 +830,17 @@ def main() -> None:
 
     _run_start = time.monotonic()
     _site = AGENT_MD_KEY.split("/")[0]
-    _run_log_key = AGENT_MD_KEY.rsplit("/", 1)[0] + "/run_log.md"
+
+    # The agent's OWN page path, derived from AGENT_MD_KEY (where the agent lives)
+    # — used to address its run_log via the MCP. Distinct from _page_path below,
+    # which is the content page the agent acts on (they differ for notification
+    # agents, whose CONTENT_KEY is .user/notifications.md).
+    _am_rel = AGENT_MD_KEY[len(_site) + 1:]
+    _agent_page_path = _am_rel.split("/.agents/", 1)[0] if "/.agents/" in _am_rel else ""
 
     # Derive the wiki page path from CONTENT_KEY (strips "{site}/" prefix and "/content.md" suffix).
     _content_rel = CONTENT_KEY[len(_site) + 1:]
     _page_path = "" if _content_rel == "content.md" else _content_rel[: -len("/content.md")]
-    wiki = WikiPageMarkdownFile(site=_site, page_path=_page_path, storage=storage)
 
     # Build a lightweight SQS enqueue function for on_notify dispatch.
     # NotificationsMarkdownFile handles dispatch internally when enqueue is provided.
@@ -949,9 +874,14 @@ def main() -> None:
 
         return _enqueue
 
+    search = _make_search_backend(s3)
+
+    # Legacy (s3-mode) notification writer — used only when the runner IO client
+    # is the direct-S3 adapter. In mcp mode notifications flow through the MCP
+    # notify tool (which drives on_notify dispatch server-side).
     _notif = NotificationsMarkdownFile(_site, storage, enqueue=_make_enqueue_fn())
 
-    def _notify(event_type: str, payload: dict, user_id: str = "") -> None:
+    def _legacy_notify(event_type: str, payload: dict, user_id: str = "") -> None:
         try:
             _notif.notify(event_type, payload, user_id=user_id)
         except Exception as exc:
@@ -988,186 +918,187 @@ def main() -> None:
     _span.set_attribute("agent_md_key", AGENT_MD_KEY)
     _span.set_attribute("input.value", AGENT_PROMPT)
 
-    try:
-        # 1. Read and parse agent.md
-        raw_agent_md = storage.read(AGENT_MD_KEY)
-        if raw_agent_md is None:
-            raise FileNotFoundError(f"agent.md not found: {AGENT_MD_KEY}")
-        try:
-            agent_def = parse_agent_md(raw_agent_md)
-        except AgentDefinitionError as exc:
-            log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
-            _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"})
-            return
+    # The runner's IO client. Its session (mcp mode) spans the ENTIRE run —
+    # including the post-run run-log + success/failure notifications — so the
+    # runner performs no S3 IO of its own (R1). Under AGENT_RUNNER_ACCESS=mcp all
+    # IO goes through the YoloScribe MCP with the run token minted by
+    # polling_worker; otherwise the legacy direct-S3 adapter (strangler-fig
+    # default, P1.6). Agents and main() talk only to the client interface.
+    with contextlib.ExitStack() as run_stack:
+        if AGENT_RUNNER_ACCESS == "mcp" and MCP_URL and RUN_TOKEN:
+            mcp_client = run_stack.enter_context(HttpMCPClient(MCP_URL, RUN_TOKEN))
+            log.info("Runner IO via MCP run token (%s)", MCP_URL)
+        else:
+            mcp_client = StorageMCPClient(storage, _site, search, _legacy_notify, USER_ID)
+            log.info("Runner IO via legacy direct-S3 adapter (AGENT_RUNNER_ACCESS=%s)", AGENT_RUNNER_ACCESS)
 
-        # 1b. Pre-flight token budget check
-        if _budget is not None:
-            _used = _budget.get_used(USER_ID)
-            _limit = _budget.get_limit(USER_ID)
-            if _used >= _limit:
-                log.error(
-                    "Token budget exhausted for user %s (%d / %d tokens used)",
-                    USER_ID, _used, _limit,
-                )
+        def _notify(event_type: str, payload: dict, user_id: str = "") -> None:
+            try:
+                mcp_client.notify(event_type, payload)
+            except Exception as exc:
+                log.error("Failed to write notification for site %s: %s", _site, exc)
+
+        try:
+            # 1. Parse agent.md — supplied by polling_worker (no S3 read); the
+            #    legacy fallback reads S3 when AGENT_MD_CONTENT is absent.
+            raw_agent_md = AGENT_MD_CONTENT or storage.read(AGENT_MD_KEY)
+            if not raw_agent_md:
+                raise FileNotFoundError(f"agent.md not found: {AGENT_MD_KEY}")
+            try:
+                agent_def = parse_agent_md(raw_agent_md)
+            except AgentDefinitionError as exc:
+                log.error("Invalid agent.md at %s: %s", AGENT_MD_KEY, exc)
+                _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": f"Invalid agent definition: {exc}"})
+                return
+
+            # 1b. Pre-flight token budget check
+            if _budget is not None:
+                _used = _budget.get_used(USER_ID)
+                _limit = _budget.get_limit(USER_ID)
+                if _used >= _limit:
+                    log.error(
+                        "Token budget exhausted for user %s (%d / %d tokens used)",
+                        USER_ID, _used, _limit,
+                    )
+                    _notify(
+                        "agent_failure",
+                        {
+                            "agent": AGENT_MD_KEY,
+                            "reason": (
+                                f"Daily token budget exhausted "
+                                f"({_used:,} / {_limit:,} tokens used). "
+                                "Resets at UTC midnight."
+                            ),
+                        },
+                        USER_ID,
+                    )
+                    return
+
+            # 2. Build skill MCP clients once — not repeated on write-conflict retries
+            site = AGENT_MD_KEY.split("/")[0]
+            mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, storage, store)
+            if oauth_errors:
+                log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
                 _notify(
                     "agent_failure",
                     {
                         "agent": AGENT_MD_KEY,
-                        "reason": (
-                            f"Daily token budget exhausted "
-                            f"({_used:,} / {_limit:,} tokens used). "
-                            "Resets at UTC midnight."
-                        ),
+                        "reason": "; ".join(str(e) for e in oauth_errors),
                     },
-                    USER_ID,
                 )
                 return
 
-        # 2. Build MCP clients once — not repeated on write-conflict retries
-        site = AGENT_MD_KEY.split("/")[0]
-        mcp_clients, oauth_errors = _build_mcp_clients(agent_def.skills, site, storage, store)
-        if oauth_errors:
-            log.error("Aborting: OAuth token error(s): %s", [str(e) for e in oauth_errors])
-            _notify(
-                "agent_failure",
-                {
-                    "agent": AGENT_MD_KEY,
-                    "reason": "; ".join(str(e) for e in oauth_errors),
-                },
+            # 3. Open skill MCP clients, collect tools, build model and agent
+            mcp_tools: list = []
+            log.info("Starting %d MCP client(s)", len(mcp_clients))
+            with contextlib.ExitStack() as stack:
+                for i, client in enumerate(mcp_clients):
+                    client_repr = getattr(client, "_name", None) or f"client[{i}]"
+                    try:
+                        stack.enter_context(client)
+                        log.info("MCP client started: %s", client_repr)
+                    except Exception as exc:
+                        log.warning("MCP client failed to start (%s): %s", client_repr, exc)
+                        continue
+                    try:
+                        client_tools = client.list_tools_sync()
+                        _sanitize_tool_names(client_tools)
+                        tool_names_loaded = [
+                            getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "?")
+                            for t in client_tools
+                        ]
+                        mcp_tools.extend(client_tools)
+                        log.info(
+                            "Loaded %d tool(s) from %s: %s",
+                            len(client_tools), client_repr, tool_names_loaded,
+                        )
+                    except Exception as exc:
+                        log.warning("Failed to list tools from MCP client (%s): %s", client_repr, exc)
+
+                # Apply read limit to any MCP wiki_read tools (backward-compat for
+                # agents that use the yoloscribe skill directly).
+                mcp_tools = _apply_read_limit(mcp_tools, AGENT_RUNNER_MAX_PAGE_READS)
+                log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
+
+                model_key = agent_def.model or _resolve_model_key(
+                    "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
+                )
+                model = _build_model(model_key)
+                log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
+
+                # 4. Create the typed agent and run it.
+                agent = _make_agent(
+                    agent_def=agent_def,
+                    site=_site,
+                    page_path=_page_path,
+                    mcp=mcp_client,
+                    storage=storage,
+                    mcp_tools=mcp_tools,
+                    model=model,
+                    search=search,
+                    user_id=USER_ID,
+                    notify_fn=_notify,
+                    content_key=CONTENT_KEY,
+                    agent_md_key=AGENT_MD_KEY,
+                )
+                tokens_used = agent.run(AGENT_PROMPT)
+
+            _span.set_status(_SC.OK)
+
+        except Exception as exc:
+            _span.set_status(_SC.ERROR, str(exc))
+            log.error("Agent execution failed: %s", exc, exc_info=True)
+            _trigger = agent_def.trigger if agent_def is not None else "manual"
+            _agent_name = agent_def.name if agent_def is not None else "unknown"
+            mcp_client.run_log_append(
+                _agent_name, _agent_page_path, "failed",
+                _trigger, time.monotonic() - _run_start, f"Error: {exc}",
             )
+            _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": str(exc)})
             return
+        finally:
+            _ot_ctx.detach(_span_token)
+            _span.end()
+            _release_page_lock(USER_ID, CONTENT_KEY)
 
-        # 3. Open MCP clients, collect tools, build model and agent
-        mcp_tools: list = []
-        log.info("Starting %d MCP client(s)", len(mcp_clients))
-        with contextlib.ExitStack() as stack:
-            for i, client in enumerate(mcp_clients):
-                client_repr = getattr(client, "_name", None) or f"client[{i}]"
-                try:
-                    stack.enter_context(client)
-                    log.info("MCP client started: %s", client_repr)
-                except Exception as exc:
-                    log.warning("MCP client failed to start (%s): %s", client_repr, exc)
-                    continue
-                try:
-                    client_tools = client.list_tools_sync()
-                    _sanitize_tool_names(client_tools)
-                    tool_names_loaded = [
-                        getattr(t, "_agent_tool_name", None) or getattr(t, "__name__", "?")
-                        for t in client_tools
-                    ]
-                    mcp_tools.extend(client_tools)
-                    log.info(
-                        "Loaded %d tool(s) from %s: %s",
-                        len(client_tools), client_repr, tool_names_loaded,
-                    )
-                except Exception as exc:
-                    log.warning("Failed to list tools from MCP client (%s): %s", client_repr, exc)
+        if agent_def.trigger == "on_notify":
+            log.info("on_notify agent run complete for %s", AGENT_MD_KEY)
+        elif agent_def.confirm_before_write:
+            log.info("Agent run complete (propose mode): pending review for %s", CONTENT_KEY)
+        else:
+            log.info("Agent run complete for %s", CONTENT_KEY)
+            if f"/{_site}/.user/" not in f"/{CONTENT_KEY}":
+                _enqueue_index_job(CONTENT_KEY)
 
-            # Apply read limit to any MCP wiki_read tools (backward-compat for
-            # agents that use the yoloscribe skill directly).
-            mcp_tools = _apply_read_limit(mcp_tools, AGENT_RUNNER_MAX_PAGE_READS)
-            log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
+        if _budget is not None and tokens_used > 0:
+            _budget.record_usage(USER_ID, tokens_used)
+            log.info("Recorded %d tokens for user %s", tokens_used, USER_ID)
 
-            model_key = agent_def.model or _resolve_model_key(
-                "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
-            )
-            model = _build_model(model_key)
-            log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
+        mcp_client.run_log_append(
+            agent_def.name, _agent_page_path, "success",
+            agent_def.trigger, time.monotonic() - _run_start,
+        )
 
-            search = _make_search_backend(s3)
-
-            # 4. Create the typed agent and run it.
-            agent = _make_agent(
-                agent_def=agent_def,
-                site=_site,
+        # Write eval annotation log for eval_log agents when OTEL is active.
+        if getattr(agent_def, "eval_log", False) and os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            import datetime as _dt
+            from .trace_fetcher import write_eval_annotation_log
+            _run_at = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _model_key = agent_def.model or _resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL")
+            write_eval_annotation_log(
+                session_id=_session_id,
+                agent_name=agent_def.name,
                 page_path=_page_path,
-                wiki=wiki,
-                storage=storage,
-                mcp_tools=mcp_tools,
-                model=model,
-                search=search,
-                user_id=USER_ID,
-                notify_fn=_notify,
-                content_key=CONTENT_KEY,
                 agent_md_key=AGENT_MD_KEY,
+                run_at=_run_at,
+                status="success",
+                duration_s=time.monotonic() - _run_start,
+                tokens_used=tokens_used,
+                model_key=_model_key,
+                storage=storage,
             )
-            tokens_used = agent.run(AGENT_PROMPT)
 
-        _span.set_status(_SC.OK)
-
-    except Exception as exc:
-        _span.set_status(_SC.ERROR, str(exc))
-        log.error("Agent execution failed: %s", exc, exc_info=True)
-        _trigger = agent_def.trigger if agent_def is not None else "manual"
-        _agent_name = agent_def.name if agent_def is not None else "unknown"
-        _write_run_log(
-            storage, _run_log_key, _agent_name, "failed",
-            _trigger, time.monotonic() - _run_start,
-            f"Error: {exc}",
-        )
-        _append_signal(storage, _site, "agent_run_failure", {
-            "agent_md_key": AGENT_MD_KEY,
-            "content_key": CONTENT_KEY,
-            "trigger": _trigger,
-            "duration_s": f"{time.monotonic() - _run_start:.1f}",
-            "reason": str(exc)[:200],
-        })
-        _notify("agent_failure", {"agent": AGENT_MD_KEY, "reason": str(exc)})
-        return
-    finally:
-        _ot_ctx.detach(_span_token)
-        _span.end()
-        _release_page_lock(USER_ID, CONTENT_KEY)
-
-    if agent_def.trigger == "on_notify":
-        log.info("on_notify agent run complete for %s", AGENT_MD_KEY)
-    elif agent_def.confirm_before_write:
-        log.info("Agent run complete (propose mode): pending review for %s", CONTENT_KEY)
-    else:
-        log.info("Agent run complete for %s", CONTENT_KEY)
-        if f"/{_site}/.user/" not in f"/{CONTENT_KEY}":
-            _enqueue_index_job(CONTENT_KEY)
-
-    if _budget is not None and tokens_used > 0:
-        _budget.record_usage(USER_ID, tokens_used)
-        log.info("Recorded %d tokens for user %s", tokens_used, USER_ID)
-
-    _write_run_log(
-        storage, _run_log_key, agent_def.name, "success",
-        agent_def.trigger, time.monotonic() - _run_start,
-    )
-
-    _signal_payload = {
-        "agent_md_key": AGENT_MD_KEY,
-        "content_key": CONTENT_KEY,
-        "trigger": agent_def.trigger,
-        "duration_s": f"{time.monotonic() - _run_start:.1f}",
-        "tokens_used": str(tokens_used),
-    }
-    _append_signal(storage, _site, "agent_run_success", _signal_payload)
-    _run_memory_reasoner(storage, _site, "agent_run_success", _signal_payload)
-
-    # Write eval annotation log for eval_log agents when OTEL is active.
-    if getattr(agent_def, "eval_log", False) and os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        import datetime as _dt
-        from .trace_fetcher import write_eval_annotation_log
-        _run_at = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _model_key = agent_def.model or _resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL")
-        write_eval_annotation_log(
-            session_id=_session_id,
-            agent_name=agent_def.name,
-            page_path=_page_path,
-            agent_md_key=AGENT_MD_KEY,
-            run_at=_run_at,
-            status="success",
-            duration_s=time.monotonic() - _run_start,
-            tokens_used=tokens_used,
-            model_key=_model_key,
-            storage=storage,
-        )
-
-    _notify("agent_success", {"agent": AGENT_MD_KEY})
+        _notify("agent_success", {"agent": AGENT_MD_KEY})
 
 
 if __name__ == "__main__":

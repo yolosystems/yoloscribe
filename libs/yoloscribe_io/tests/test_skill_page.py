@@ -239,6 +239,42 @@ def test_skill_file_save_emits_skill_changed(store):
     assert cap.events[0].type == EventType.SKILL_CHANGED
 
 
+# ── create_raw / save_raw (content-preserving, YOL-501) ───────────────────────
+
+_CUSTOM_SKILL = (
+    "---\nname: linear\ndescription: Linear skill\n"
+    "tools:\n  - linear_get_issue\ncustom_field: keep-me\n---\n\n"
+    "# Linear\n\nUse this for issue tracking.\n"
+)
+
+
+def test_skill_file_create_raw_preserves_bytes_verbatim(store):
+    f = SkillMarkdownFile("s", "linear", store)
+    f.create_raw(_CUSTOM_SKILL)
+    # exact round-trip — custom frontmatter + formatting untouched (unlike create()).
+    assert store.read("s/.skills/linear/SKILL.md") == _CUSTOM_SKILL
+
+
+def test_skill_file_create_raw_emits_skill_created_with_tools(store):
+    f = SkillMarkdownFile("s", "linear", store)
+    cap = CapturingHandler()
+    f.add_handler(cap)
+    f.create_raw(_CUSTOM_SKILL)
+    ev = cap.events[0]
+    assert ev.type == EventType.SKILL_CREATED
+    assert ev.payload["skill_name"] == "linear"
+    assert ev.payload["tools"] == ["linear_get_issue"]
+
+
+def test_skill_file_save_raw_preserves_bytes_and_emits_changed(store):
+    f = SkillMarkdownFile("s", "linear", store)
+    cap = CapturingHandler()
+    f.add_handler(cap)
+    f.save_raw(_CUSTOM_SKILL)
+    assert store.read("s/.skills/linear/SKILL.md") == _CUSTOM_SKILL
+    assert cap.events[0].type == EventType.SKILL_CHANGED
+
+
 def test_skill_file_save_not_skill_updated(store):
     """save() emits skill.changed, not skill.updated — breaking-change semantics."""
     defn = SkillDefinition(name="x")

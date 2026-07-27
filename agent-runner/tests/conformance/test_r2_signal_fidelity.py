@@ -21,7 +21,9 @@ from __future__ import annotations
 import pytest
 from agent_runner.agents.ingest import IngestAgent
 from agent_runner.agents.page import PageAgent
-from yoloscribe_io import AgentDefinition, SignalLog, WikiPageMarkdownFile
+from agent_runner.agents.search import NullSearchBackend
+from agent_runner.mcp_client import StorageMCPClient
+from yoloscribe_io import AgentDefinition, SignalLog
 from yoloscribe_io.storage import LocalStorageBackend
 
 from .support.report import REPORT, RResult
@@ -62,10 +64,12 @@ def test_r2_signal_fidelity():
     storage.write(f"{site}/.user/ingest/note.md", "Meeting notes about the roadmap.")
 
     ingest_def = AgentDefinition(name="ingester", trigger="schedule", type="ingest")
+    ingest_mcp = StorageMCPClient(storage, site, NullSearchBackend(), notify_fn, "test-user")
     ingest_agent = IngestAgent(
         agent_def=ingest_def,
         site=site,
         page_path=".user/ingest",
+        mcp=ingest_mcp,
         storage=storage,
         mcp_tools=[],
         model=ScriptedModel(
@@ -87,12 +91,12 @@ def test_r2_signal_fidelity():
     # ── Page scenario: structure an existing page ──────────────────────────
     page_content_key = f"{site}/notes/content.md"
     page_def = AgentDefinition(name="structurer", trigger="on_write", type="page")
-    wiki = WikiPageMarkdownFile(site=site, page_path="notes", storage=storage)
+    page_mcp = StorageMCPClient(storage, site, NullSearchBackend(), notify_fn, "test-user")
     page_agent = PageAgent(
         agent_def=page_def,
         site=site,
         page_path="notes",
-        wiki=wiki,
+        mcp=page_mcp,
         storage=storage,
         mcp_tools=[],
         model=ScriptedModel(["# Notes\n\n## Roadmap\n\nMeeting notes about the roadmap.\n"]),

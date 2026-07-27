@@ -136,6 +136,37 @@ class SkillMarkdownFile(MarkdownFile):
             "tools": defn.tools,
         })
 
+    def create_raw(self, raw_content: str) -> None:
+        """Write verbatim SKILL.md content and emit skill.created.
+
+        Unlike create(), this persists the caller's exact bytes rather than
+        re-serializing a SkillDefinition, so custom frontmatter/formatting in a
+        user-authored SKILL.md is preserved. Tools are parsed from the content
+        for the event payload only.
+        """
+        self._storage.write(self.key, raw_content)
+        self._raw_content = raw_content
+        self._emit(EventType.SKILL_CREATED, {
+            "key": self.key,
+            "site": self._site,
+            "skill_name": self._skill_name,
+            "tools": parse_skill_md(raw_content, name=self._skill_name).tools,
+        })
+
+    def save_raw(self, raw_content: str) -> None:
+        """Write verbatim SKILL.md content and emit skill.changed.
+
+        Content-preserving counterpart to save() — see create_raw().
+        """
+        self._storage.write(self.key, raw_content)
+        self._raw_content = raw_content
+        self._emit(EventType.SKILL_CHANGED, {
+            "key": self.key,
+            "site": self._site,
+            "skill_name": self._skill_name,
+            "tools": parse_skill_md(raw_content, name=self._skill_name).tools,
+        })
+
     def delete(self) -> None:
         """Remove SKILL.md from storage and emit skill.deleted.
 

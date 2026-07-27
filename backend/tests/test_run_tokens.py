@@ -106,8 +106,11 @@ class TestMintAndDecode:
         assert claims.user_id == "user-1"
         assert claims.agent_name == "tidy-bot"
         assert claims.agent_type == "page"
+        # Content writes stay contained to the agent's page; notify is granted at
+        # root (no-dispatch lifecycle: agent_success / agent_failure).
         assert claims.path_scope == [
-            run_tokens.PathScopeEntry("features/auth", ["read", "write-content"])
+            run_tokens.PathScopeEntry("features/auth", ["read", "write-content"]),
+            run_tokens.PathScopeEntry("", ["notify"]),
         ]
         assert claims.run_id  # non-empty, unique per mint
 
@@ -116,7 +119,10 @@ class TestMintAndDecode:
             site="alice-site", user_id="user-1", agent_name="ingester", agent_type="ingest",
         )
         claims = run_tokens.decode_run_token(token)
-        assert claims.path_scope == [run_tokens.PathScopeEntry("", ["read", "write-content"])]
+        # Whole-tree read/write plus notify for ingest lifecycle signals.
+        assert claims.path_scope == [
+            run_tokens.PathScopeEntry("", ["read", "write-content", "notify"])
+        ]
 
     def test_round_trip_notification_has_no_wiki_writes(self):
         token = run_tokens.mint_run_token(

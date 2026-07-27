@@ -19,6 +19,8 @@ import inspect
 import pytest
 from agent_runner import polling_worker
 from agent_runner.agents.ingest import IngestAgent
+from agent_runner.agents.search import NullSearchBackend
+from agent_runner.mcp_client import StorageMCPClient
 from yoloscribe_io import AgentDefinition
 from yoloscribe_io.storage import LocalStorageBackend
 
@@ -56,8 +58,9 @@ def test_r3a_ingest_redelivery_idempotency():
     storage.write(f"{site}/.user/ingest/note.md", "Meeting notes about the roadmap.")
     agent_def = AgentDefinition(name="ingester", trigger="schedule", type="ingest")
 
+    ingest_mcp = StorageMCPClient(storage, site, NullSearchBackend(), notify_fn, "test-user")
     first = IngestAgent(
-        agent_def=agent_def, site=site, page_path=".user/ingest", storage=storage,
+        agent_def=agent_def, site=site, page_path=".user/ingest", mcp=ingest_mcp, storage=storage,
         mcp_tools=[], model=ScriptedModel(list(_INGEST_SCRIPT)),
         user_id="test-user", notify_fn=notify_fn,
     )
@@ -67,7 +70,7 @@ def test_r3a_ingest_redelivery_idempotency():
     # Simulate redelivery of the same trigger: a fresh agent instance (as a
     # redelivered SQS message would construct), same storage/site.
     second = IngestAgent(
-        agent_def=agent_def, site=site, page_path=".user/ingest", storage=storage,
+        agent_def=agent_def, site=site, page_path=".user/ingest", mcp=ingest_mcp, storage=storage,
         mcp_tools=[], model=ScriptedModel(list(_REDELIVERY_SCRIPT)),
         user_id="test-user", notify_fn=notify_fn,
     )

@@ -3,9 +3,11 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
+from yoloscribe_io.events import Event, EventType
 from yoloscribe_io.storage import LocalStorageBackend
 from yoloscribe_io.notifications import (
     NO_DISPATCH_EVENTS,
+    NotificationBusHandler,
     NotificationsMarkdownFile,
     _format_entry,
 )
@@ -301,3 +303,83 @@ def test_dispatch_agent_with_multiple_events_fires_on_match(store):
     enqueue.assert_called_once()
     f.notify("access_requested", {})
     assert enqueue.call_count == 1  # still only one — second event not in list
+
+
+# ── NotificationBusHandler (YOL-499) ──────────────────────────────────────────
+
+def _notifications(store: LocalStorageBackend) -> str:
+    return store.read("s/.user/notifications.md") or ""
+
+
+def test_bus_handler_routes_structural_event_to_notifications():
+    store = LocalStorageBackend()
+    handler = NotificationBusHandler("s", store)
+    handler.handle(Event(EventType.AGENT_CREATED, {"agent_name": "linear-sync", "user_id": "u1"}))
+    raw = _notifications(store)
+    assert "agent_created" in raw
+    assert "linear-sync" in raw
+    assert "user_id" not in raw  # user_id is the notify() param, not a payload line
+
+
+def test_bus_handler_dispatches_matching_on_notify_agent():
+    store = LocalStorageBackend()
+    store.write(
+        "s/.agents/n/agent.md",
+        "---\ntrigger: on_notify\nname: n\nevents:\n  - skill_changed\n---\n",
+    )
+    enqueue = MagicMock()
+    handler = NotificationBusHandler("s", store, enqueue=enqueue)
+    handler.handle(Event(EventType.SKILL_CHANGED, {"key": "s/.skills/x/SKILL.md"}))
+    enqueue.assert_called_once()
+
+
+def test_bus_handler_ignores_page_written():
+    # Page-content writes keep the on_write fast-path; they must NOT hit the bus.
+    store = LocalStorageBackend()
+    enqueue = MagicMock()
+    handler = NotificationBusHandler("s", store, enqueue=enqueue)
+    handler.handle(Event(EventType.PAGE_WRITTEN, {"key": "s/blog/content.md", "user_id": "u1"}))
+    assert _notifications(store) == ""
+    enqueue.assert_not_called()
+
+
+def test_bus_handler_ignores_unmapped_event():
+    store = LocalStorageBackend()
+    handler = NotificationBusHandler("s", store)
+    handler.handle(Event(EventType.PAGE_READ, {"key": "s/blog/content.md"}))
+    assert _notifications(store) == ""
+
+
+def test_bus_handler_respects_no_dispatch_events():
+    # A routed event that is in NO_DISPATCH_EVENTS is still logged but not dispatched.
+    store = LocalStorageBackend()
+    store.write(
+        "s/.agents/n/agent.md",
+        "---\ntrigger: on_notify\nname: n\nevents:\n  - agent_created\n  - user_instruction\n---\n",
+    )
+    enqueue = MagicMock()
+    handler = NotificationBusHandler("s", store, enqueue=enqueue)
+    # user_instruction is a decision signal in NO_DISPATCH_EVENTS — but it's also
+    # not in the bus map, so the handler ignores it entirely; assert the routed
+    # agent_created path dispatches while nothing routes user_instruction.
+    handler.handle(Event(EventType.AGENT_CREATED, {"agent_name": "a"}))
+    enqueue.assert_called_once()
+
+
+def test_bus_handler_maps_all_structural_event_types():
+    store = LocalStorageBackend()
+    handler = NotificationBusHandler("s", store)
+    for event_type in (
+        EventType.PAGE_CREATED, EventType.PAGE_DELETED, EventType.AGENT_CREATED,
+        EventType.AGENT_UPDATED, EventType.AGENT_DELETED, EventType.SKILL_CREATED,
+        EventType.SKILL_CHANGED, EventType.SKILL_DELETED, EventType.SETTINGS_CHANGED,
+        EventType.PAGE_MEDIA_ADDED, EventType.PAGE_MEDIA_REMOVED,
+    ):
+        handler.handle(Event(event_type, {}))
+    raw = _notifications(store)
+    for name in (
+        "page_created", "page_deleted", "agent_created", "agent_updated",
+        "agent_deleted", "skill_created", "skill_changed", "skill_deleted",
+        "settings_changed", "page_media_added", "page_media_removed",
+    ):
+        assert name in raw

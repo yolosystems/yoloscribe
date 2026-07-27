@@ -87,7 +87,10 @@ class TestRunTokenDispatch:
         assert user.site == "alice-site"
         assert user.user_id == "user-1"
         assert user.agent_name == "tidy-bot"
-        assert user.path_scope == [run_tokens.PathScopeEntry("features/auth", ["read", "write-content"])]
+        assert user.path_scope == [
+            run_tokens.PathScopeEntry("features/auth", ["read", "write-content"]),
+            run_tokens.PathScopeEntry("", ["notify"]),
+        ]
         # Full-JWT path must not have been consulted for a run token.
         mw._auth_provider.decode_jwt.assert_not_called()
 
@@ -99,7 +102,9 @@ class TestRunTokenDispatch:
         request = _make_request(authorization=f"Bearer {token}")
         _run(mw.dispatch(request, _noop_call_next))
         assert request.state.mcp_user.site == "s"
-        assert request.state.mcp_user.path_scope == [run_tokens.PathScopeEntry("", ["read", "write-content"])]
+        assert request.state.mcp_user.path_scope == [
+            run_tokens.PathScopeEntry("", ["read", "write-content", "notify"])
+        ]
 
     def test_expired_run_token_rejected(self):
         token = run_tokens.mint_run_token(site="s", user_id="u", agent_name="a", agent_type="page", ttl_seconds=-5)

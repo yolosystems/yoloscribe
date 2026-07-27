@@ -71,10 +71,18 @@ class RunTokenClaims:
 def _default_path_scope(agent_type: str, page_path: str) -> list[PathScopeEntry]:
     """Per-agent-type containment floor. See the Delegation Token wiki doc §3."""
     if agent_type == "page":
-        return [PathScopeEntry(page_path, ["read", "write-content"])]
+        return [
+            PathScopeEntry(page_path, ["read", "write-content"]),
+            # Root notify (never a wiki write): the runner emits agent_success /
+            # agent_failure lifecycle entries through the run token, and both are
+            # no-dispatch. Content writes stay contained to page_path above.
+            PathScopeEntry("", ["notify"]),
+        ]
     if agent_type == "ingest":
-        # Whole tree — ingest routes to dynamic destinations. Never write-settings/write-agent/delete.
-        return [PathScopeEntry("", ["read", "write-content"])]
+        # Whole tree — ingest routes to dynamic destinations. notify covers its
+        # lifecycle signals (ingest_start/ingest_end/ingest_unrouted/notify_owner)
+        # and the runner's success/failure. Never write-settings/write-agent/delete.
+        return [PathScopeEntry("", ["read", "write-content", "notify"])]
     if agent_type == "notification":
         # No wiki writes at all.
         return [PathScopeEntry("", ["read", "notify"])]

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .agent_page import AgentDefinitionError, parse_agent_md
+from .events import Event, EventHandler, EventType
 from .markdown_file import MarkdownFile
 from .storage import StorageBackend
 
@@ -103,6 +104,84 @@ class NotificationsMarkdownFile(MarkdownFile):
             if agent_def.events and event_type not in agent_def.events:
                 continue
             self._enqueue(agent_key, self.key, prompt, user_id)
+
+
+# ── NotificationBusHandler ────────────────────────────────────────────────────
+
+# The filter table: which mutation EventTypes are routed onto the notification
+# bus, and the underscore event name each becomes (the form `on_notify` agents
+# match in their `events:` list and that NO_DISPATCH_EVENTS keys off). Anything
+# not in this map is intentionally NOT routed to the bus — notably
+# EventType.PAGE_WRITTEN (page-content writes keep their own fast-path,
+# OnWriteEventHandler → on_write agents; routing them here too would flood the
+# owner inbox), PAGE_READ, and the run-outcome events (AGENT_SUCCESS/FAILURE),
+# which are emitted explicitly and are already loop-guarded by
+# NO_DISPATCH_EVENTS. Whether a routed event is *also* owner-facing (a visible
+# inbox line) vs dispatch-only is a further refinement tracked separately — for
+# now every routed event both appends an entry and dispatches unless it is in
+# NO_DISPATCH_EVENTS.
+_BUS_EVENT_MAP: dict[str, str] = {
+    EventType.PAGE_CREATED: "page_created",
+    EventType.PAGE_DELETED: "page_deleted",
+    EventType.PAGE_SHARED: "page_shared",
+    EventType.PAGE_UNSHARED: "page_unshared",
+    EventType.PAGE_ACCESS_CHANGED: "page_access_changed",
+    EventType.PAGE_VISIBILITY_CHANGED: "page_visibility_changed",
+    EventType.ACCESS_REQUESTED: "access_requested",
+    EventType.AGENT_CREATED: "agent_created",
+    EventType.AGENT_UPDATED: "agent_updated",
+    EventType.AGENT_DELETED: "agent_deleted",
+    EventType.SKILL_CREATED: "skill_created",
+    EventType.SKILL_CHANGED: "skill_changed",
+    EventType.SKILL_DELETED: "skill_deleted",
+    EventType.SETTINGS_CHANGED: "settings_changed",
+    EventType.PAGE_MEDIA_ADDED: "page_media_added",
+    EventType.PAGE_MEDIA_REMOVED: "page_media_removed",
+}
+
+
+class NotificationBusHandler(EventHandler):
+    """Routes structural mutation events onto the notification bus.
+
+    Attached (via the backend file-object factory) to every mutation-emitting
+    `yoloscribe_io` file class — `WikiPageMarkdownFile`, `AgentMarkdownFile`,
+    `SkillMarkdownFile`, `PageSettings`, `MediaAsset` — so that *any* mutation,
+    regardless of who caused it (a user, the first-party runner, or a 3P
+    runtime over MCP), becomes a `.user/notifications.md` entry and (unless in
+    NO_DISPATCH_EVENTS) triggers matching `on_notify` agents. This is what keeps
+    YoloScribe's reactivity caller-agnostic.
+
+    Independent of SQS: the `enqueue` callable is passed straight through to
+    `NotificationsMarkdownFile`. Best-effort by contract — `EventEmitter._emit`
+    already swallows handler exceptions, and the notify path never raises the
+    write it rides alongside.
+    """
+
+    def __init__(
+        self,
+        site: str,
+        storage: StorageBackend,
+        enqueue: Callable[[str, str, str, str], None] | None = None,
+    ) -> None:
+        self._site = site
+        self._storage = storage
+        self._enqueue = enqueue
+
+    # Internal / plumbing / heavy payload keys kept out of the human inbox line.
+    # `content` in particular is enriched onto page.created for the KM-signal
+    # subscriber and must never be dumped into notifications.md.
+    _INTERNAL_KEYS = frozenset({"key", "site", "user_id", "content"})
+
+    def handle(self, event: Event) -> None:
+        bus_event = _BUS_EVENT_MAP.get(event.type)
+        if bus_event is None:
+            return
+        raw = event.payload or {}
+        payload = {k: v for k, v in raw.items() if k not in self._INTERNAL_KEYS}
+        user_id = str(raw.get("user_id", ""))
+        NotificationsMarkdownFile(self._site, self._storage, enqueue=self._enqueue).notify(
+            bus_event, payload, user_id=user_id
+        )
 
 
 # ── Entry formatting ──────────────────────────────────────────────────────────

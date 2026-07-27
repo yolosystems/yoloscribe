@@ -1,29 +1,28 @@
-"""R1 — No-bucket.
+"""R1 — No-bucket (MCP runtime).
 
-Contract §3 / §8: with direct S3 access revoked for the runtime identity, a
-full Page + Ingest + Notification cycle still completes end-to-end (proves
-all mutation goes through the MCP).
+Contract §3 / §8: with the runner's OWN direct-S3 access revoked, a full Page
+cycle still completes end-to-end — because every read, write, run-log and
+notification goes through the YoloScribe MCP with a scoped run token. This is
+the *positive* proof that replaces the earlier negative baseline (which merely
+showed the pre-MCP runner dying on its first S3 GetObject).
 
-Tier B (real MinIO, needs `docker compose up`). Revocation is simulated with
-invalid MinIO credentials — cheap, same observable AccessDenied outcome as a
-real deny-policy identity (confirmed as the S0.1 approach; upgrade later if
-Phase 1's P1.6 live cutover wants the stronger guarantee).
+How revocation is done here: the runner subprocess is handed deliberately
+invalid AWS credentials and no profile, so ANY S3 call it makes fails loudly
+(InvalidAccessKeyId) against the real endpoint. The backend (a separate
+process) keeps its own valid credentials and does the actual S3 work on the
+runner's behalf. If the runner completes the cycle with *no* S3 error in its
+logs, it demonstrably never touched S3 — everything went through the MCP.
 
-A single Page-agent scenario is representative here, not all three agent
-types: `agent_runner.main()`'s very first storage operation — before any
-agent-type dispatch happens — is `storage.read(AGENT_MD_KEY)`, a direct S3
-GetObject (agent_runner.py:~993). The failure happens before agent type even
-matters, so exercising Page/Ingest/Notification separately would be
-redundant for what R1 tests today.
+Live only. Driven entirely by environment (no secrets are committed); the test
+skips when these are unset or the backend is unreachable:
 
-Note: `agent_runner.main()` catches every exception internally and returns
-normally (exit code 0) rather than propagating — it does NOT crash the
-process. So conformance here can't be "process exits non-zero"; instead this
-test uses a *separate, validly-credentialed* verifier client (playing the
-role of the test harness's own identity, distinct from the revoked runtime
-identity) to seed the scratch site beforehand and confirm afterward that
-nothing the run should have produced — run_log.md, the signal log, the
-proposed/updated content — actually landed in the bucket.
+  CONFORMANCE_MCP_BASE     backend base URL, e.g. http://localhost:8000
+  CONFORMANCE_MINT_SECRET  the INTERNAL_MINT_SECRET the backend was started with
+  CONFORMANCE_SITE         a site to write a throwaway page under (e.g. knuth)
+  CONFORMANCE_USER_ID      that site's owner user id
+  ANTHROPIC_API_KEY        (any Anthropic key; the run performs one small LLM turn)
+
+It runs a real page-agent turn on Haiku, so it costs a little Anthropic spend.
 """
 from __future__ import annotations
 
@@ -32,99 +31,175 @@ import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 from yoloscribe_io import AgentDefinition, build_agent_md
 
+from agent_runner.mcp_client import HttpMCPClient
+
 from .support.report import REPORT, RResult
-from .support.scratch_site import S3_BUCKET, cleanup, exists, minio_client, new_site, put
 
 _AGENT_RUNNER_DIR = Path(__file__).resolve().parents[2]
+_SCRATCH_PAGE = "scratch/r1-conformance"
+_AGENT_NAME = "r1-page-agent"
+_SEED = "# R1 Conformance\n\nSeed line (pre-run).\n"
 
 
-@pytest.mark.conformance_live
-def test_r1_no_bucket():
-    verifier = minio_client()  # valid credentials — the test's own identity, not the runtime's
-    site = new_site()
-    agent_name = "r1-page-agent"
-    agent_md_key = f"{site}/.agents/{agent_name}/agent.md"
-    content_key = f"{site}/content.md"
-    run_log_key = f"{site}/.agents/{agent_name}/run_log.md"
-    signal_log_key = f"{site}/.user/librarian/signal-log.md"
+def _env_config() -> dict | None:
+    cfg = {
+        "base": os.environ.get("CONFORMANCE_MCP_BASE", "").rstrip("/"),
+        "mint_secret": os.environ.get("CONFORMANCE_MINT_SECRET", ""),
+        "site": os.environ.get("CONFORMANCE_SITE", ""),
+        "user_id": os.environ.get("CONFORMANCE_USER_ID", ""),
+    }
+    if not all(cfg.values()) or not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    return cfg
+
+
+def _mint(cfg: dict) -> tuple[str, str]:
+    """Mint a page-scoped run token for the scratch page; return (token, mcp_url)."""
+    resp = httpx.post(
+        f"{cfg['base']}/internal/runs/mint",
+        headers={"X-Internal-Auth": cfg["mint_secret"]},
+        json={
+            "site": cfg["site"],
+            "user_id": cfg["user_id"],
+            "agent_name": _AGENT_NAME,
+            "agent_type": "page",
+            "page_path": _SCRATCH_PAGE,
+        },
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    mcp_url = data["mcp_url"]
+    if "localhost" not in mcp_url and "127.0.0.1" not in mcp_url:
+        mcp_url = f"{cfg['base']}/mcp/v1"  # backend advertised a cluster URL; use the local one
+    return data["token"], mcp_url
+
+
+@pytest.mark.conformance_backend
+def test_r1_full_page_cycle_via_mcp():
+    cfg = _env_config()
+    if cfg is None:
+        pytest.skip(
+            "live R1 needs CONFORMANCE_MCP_BASE / CONFORMANCE_MINT_SECRET / "
+            "CONFORMANCE_SITE / CONFORMANCE_USER_ID + ANTHROPIC_API_KEY (a running backend)"
+        )
+    try:
+        httpx.get(f"{cfg['base']}/health", timeout=5.0)
+    except Exception:
+        pytest.skip(f"backend at {cfg['base']} unreachable")
+
+    site = cfg["site"]
+    agent_md_key = f"{site}/{_SCRATCH_PAGE}/.agents/{_AGENT_NAME}/agent.md"
+    content_key = f"{site}/{_SCRATCH_PAGE}/content.md"
 
     agent_def = AgentDefinition(
-        name=agent_name,
+        name=_AGENT_NAME,
         trigger="manual",
         type="page",
-        description="Rewrite the page for R1.",
+        model="haiku",
+        description=(
+            "You maintain this page. When asked to change it, reply with ONLY the full "
+            "updated markdown, preserving all existing text. Do NOT call the page_write "
+            "or page_read tools — the system reads the current content for you and saves "
+            "your reply automatically."
+        ),
     )
-    put(verifier, agent_md_key, build_agent_md(agent_def))
-    put(verifier, content_key, "# Original\n\nOriginal content.\n")
+    agent_md = build_agent_md(agent_def)
 
+    # 1. Seed the scratch page through the MCP (a valid token, standing in for the owner).
+    seed_token, mcp_url = _mint(cfg)
+    with HttpMCPClient(mcp_url, seed_token) as c:
+        c.wiki_write(_SCRATCH_PAGE, _SEED)
+
+    # 2. Mint the run token the runner will use.
+    run_token, _ = _mint(cfg)
+
+    # 3. Launch the runner with its OWN S3 access revoked (invalid creds, no profile)
+    #    but full MCP credentials + the agent.md handed in via the env.
+    env = {
+        **os.environ,
+        "BUCKET": "conformance-r1-unused",
+        "AGENT_MD_KEY": agent_md_key,
+        "AGENT_MD_CONTENT": agent_md,
+        "CONTENT_KEY": content_key,
+        "AGENT_PROMPT": "Append a new line containing exactly R1-OK to the page.",
+        "USER_ID": cfg["user_id"],
+        "AWS_REGION": "us-east-1",
+        # Revoke the runner's OWN S3: real AWS endpoint + deliberately invalid creds,
+        # so any S3 call it makes fails loudly (InvalidAccessKeyId).
+        "AWS_ACCESS_KEY_ID": "AKIACONFORMANCEREVOKED",
+        "AWS_SECRET_ACCESS_KEY": "conformance-revoked-secret",
+        "AGENT_RUNNER_ACCESS": "mcp",
+        "MCP_URL": mcp_url,
+        "RUN_TOKEN": run_token,
+        "YOLOSCRIBE_MODEL": "haiku",
+        "LOCAL_MODE": "true",
+        "SQS_QUEUE_URL": "",
+        "SQS_INDEXING_QUEUE_URL": "",
+        "DDB_AGENT_LOCKS_TABLE": "",  # skip DDB entirely; not what R1 is testing
+        "S3_VECTORS_BUCKET": "",  # NullSearchBackend — page-agent search goes via the MCP anyway
+    }
+    # These must be ABSENT (an empty AWS_PROFILE makes botocore look for a profile
+    # named "" → ProfileNotFound; a stale endpoint/session token would misdirect).
+    for k in ("AWS_PROFILE", "AWS_SESSION_TOKEN", "S3_ENDPOINT_URL", "MINIO_ACCESS_KEY_ID", "MINIO_SECRET_ACCESS_KEY"):
+        env.pop(k, None)
+    proc = subprocess.run(
+        [sys.executable, "-m", "agent_runner.agent_runner"],
+        cwd=_AGENT_RUNNER_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    log_text = proc.stdout + proc.stderr
+
+    # 4. Read the page back through the MCP and inspect the runner's logs.
+    verify_token, _ = _mint(cfg)
+    with HttpMCPClient(mcp_url, verify_token) as c:
+        final, _ = c.wiki_read(_SCRATCH_PAGE)
+
+    _S3_ERROR_MARKERS = (
+        "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied",
+        "InvalidClientTokenId", "botocore.exceptions", "EndpointConnectionError",
+    )
+    saw_s3_error = any(m in log_text for m in _S3_ERROR_MARKERS)
+
+    checklist = {
+        "runner selected the MCP IO path": "Runner IO via MCP run token" in log_text,
+        "agent.md parsed without an S3 read": "agent.md not found" not in log_text,
+        "run reached completion": "Agent run complete" in log_text,
+        "no S3 access error anywhere in the runner's own logs": not saw_s3_error,
+        "content.md changed vs seed (write landed via MCP)": final != _SEED and final.strip() != "",
+        "requested edit is present (R1-OK)": "R1-OK" in final,
+    }
+    conformant = all(checklist.values())
+    REPORT.record(
+        RResult(
+            id="R1",
+            name="No-bucket",
+            status="PASS" if conformant else "FAIL",
+            detail=(
+                "runner's own S3 access revoked; full Page cycle (read → write → "
+                "run-log → notify) completed through the MCP with a page-scoped run "
+                "token and produced no S3 access error."
+                if conformant
+                else "one or more R1 conditions failed — see checklist; runner log tail:\n"
+                + "\n".join(log_text.strip().splitlines()[-25:])
+            ),
+            checklist=checklist,
+        )
+    )
+
+    # 5. Best-effort cleanup — blank the scratch page (delete needs a scope the
+    #    run token intentionally lacks). Leave the site otherwise untouched.
     try:
-        env = {
-            **os.environ,
-            "BUCKET": S3_BUCKET,
-            "AGENT_MD_KEY": agent_md_key,
-            "CONTENT_KEY": content_key,
-            "AGENT_PROMPT": "Rewrite this page.",
-            "USER_ID": "conformance-r1-user",
-            "AWS_REGION": "us-east-1",
-            "S3_ENDPOINT_URL": "http://localhost:9000",
-            # The revoked runtime identity: invalid credentials against real MinIO.
-            "MINIO_ACCESS_KEY_ID": "invalid-revoked-key",
-            "MINIO_SECRET_ACCESS_KEY": "invalid-revoked-secret",
-            "LOCAL_MODE": "true",
-            "SQS_QUEUE_URL": "",
-            "DDB_AGENT_LOCKS_TABLE": "",  # skip DDB entirely; not what R1 is testing
-            "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", "unused-r1-never-reaches-model"),
-        }
-        proc = subprocess.run(
-            [sys.executable, "-m", "agent_runner.agent_runner"],
-            cwd=_AGENT_RUNNER_DIR,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
+        with HttpMCPClient(mcp_url, verify_token) as c:
+            c.wiki_write(_SCRATCH_PAGE, "# R1 Conformance\n\n(cleaned)\n")
+    except Exception:
+        pass
 
-        log_text = proc.stdout + proc.stderr
-        saw_agent_execution_failed = "Agent execution failed" in log_text
-        saw_access_error = any(
-            code in log_text
-            for code in ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "403")
-        )
-        no_run_log_written = not exists(verifier, run_log_key)
-        no_signal_written = not exists(verifier, signal_log_key)
-        content_unchanged = verifier.get_object(Bucket=S3_BUCKET, Key=content_key)["Body"].read().decode(
-            "utf-8"
-        ) == "# Original\n\nOriginal content.\n"
-
-        checklist = {
-            "runner process exits (doesn't hang)": proc.returncode is not None,
-            "log shows 'Agent execution failed'": saw_agent_execution_failed,
-            "log shows an S3 access-denied error code": saw_access_error,
-            "no run_log.md written (best-effort write also failed under revoked creds)": no_run_log_written,
-            "no signal log written": no_signal_written,
-            "live content.md unchanged": content_unchanged,
-        }
-        # R1 conformance would mean the cycle completes end-to-end anyway (MCP
-        # path). Today it does the opposite — every side effect is missing —
-        # which is exactly why this is a FAIL, not a PASS.
-        conformant = False  # today's runner has no MCP path at all; can't pass R1 by construction
-        REPORT.record(
-            RResult(
-                id="R1",
-                name="No-bucket",
-                status="PASS" if conformant else "FAIL",
-                detail=(
-                    "runner performs a direct S3 GetObject (storage.read(AGENT_MD_KEY)) as its "
-                    "very first operation — before any MCP-equivalent call — so revoking the "
-                    "runtime identity's S3 access fails the run immediately. main() swallows the "
-                    "exception and exits 0, but produces none of its expected side effects."
-                ),
-                checklist=checklist,
-            )
-        )
-        assert saw_agent_execution_failed and saw_access_error, log_text
-    finally:
-        cleanup(verifier, site)
+    assert conformant, REPORT._results["R1"].detail
