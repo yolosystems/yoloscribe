@@ -16,7 +16,9 @@ config:
   k8sNamespace: "<k8s-namespace>"
   anthropicSecretName: "<secrets-manager-secret-name>"
   # modelBaseUrl: "https://bedrock-mantle.us-west-2.api.aws/v1"  # optional: Bedrock Mantle endpoint
-  # model: "glm"           # optional: model registry key fallback, shared with the backend
+  # model: "glm"           # optional: default model key (a LiteLLM model_name), shared with the backend
+  # LiteLLM proxy — the single model path (YOL-512). Point at the in-cluster LiteLLM service:
+  litellmBaseUrl: "http://yoloscribe-litellm.yolo.svc.cluster.local:4000/v1"
   # runnerModel: ""        # optional: overrides `model` when an agent.md has no `model:` frontmatter field
   # memoryReasonerModel: "haiku"       # optional: per-signal reasoner (default: haiku; Anthropic keys only)
   # consolidationReasonerModel: "sonnet"  # optional: nightly consolidation pass (default: sonnet; Anthropic keys only)

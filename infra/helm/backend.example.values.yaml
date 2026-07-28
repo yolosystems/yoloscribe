@@ -29,4 +29,6 @@ config:
   awsAccountId: "<aws-account-id>"
   awsRegion: "<region>"
   k8sNamespace: "<k8s-namespace>"
-  # model: "glm"  # optional: model registry key override (haiku|sonnet|opus|glm|bedrock-*)
+  # model: "glm"  # optional: default model key (a LiteLLM model_name: haiku|sonnet|opus|glm|bedrock-*)
+  # LiteLLM proxy — the single model path (YOL-512). Point at the in-cluster LiteLLM service:
+  litellmBaseUrl: "http://yoloscribe-litellm.yolo.svc.cluster.local:4000/v1"
