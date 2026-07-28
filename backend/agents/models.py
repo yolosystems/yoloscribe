@@ -36,13 +36,34 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
 DEFAULT_MODEL_KEY = "sonnet"
 
 
+def _build_litellm_model(model_key: str, base_url: str):
+    """Return an OpenAI-compatible Strands model pointed at the LiteLLM proxy.
+
+    The model key is passed straight through as the OpenAI `model` — LiteLLM's
+    `model_list` maps the name to a provider/model/credential. Provider branching
+    and per-provider credential wiring live in the proxy config, not here.
+    """
+    from openai import AsyncOpenAI
+    from strands.models.openai import OpenAIModel
+
+    api_key = os.getenv("LITELLM_API_KEY", "").strip() or "sk-litellm-local"
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    return OpenAIModel(client=client, model_id=model_key or DEFAULT_MODEL_KEY)
+
+
 def build_strands_model(model_key: str):
     """Return a strands-compatible model object for the given registry key.
 
-    If the key is not in MODEL_REGISTRY, it is passed directly to BedrockModel
-    as a model ID or inference profile ARN (e.g. arn:aws:bedrock:...).
-    Falls back to DEFAULT_MODEL_KEY only if the key is empty.
+    When LITELLM_BASE_URL is set, all model routing goes through the LiteLLM
+    proxy (YOL-512) and the native per-provider paths below are bypassed.
+    Otherwise (legacy default): if the key is not in MODEL_REGISTRY it is passed
+    directly to BedrockModel as a model ID or inference profile ARN
+    (e.g. arn:aws:bedrock:...); falls back to DEFAULT_MODEL_KEY only if empty.
     """
+    litellm_base_url = os.getenv("LITELLM_BASE_URL", "").strip()
+    if litellm_base_url:
+        return _build_litellm_model(model_key, litellm_base_url)
+
     spec = MODEL_REGISTRY.get(model_key)
     if spec is None:
         from strands.models.bedrock import BedrockModel

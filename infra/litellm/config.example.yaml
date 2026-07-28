@@ -1,0 +1,72 @@
+# LiteLLM proxy config for YoloScribe (YOL-512 / YOL-505).
+#
+# This is the single source of truth for YoloScribe's model routing — the
+# provider/model/credential resolution that used to live in
+# `backend/agents/models.py::MODEL_REGISTRY` and
+# `agent-runner/agent_runner/agent_runner.py::_MODEL_REGISTRY`.
+#
+# `model_name` values ARE the YoloScribe model keys (what `YOLOSCRIBE_*_MODEL`
+# and the `model:` agent.md field select). YoloScribe passes the key straight
+# through as the OpenAI `model` to the proxy; LiteLLM maps it to a provider.
+#
+# Local dev: the Anthropic groups work with just ANTHROPIC_API_KEY. The bedrock-*
+# groups need AWS credentials in the environment; `glm` (Bedrock Mantle) is left
+# commented until its auth path through LiteLLM is validated — see the note below.
+
+model_list:
+  # ── Anthropic direct ────────────────────────────────────────────────────────
+  - model_name: haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 16384
+  - model_name: sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 16384
+  - model_name: opus
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 16384
+
+  # ── Amazon Bedrock (needs AWS credentials in the proxy env) ──────────────────
+  - model_name: bedrock-haiku
+    litellm_params:
+      model: bedrock/anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: os.environ/AWS_REGION
+      max_tokens: 16384
+  - model_name: bedrock-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-6-20250514-v1:0
+      aws_region_name: os.environ/AWS_REGION
+      max_tokens: 16384
+  - model_name: bedrock-opus
+    litellm_params:
+      model: bedrock/anthropic.claude-opus-4-6-20250514-v1:0
+      aws_region_name: os.environ/AWS_REGION
+      max_tokens: 16384
+
+  # ── GLM via Bedrock Mantle ───────────────────────────────────────────────────
+  # The native path used aws_bedrock_token_generator.provide_token() + an
+  # OpenAI-compatible call to the Mantle base URL. Through LiteLLM this should
+  # collapse to a Bedrock-routed model (SigV4 via the proxy's AWS creds), which
+  # would drop the aws_bedrock_token_generator dependency entirely. Validate the
+  # exact `model:`/`api_base:` form against the Mantle endpoint before enabling.
+  # - model_name: glm
+  #   litellm_params:
+  #     model: bedrock/zai.glm-5
+  #     aws_region_name: os.environ/AWS_REGION
+
+general_settings:
+  # Must start with "sk-". YoloScribe presents this (or a per-user virtual key,
+  # once YOL-513 lands) to the proxy. No database is required for pure model
+  # routing; virtual keys / budgets (YOL-513) and per-user tool OAuth (YOL-505)
+  # add a Postgres dependency later.
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  # Silently drop provider-unsupported params instead of erroring — smooths over
+  # the small differences between the OpenAI-shaped call and each backend.
+  drop_params: true

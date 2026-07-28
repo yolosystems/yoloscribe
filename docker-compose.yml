@@ -79,6 +79,26 @@ services:
     # No healthcheck — ElasticMQ starts in <100ms; wget/curl are not available
     # in the GraalVM native image.
 
+  # ── LiteLLM — model routing proxy (YOL-512) ───────────────────────────────────
+  # Stateless model gateway (no DB needed for pure routing). Model groups live in
+  # infra/litellm/config.example.yaml; the Anthropic groups work with just
+  # ANTHROPIC_API_KEY. Opt in by setting LITELLM_BASE_URL for backend/agent-runner
+  # (see below) — unset by default so local dev keeps the native model paths.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./infra/litellm/config.example.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+
   # ── Backend ───────────────────────────────────────────────────────────────────
   backend:
     build:
@@ -117,6 +137,11 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+
+      # LiteLLM model routing (YOL-512). Set LITELLM_BASE_URL=http://litellm:4000/v1
+      # in .env to route all models through the proxy; empty = native model paths.
+      LITELLM_BASE_URL: "${LITELLM_BASE_URL:-}"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
 
       # DynamoDB Local
       DYNAMODB_ENDPOINT_URL: "http://dynamodb-local:8000"
@@ -163,6 +188,10 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+
+      # LiteLLM model routing (YOL-512) — opt in via LITELLM_BASE_URL=http://litellm:4000/v1 in .env.
+      LITELLM_BASE_URL: "${LITELLM_BASE_URL:-}"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
     # To use local STDIO MCP servers, copy local-mcp-servers.json.example to
     # local-mcp-servers.json, fill it in, then uncomment these lines:
     volumes:

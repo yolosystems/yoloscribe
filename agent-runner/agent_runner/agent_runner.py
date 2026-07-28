@@ -116,7 +116,25 @@ def _resolve_model_key(*env_vars: str) -> str:
     return _DEFAULT_MODEL_KEY
 
 
+def _build_litellm_model(model_key: str, base_url: str):
+    """OpenAI-compatible Strands model pointed at the LiteLLM proxy (YOL-512).
+
+    Model key passes straight through as the OpenAI `model`; LiteLLM's config
+    maps it to a provider. Keeps provider branching out of the runner.
+    """
+    from openai import AsyncOpenAI
+    from strands.models.openai import OpenAIModel
+
+    api_key = os.environ.get("LITELLM_API_KEY", "").strip() or "sk-litellm-local"
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    return OpenAIModel(client=client, model_id=model_key or _DEFAULT_MODEL_KEY)
+
+
 def _build_model(model_key: str):
+    litellm_base_url = os.environ.get("LITELLM_BASE_URL", "").strip()
+    if litellm_base_url:
+        return _build_litellm_model(model_key, litellm_base_url)
+
     entry = _MODEL_REGISTRY.get(model_key)
     if entry is None:
         # Treat unrecognised keys as direct Bedrock model IDs or inference profile ARNs.
