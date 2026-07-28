@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from strands import Agent, tool
 
-from .models import build_strands_model, resolve_model_key
+from yoloscribe_io.models import build_strands_model, resolve_model_key
 from .base import SiteTools
 from .creator import CreatorAgent
 from yoloscribe_io import S3StorageBackend, WikiPageMarkdownFile

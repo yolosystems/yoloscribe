@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 from strands import Agent, ModelRetryStrategy, tool
 
-from .models import DEFAULT_MODEL_KEY, build_strands_model
+from yoloscribe_io.models import DEFAULT_MODEL_KEY, build_strands_model
 
 from yoloscribe_io import (
     AgentDefinition,

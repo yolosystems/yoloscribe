@@ -49,15 +49,27 @@ model_list:
       max_tokens: 16384
 
   # ── GLM via Bedrock Mantle ───────────────────────────────────────────────────
-  # The native path used aws_bedrock_token_generator.provide_token() + an
-  # OpenAI-compatible call to the Mantle base URL. Through LiteLLM this should
-  # collapse to a Bedrock-routed model (SigV4 via the proxy's AWS creds), which
-  # would drop the aws_bedrock_token_generator dependency entirely. Validate the
-  # exact `model:`/`api_base:` form against the Mantle endpoint before enabling.
-  # - model_name: glm
-  #   litellm_params:
-  #     model: bedrock/zai.glm-5
-  #     aws_region_name: os.environ/AWS_REGION
+  # NEEDS LIVE VALIDATION against the Mantle endpoint (requires AWS creds with
+  # Mantle access — validate before shipping; the native provide_token() path has
+  # been removed under YOL-512, so this is now the only route to `glm`).
+  #
+  # Primary form — LiteLLM's Bedrock provider does SigV4 with the proxy's AWS
+  # creds against a custom Bedrock runtime endpoint, dropping the
+  # aws_bedrock_token_generator dependency entirely (the ideal outcome):
+  - model_name: glm
+    litellm_params:
+      model: bedrock/zai.glm-5
+      aws_region_name: os.environ/AWS_REGION
+      aws_bedrock_runtime_endpoint: https://bedrock-mantle.us-west-2.api.aws
+  # Fallback if Mantle only accepts its OpenAI-compatible `/v1` shape (not the
+  # native Bedrock Converse/Invoke API): treat it as an OpenAI endpoint. Note the
+  # api_key must be a valid Mantle bearer — a static key will expire, so this form
+  # only works if LiteLLM can mint/refresh it (verify):
+  #   - model_name: glm
+  #     litellm_params:
+  #       model: openai/zai.glm-5
+  #       api_base: https://bedrock-mantle.us-west-2.api.aws/v1
+  #       api_key: os.environ/MANTLE_API_KEY
 
 general_settings:
   # Must start with "sk-". YoloScribe presents this (or a per-user virtual key,

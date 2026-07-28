@@ -20,7 +20,6 @@ dependencies = [
     "bleach>=6.3.0",
     "python-json-logger>=3.2.0",
     "openai>=2.41.1",
-    "aws-bedrock-token-generator>=1.1.0",
 ]
 
 [tool.uv]

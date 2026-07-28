@@ -46,9 +46,11 @@ from yoloscribe_io import (
     S3StorageBackend,
     TokenData,
     ToolToken,
+    build_strands_model,
     load_tool_config,
     parse_agent_md,
     parse_skill_md,
+    resolve_model_key,
 )
 from .mcp_client import HttpMCPClient, StorageMCPClient
 from .agents import (
@@ -92,73 +94,6 @@ S3_VECTORS_INDEX_NAME: str = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 TOKEN_BUDGET_DEFAULT_DAILY_LIMIT: int = int(os.environ.get("TOKEN_BUDGET_DEFAULT_DAILY_LIMIT", "500000"))
-
-# ── Inline model registry ─────────────────────────────────────────────────────
-
-_MODEL_REGISTRY: dict[str, tuple[str, str]] = {
-    # key → (provider, model_id)
-    "haiku":          ("anthropic", "claude-haiku-4-5-20251001"),
-    "sonnet":         ("anthropic", "claude-sonnet-4-6"),
-    "opus":           ("anthropic", "claude-opus-4-6"),
-    "glm":            ("openai",    "zai.glm-5"),
-    "bedrock-haiku":  ("bedrock",   "anthropic.claude-haiku-4-5-20251001-v1:0"),
-    "bedrock-sonnet": ("bedrock",   "anthropic.claude-sonnet-4-6-20250514-v1:0"),
-    "bedrock-opus":   ("bedrock",   "anthropic.claude-opus-4-6-20250514-v1:0"),
-}
-_DEFAULT_MODEL_KEY = "sonnet"
-
-
-def _resolve_model_key(*env_vars: str) -> str:
-    for var in env_vars:
-        val = os.environ.get(var, "").strip()
-        if val:
-            return val
-    return _DEFAULT_MODEL_KEY
-
-
-def _build_litellm_model(model_key: str, base_url: str):
-    """OpenAI-compatible Strands model pointed at the LiteLLM proxy (YOL-512).
-
-    Model key passes straight through as the OpenAI `model`; LiteLLM's config
-    maps it to a provider. Keeps provider branching out of the runner.
-    """
-    from openai import AsyncOpenAI
-    from strands.models.openai import OpenAIModel
-
-    api_key = os.environ.get("LITELLM_API_KEY", "").strip() or "sk-litellm-local"
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-    return OpenAIModel(client=client, model_id=model_key or _DEFAULT_MODEL_KEY)
-
-
-def _build_model(model_key: str):
-    litellm_base_url = os.environ.get("LITELLM_BASE_URL", "").strip()
-    if litellm_base_url:
-        return _build_litellm_model(model_key, litellm_base_url)
-
-    entry = _MODEL_REGISTRY.get(model_key)
-    if entry is None:
-        # Treat unrecognised keys as direct Bedrock model IDs or inference profile ARNs.
-        from strands.models.bedrock import BedrockModel
-        model_id = model_key if model_key else _MODEL_REGISTRY[_DEFAULT_MODEL_KEY][1]
-        return BedrockModel(model_id=model_id, max_tokens=16384)
-    provider, model_id = entry
-    if provider == "openai":
-        from openai import AsyncOpenAI
-        from strands.models.openai import OpenAIModel
-        from aws_bedrock_token_generator import provide_token
-        base_url = os.environ.get("YOLOSCRIBE_MODEL_BASE_URL", "https://bedrock-mantle.us-west-2.api.aws/v1").strip()
-        client = AsyncOpenAI(api_key=provide_token(), base_url=base_url, project="default")
-        return OpenAIModel(client=client, model_id=model_id)
-    if provider == "anthropic":
-        from strands.models.anthropic import AnthropicModel
-        return AnthropicModel(
-            model_id=model_id,
-            max_tokens=16384,
-            client_args={"max_retries": 0},
-        )
-    else:
-        from strands.models.bedrock import BedrockModel
-        return BedrockModel(model_id=model_id, max_tokens=16384)
 
 # ── Inline token budget client ────────────────────────────────────────────────
 
@@ -1038,10 +973,10 @@ def main() -> None:
                 mcp_tools = _apply_read_limit(mcp_tools, AGENT_RUNNER_MAX_PAGE_READS)
                 log.info("Page read limit: %d wiki_read calls per run", AGENT_RUNNER_MAX_PAGE_READS)
 
-                model_key = agent_def.model or _resolve_model_key(
+                model_key = agent_def.model or resolve_model_key(
                     "YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL"
                 )
-                model = _build_model(model_key)
+                model = build_strands_model(model_key)
                 log.info("Using model key '%s' for agent '%s'", model_key, agent_def.name)
 
                 # 4. Create the typed agent and run it.
@@ -1102,7 +1037,7 @@ def main() -> None:
             import datetime as _dt
             from .trace_fetcher import write_eval_annotation_log
             _run_at = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            _model_key = agent_def.model or _resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL")
+            _model_key = agent_def.model or resolve_model_key("YOLOSCRIBE_RUNNER_MODEL", "YOLOSCRIBE_MODEL")
             write_eval_annotation_log(
                 session_id=_session_id,
                 agent_name=agent_def.name,
