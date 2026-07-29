@@ -12,9 +12,12 @@ from opentelemetry.trace import StatusCode
 from pydantic import BaseModel
 from starlette.requests import Request
 
+from yoloscribe_io import use_request_litellm_key
+
 from agents.messaging import MessagingAgent
 from auth import get_user_context
 from config import S3_BUCKET, s3, token_budget_repo
+from credentials import load_litellm_key
 from message_history import append_history, get_history
 from models import TokenBudgetInfo
 from rate_limit import limiter
@@ -23,7 +26,16 @@ from token_budget import _resets_at_utc
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.message")
 
-_messaging_agent = MessagingAgent(s3=s3, bucket=S3_BUCKET)
+# Lazily instantiated singleton — built on first request, not at import (so a
+# missing LITELLM_BASE_URL doesn't break module import).
+_messaging_agent: MessagingAgent | None = None
+
+
+def _get_messaging_agent() -> MessagingAgent:
+    global _messaging_agent
+    if _messaging_agent is None:
+        _messaging_agent = MessagingAgent(s3=s3, bucket=S3_BUCKET)
+    return _messaging_agent
 
 
 class MessageRequest(BaseModel):
@@ -93,7 +105,9 @@ async def message(
         _span.set_attribute("input.value", req.message)
 
         try:
-            reply, tokens_used = _messaging_agent.run(
+            agent = _get_messaging_agent()
+            use_request_litellm_key(load_litellm_key(user_id))  # user's budgeted key (YOL-513)
+            reply, tokens_used = agent.run(
                 message=req.message,
                 site=site,
                 history=history,

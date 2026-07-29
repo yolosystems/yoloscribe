@@ -774,6 +774,16 @@ def main() -> None:
     storage = S3StorageBackend(BUCKET, s3)
     store = _make_secrets_store(s3)
 
+    # Route this run's model calls through the user's budgeted LiteLLM virtual key
+    # (YOL-513). Single-user process, so setting the env inference key is enough;
+    # falls back to the shared LITELLM_API_KEY when the user has none provisioned.
+    try:
+        _user_litellm_key = store.get(f"yoloscribe/{USER_ID}/litellm-key")
+        if _user_litellm_key:
+            os.environ["LITELLM_API_KEY"] = _user_litellm_key
+    except Exception as exc:
+        log.warning("Could not load LiteLLM key for user %s: %s", USER_ID, exc)
+
     _budget: _SupabaseBudget | None = (
         _SupabaseBudget(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
         if not LOCAL_MODE and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY

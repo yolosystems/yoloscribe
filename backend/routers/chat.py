@@ -5,9 +5,12 @@ from opentelemetry import trace as _ot
 from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 
+from yoloscribe_io import use_request_litellm_key
+
 from agents import LibrarianAgent
 from auth import get_user_context, require_site_owner
 from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs, token_budget_repo
+from credentials import load_litellm_key
 from models import ChatRequest, ChatResponse, TokenBudgetInfo
 from rate_limit import limiter
 from path_safety import is_safe_path
@@ -17,15 +20,23 @@ from token_budget import _resets_at_utc
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.chat")
 
-# Module-level singleton — instantiated once at startup.
-_chat_agent = LibrarianAgent(
-    s3=s3,
-    bucket=S3_BUCKET,
-    sqs_client=sqs,
-    sqs_queue_url=SQS_QUEUE_URL,
-    secrets_store=secrets_store,
-    api_token_repo=api_token_repo,
-)
+# Lazily instantiated singleton — built on first request, not at import (so a
+# missing LITELLM_BASE_URL doesn't break module import; see build_strands_model).
+_chat_agent: LibrarianAgent | None = None
+
+
+def _get_chat_agent() -> LibrarianAgent:
+    global _chat_agent
+    if _chat_agent is None:
+        _chat_agent = LibrarianAgent(
+            s3=s3,
+            bucket=S3_BUCKET,
+            sqs_client=sqs,
+            sqs_queue_url=SQS_QUEUE_URL,
+            secrets_store=secrets_store,
+            api_token_repo=api_token_repo,
+        )
+    return _chat_agent
 
 
 @router.post(
@@ -84,7 +95,11 @@ async def chat(
         _span.set_attribute("input.value", req.message)
 
         try:
-            reply, updated_content, navigate_to, tokens_used = _chat_agent.run(
+            # Build the singleton first (its base model uses the shared key), then
+            # bind the user's budgeted virtual key for this request's models (YOL-513).
+            agent = _get_chat_agent()
+            use_request_litellm_key(load_litellm_key(user_id))
+            reply, updated_content, navigate_to, tokens_used = agent.run(
                 message=req.message,
                 current_content=req.current_content,
                 history=history,
