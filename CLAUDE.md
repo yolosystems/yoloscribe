@@ -283,6 +283,8 @@ Provider / model / credential resolution lives in the **LiteLLM config**, not in
 
 **Policy that stays in YoloScribe:** the per-agent-type defaults (`YOLOSCRIBE_CHAT_MODEL`, `YOLOSCRIBE_WRITER_MODEL`, `YOLOSCRIBE_CREATOR_MODEL`, `YOLOSCRIBE_RUNNER_MODEL` → `YOLOSCRIBE_MODEL` fallback) — which agent prefers which tier — via `resolve_model_key(...)`.
 
+**Embeddings deliberately bypass LiteLLM.** The indexer and the search backend call **Bedrock directly** for embeddings (`amazon.titan-embed-*` → S3 Vectors) — this is intentional, not an oversight. The embedding model is effectively fixed (switching it forces a full re-index), so the provider-flexibility LiteLLM buys has no value here; the tradeoff is that embedding spend isn't metered against a user's virtual key (fine — indexing is background platform work, not user chat). Route it through LiteLLM only if you later want unified spend/observability.
+
 Deployment: LiteLLM is a separate service (its official `berriai/litellm-helm` chart, or the `litellm` service in `docker-compose.yml` for local dev). See YOL-505 for the full deployment approach.
 
 Copy `env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.
