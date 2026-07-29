@@ -19,8 +19,9 @@ interface Message {
 }
 
 interface TokenBudget {
+  // LiteLLM virtual-key budget (YOL-513): spend + max_budget in $, not tokens.
   used: number
-  limit: number
+  limit: number | null
   resets_at: string
 }
 
@@ -295,7 +296,9 @@ export default function ChatPanel({
         </button>
         {tokenBudget && (
           <div className="chat-token-budget">
-            {tokenBudget.used.toLocaleString()} / {tokenBudget.limit.toLocaleString()} tokens today
+            {tokenBudget.limit != null
+              ? `$${tokenBudget.used.toFixed(2)} / $${tokenBudget.limit.toFixed(2)} spent`
+              : `$${tokenBudget.used.toFixed(2)} spent`}
           </div>
         )}
       </div>

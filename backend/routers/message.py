@@ -12,18 +12,29 @@ from opentelemetry.trace import StatusCode
 from pydantic import BaseModel
 from starlette.requests import Request
 
+from yoloscribe_io import use_request_litellm_key
+
 from agents.messaging import MessagingAgent
 from auth import get_user_context
-from config import S3_BUCKET, s3, token_budget_repo
+from config import S3_BUCKET, s3
+from credentials import get_user_budget, load_litellm_key
 from message_history import append_history, get_history
 from models import TokenBudgetInfo
 from rate_limit import limiter
-from token_budget import _resets_at_utc
 
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.message")
 
-_messaging_agent = MessagingAgent(s3=s3, bucket=S3_BUCKET)
+# Lazily instantiated singleton — built on first request, not at import (so a
+# missing LITELLM_BASE_URL doesn't break module import).
+_messaging_agent: MessagingAgent | None = None
+
+
+def _get_messaging_agent() -> MessagingAgent:
+    global _messaging_agent
+    if _messaging_agent is None:
+        _messaging_agent = MessagingAgent(s3=s3, bucket=S3_BUCKET)
+    return _messaging_agent
 
 
 class MessageRequest(BaseModel):
@@ -68,20 +79,8 @@ async def message(
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message is required")
 
-    budget_used = 0
-    budget_limit = 0
-    if token_budget_repo is not None:
-        budget_used = token_budget_repo.get_used(user_id)
-        budget_limit = token_budget_repo.get_limit(user_id)
-        if budget_used >= budget_limit:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Daily token budget exhausted "
-                    f"({budget_used:,} / {budget_limit:,} tokens used). "
-                    f"Resets at UTC midnight."
-                ),
-            )
+    # Budget enforcement is now LiteLLM's job (the user's key returns 429 when
+    # exhausted); no pre-flight check here.
 
     history = get_history(user_id, req.platform, req.channel_id)
 
@@ -93,7 +92,9 @@ async def message(
         _span.set_attribute("input.value", req.message)
 
         try:
-            reply, tokens_used = _messaging_agent.run(
+            agent = _get_messaging_agent()
+            use_request_litellm_key(load_litellm_key(user_id))  # user's budgeted key (YOL-513)
+            reply, tokens_used = agent.run(
                 message=req.message,
                 site=site,
                 history=history,
@@ -108,14 +109,7 @@ async def message(
 
     append_history(user_id, req.platform, req.channel_id, req.message, reply)
 
-    token_budget: TokenBudgetInfo | None = None
-    if token_budget_repo is not None:
-        if tokens_used > 0:
-            token_budget_repo.record_usage(user_id, tokens_used)
-        token_budget = TokenBudgetInfo(
-            used=budget_used + tokens_used,
-            limit=budget_limit,
-            resets_at=_resets_at_utc(),
-        )
+    budget = get_user_budget(user_id)
+    token_budget = TokenBudgetInfo(**budget) if budget else None
 
     return MessageResponse(reply=reply, token_budget=token_budget)

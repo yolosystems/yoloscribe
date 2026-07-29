@@ -27,7 +27,7 @@ from .agent_page import (
 )
 from .events import Event, EventEmitter, EventHandler, EventType, LoggerEventHandler
 from .markdown_file import MarkdownFile
-from .models import DEFAULT_MODEL_KEY, build_strands_model, resolve_model_key
+from .models import DEFAULT_MODEL_KEY, build_strands_model, resolve_model_key, use_request_litellm_key
 from .wiki_page import (
     OnWriteEventHandler,
     PageSettings,
@@ -91,6 +91,7 @@ __all__ = [
     "DEFAULT_MODEL_KEY",
     "build_strands_model",
     "resolve_model_key",
+    "use_request_litellm_key",
     "OnWriteEventHandler",
     "PageSettings",
     "S3StorageBackend",

@@ -24,6 +24,10 @@ def oauth_secret_id(user_id: str, tool_name: str) -> str:
     return f"{_SM_SECRET_PREFIX}/{user_id}/oauth/{tool_name}"
 
 
+def litellm_key_secret_id(user_id: str) -> str:
+    return f"{_SM_SECRET_PREFIX}/{user_id}/litellm-key"
+
+
 # ── Tool introspection ─────────────────────────────────────────────────────────
 
 def is_remote_tool(tool_name: str) -> bool:
@@ -138,6 +142,48 @@ def save_oauth_token(user_id: str, tool_name: str, token_blob: dict) -> None:
 
 def secret_exists(user_id: str, var_name: str) -> bool:
     return secrets_store.exists(secret_id(user_id, var_name))
+
+
+# ── LiteLLM per-user virtual key (YOL-513) ────────────────────────────────────
+
+def load_litellm_key(user_id: str) -> str | None:
+    """Return the user's LiteLLM virtual key, or None if not provisioned."""
+    return secrets_store.get(litellm_key_secret_id(user_id))
+
+
+def save_litellm_key(user_id: str, key: str) -> None:
+    """Store the user's LiteLLM virtual key."""
+    secrets_store.put(
+        litellm_key_secret_id(user_id),
+        key,
+        description=f"LiteLLM virtual key for user {user_id}",
+    )
+
+
+def delete_litellm_key(user_id: str) -> None:
+    """Delete the user's stored LiteLLM virtual key (no-op if absent)."""
+    secrets_store.delete(litellm_key_secret_id(user_id))
+
+
+def get_user_budget(user_id: str) -> dict | None:
+    """Return {used, limit, resets_at} from the user's LiteLLM key, or None.
+
+    NOTE unit shift from the old Supabase budget: `used` is the key's *spend* and
+    `limit` its *max_budget* — LiteLLM's budget unit ($ by default), not tokens.
+    """
+    from litellm_keys import key_info
+
+    key = load_litellm_key(user_id)
+    if not key:
+        return None
+    info = key_info(key)
+    if not info:
+        return None
+    return {
+        "used": info.get("spend") or 0,
+        "limit": info.get("max_budget"),
+        "resets_at": info.get("budget_reset_at") or "",
+    }
 
 
 # ── User settings (enabled tools) ─────────────────────────────────────────────
