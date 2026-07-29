@@ -33,6 +33,7 @@ COPY backend/agents/ ./agents/
 COPY backend/auth_providers/ ./auth_providers/
 COPY backend/aws/ ./aws/
 COPY backend/routers/ ./routers/
+COPY backend/signal_sinks/ ./signal_sinks/
 
 # Run as a non-root user
 RUN useradd --no-create-home --shell /bin/false appuser \
