@@ -24,6 +24,10 @@ def oauth_secret_id(user_id: str, tool_name: str) -> str:
     return f"{_SM_SECRET_PREFIX}/{user_id}/oauth/{tool_name}"
 
 
+def litellm_key_secret_id(user_id: str) -> str:
+    return f"{_SM_SECRET_PREFIX}/{user_id}/litellm-key"
+
+
 # ── Tool introspection ─────────────────────────────────────────────────────────
 
 def is_remote_tool(tool_name: str) -> bool:
@@ -138,6 +142,27 @@ def save_oauth_token(user_id: str, tool_name: str, token_blob: dict) -> None:
 
 def secret_exists(user_id: str, var_name: str) -> bool:
     return secrets_store.exists(secret_id(user_id, var_name))
+
+
+# ── LiteLLM per-user virtual key (YOL-513) ────────────────────────────────────
+
+def load_litellm_key(user_id: str) -> str | None:
+    """Return the user's LiteLLM virtual key, or None if not provisioned."""
+    return secrets_store.get(litellm_key_secret_id(user_id))
+
+
+def save_litellm_key(user_id: str, key: str) -> None:
+    """Store the user's LiteLLM virtual key."""
+    secrets_store.put(
+        litellm_key_secret_id(user_id),
+        key,
+        description=f"LiteLLM virtual key for user {user_id}",
+    )
+
+
+def delete_litellm_key(user_id: str) -> None:
+    """Delete the user's stored LiteLLM virtual key (no-op if absent)."""
+    secrets_store.delete(litellm_key_secret_id(user_id))
 
 
 # ── User settings (enabled tools) ─────────────────────────────────────────────

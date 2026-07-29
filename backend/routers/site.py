@@ -7,6 +7,8 @@ from starlette.requests import Request
 from auth import get_user_context, require_site_owner
 from rate_limit import limiter
 from aws.infra import deprovision_user_infrastructure, provision_user_infrastructure
+from credentials import delete_litellm_key, load_litellm_key, save_litellm_key
+from litellm_keys import delete_user_key, mint_user_key
 from config import CLOUDFRONT_DOMAIN, LOCAL_MODE, S3_BUCKET, auth_provider, user_site_repo, s3
 from models import ProvisionRequest, ProvisionResponse
 from defaults import DEFAULT_WELCOME_MD
@@ -94,6 +96,15 @@ async def provision(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    # Mint a per-user LiteLLM virtual key with a daily budget (YOL-513). Best-effort:
+    # if the proxy is unavailable the user falls back to the shared key until re-minted.
+    litellm_key = mint_user_key(user_id)
+    if litellm_key:
+        try:
+            save_litellm_key(user_id, litellm_key)
+        except Exception as exc:
+            logging.warning("Failed to store LiteLLM key for %s: %s", user_id, exc)
+
     site_url = (
         f"https://{CLOUDFRONT_DOMAIN}/{req.site_name}"
         if CLOUDFRONT_DOMAIN
@@ -124,6 +135,12 @@ async def delete_account(
             delete_s3_prefix(site_name)
         except Exception as exc:
             logging.warning("S3 prefix delete warning for %s: %s", site_name, exc)
+
+    # Revoke the user's LiteLLM virtual key from the proxy, then drop the secret (YOL-513).
+    existing_key = load_litellm_key(user_id)
+    if existing_key:
+        delete_user_key(existing_key)
+    delete_litellm_key(user_id)
 
     await deprovision_user_infrastructure(user_id, site_name)
 
