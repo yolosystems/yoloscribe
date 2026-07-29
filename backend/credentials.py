@@ -165,6 +165,27 @@ def delete_litellm_key(user_id: str) -> None:
     secrets_store.delete(litellm_key_secret_id(user_id))
 
 
+def get_user_budget(user_id: str) -> dict | None:
+    """Return {used, limit, resets_at} from the user's LiteLLM key, or None.
+
+    NOTE unit shift from the old Supabase budget: `used` is the key's *spend* and
+    `limit` its *max_budget* — LiteLLM's budget unit ($ by default), not tokens.
+    """
+    from litellm_keys import key_info
+
+    key = load_litellm_key(user_id)
+    if not key:
+        return None
+    info = key_info(key)
+    if not info:
+        return None
+    return {
+        "used": info.get("spend") or 0,
+        "limit": info.get("max_budget"),
+        "resets_at": info.get("budget_reset_at") or "",
+    }
+
+
 # ── User settings (enabled tools) ─────────────────────────────────────────────
 
 def get_user_settings(site: str) -> dict:

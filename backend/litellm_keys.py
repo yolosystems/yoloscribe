@@ -64,6 +64,30 @@ def mint_user_key(
         return None
 
 
+def key_info(key: str) -> dict | None:
+    """Return a virtual key's LiteLLM metadata (spend, max_budget, budget_reset_at,
+    …), or None if unavailable. Uses the master key to query by key value."""
+    if not key:
+        return None
+    base, admin_key = _admin()
+    if not base or not admin_key:
+        return None
+    try:
+        resp = httpx.get(
+            f"{base}/key/info",
+            params={"key": key},
+            headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        info = data.get("info", data) if isinstance(data, dict) else {}
+        return info if isinstance(info, dict) else None
+    except Exception as exc:
+        log.warning("LiteLLM key_info failed: %s", exc)
+        return None
+
+
 def delete_user_key(key: str) -> None:
     """Delete a virtual key from the proxy (best-effort; never raises)."""
     if not key:

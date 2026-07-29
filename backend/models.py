@@ -39,9 +39,11 @@ class ChatRequest(BaseModel):
 
 
 class TokenBudgetInfo(BaseModel):
-    used: int
-    limit: int
-    resets_at: str  # ISO-8601 UTC midnight
+    # From the user's LiteLLM virtual key (YOL-513): `used` is spend, `limit` is
+    # max_budget — LiteLLM's budget unit ($ by default), NOT tokens.
+    used: float
+    limit: float | None = None
+    resets_at: str  # ISO-8601; LiteLLM budget_reset_at (empty if unbounded)
 
 
 class ChatResponse(BaseModel):

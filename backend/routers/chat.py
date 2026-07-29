@@ -9,13 +9,12 @@ from yoloscribe_io import use_request_litellm_key
 
 from agents import LibrarianAgent
 from auth import get_user_context, require_site_owner
-from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs, token_budget_repo
-from credentials import load_litellm_key
+from config import S3_BUCKET, SQS_QUEUE_URL, api_token_repo, s3, secrets_store, sqs
+from credentials import get_user_budget, load_litellm_key
 from models import ChatRequest, ChatResponse, TokenBudgetInfo
 from rate_limit import limiter
 from path_safety import is_safe_path
 from queue_helpers import enqueue_index_job
-from token_budget import _resets_at_utc
 
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.chat")
@@ -63,22 +62,8 @@ async def chat(
     if not is_safe_path(req.file_path):
         raise HTTPException(status_code=400, detail="Invalid file_path")
 
-    # Pre-flight budget check — reject before touching the LLM if exhausted.
-    budget_used = 0
-    budget_limit = 0
-    if token_budget_repo is not None:
-        budget_used = token_budget_repo.get_used(user_id)
-        budget_limit = token_budget_repo.get_limit(user_id)
-        if budget_used >= budget_limit:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Daily token budget exhausted "
-                    f"({budget_used:,} / {budget_limit:,} tokens used). "
-                    f"Resets at UTC midnight."
-                ),
-            )
-
+    # Budget enforcement is now LiteLLM's job (the user's virtual key returns 429
+    # when exhausted); no pre-flight check here.
     history = [
         {"role": m.role, "content": m.content}
         for m in req.history
@@ -123,17 +108,9 @@ async def chat(
         if req.file_path == "content.md" or req.file_path.endswith("/content.md"):
             enqueue_index_job(content_key, user_id)
 
-    # Record usage and build budget response.
-    token_budget: TokenBudgetInfo | None = None
-    if token_budget_repo is not None:
-        if tokens_used > 0:
-            token_budget_repo.record_usage(user_id, tokens_used)
-        new_used = budget_used + tokens_used
-        token_budget = TokenBudgetInfo(
-            used=new_used,
-            limit=budget_limit,
-            resets_at=_resets_at_utc(),
-        )
+    # Budget/usage is metered by LiteLLM on the user's key; surface it for the UI.
+    budget = get_user_budget(user_id)
+    token_budget = TokenBudgetInfo(**budget) if budget else None
 
     return ChatResponse(
         reply=reply,
