@@ -50,6 +50,15 @@ spec:
             - name: YOLOSCRIBE_MODEL
               value: {{ .Values.config.model | quote }}
             {{- end }}
+            {{- if .Values.config.litellmBaseUrl }}
+            - name: LITELLM_BASE_URL
+              value: {{ .Values.config.litellmBaseUrl | quote }}
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-agent-runner.secretName" . }}
+                  key: {{ .Values.litellmExistingSecretKey | default "litellm-api-key" }}
+            {{- end }}
             {{- if .Values.config.runnerModel }}
             - name: YOLOSCRIBE_RUNNER_MODEL
               value: {{ .Values.config.runnerModel | quote }}

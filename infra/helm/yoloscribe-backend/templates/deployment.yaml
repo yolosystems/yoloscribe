@@ -129,6 +129,15 @@ spec:
             - name: YOLOSCRIBE_MODEL
               value: {{ .Values.config.model | quote }}
             {{- end }}
+            {{- if .Values.config.litellmBaseUrl }}
+            - name: LITELLM_BASE_URL
+              value: {{ .Values.config.litellmBaseUrl | quote }}
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.secretName" . }}
+                  key: {{ .Values.litellmExistingSecretKey | default "litellm-api-key" }}
+            {{- end }}
             {{- if .Values.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

@@ -25,9 +25,12 @@ config:
   # Optional Anthropic API base URL override (leave empty to use the Anthropic default).
   # Set to a Bedrock Mantle endpoint to route all Anthropic model calls through it.
   modelBaseUrl: ""
-  # Global model registry key fallback, shared with the backend (haiku|sonnet|opus|glm|bedrock-*).
+  # Global model key fallback, shared with the backend (a LiteLLM model_name: haiku|sonnet|opus|glm|bedrock-*).
   # Leave empty to use "sonnet".
   model: ""
+  # LiteLLM proxy OpenAI endpoint — the single model path (YOL-512). REQUIRED for a
+  # working deploy; e.g. http://yoloscribe-litellm.yolo.svc.cluster.local:4000/v1
+  litellmBaseUrl: ""
   # agent-runner-specific override: used when an agent.md has no `model:` frontmatter field.
   # Falls back to `model` above, then "sonnet", when unset.
   runnerModel: ""
@@ -57,6 +60,12 @@ otel:
 existingSecret: ""
 existingSecretKey: anthropic-api-key
 anthropicApiKey: ""
+
+# ── LiteLLM proxy API key (YOL-512) — the key the runner presents to the proxy.
+# Passed via --set by install_runner.sh (from $LITELLM_MASTER_KEY); with
+# existingSecret, add this key to that secret.
+litellmApiKey: ""
+litellmExistingSecretKey: litellm-api-key
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:

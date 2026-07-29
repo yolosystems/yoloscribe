@@ -88,7 +88,7 @@ All writable paths must pass `SAFE_PATH` in `main.py`. Allowed patterns:
 ### Agent framework (Strands Agents)
 All agents inherit from `BaseAgent` (`backend/agents/base.py`), which itself inherits from `strands.Agent`. Each class has a `SYSTEM_PROMPT` class variable (a Python format-string; placeholders are filled via `**prompt_vars` in the constructor).
 
-The model is `AnthropicModel` from `strands.models.anthropic`, defaulting to `DEFAULT_MODEL = "claude-opus-4-6"` (see `base.py`). The model can be overridden at runtime via the `YOLOSCRIBE_MODEL` env var.
+The model is built by `yoloscribe_io.models.build_strands_model(key)` — an OpenAI-compatible Strands model pointed at the LiteLLM proxy (`LITELLM_BASE_URL`); see [Model routing (LiteLLM)](#model-routing-litellm) below. The key defaults to `DEFAULT_MODEL_KEY = "sonnet"` and is overridable per agent via `YOLOSCRIBE_*_MODEL` env vars or the `model:` frontmatter field.
 
 **Agent hierarchy:**
 
@@ -249,14 +249,16 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `ALLOWED_ORIGINS` | backend | Comma-separated CORS origins |
 | `LOG_LEVEL` | backend + agent-runner | Root log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`); default: `INFO` |
 | `AWS_PROFILE` | backend | Optional named AWS profile |
-| `YOLOSCRIBE_MODEL` | backend + agent-runner | Global model key fallback (see model registry below) |
+| `LITELLM_BASE_URL` | backend + agent-runner | **Required.** LiteLLM proxy OpenAI endpoint (e.g. `http://litellm:4000/v1`) — the single model path (YOL-512) |
+| `LITELLM_API_KEY` | backend + agent-runner | Key presented to the LiteLLM proxy (matches its master key, or a per-user virtual key under YOL-513) |
+| `YOLOSCRIBE_MODEL` | backend + agent-runner | Global model-key fallback (a LiteLLM `model_name`; see Model routing below) |
 | `YOLOSCRIBE_CHAT_MODEL` | backend | ChatAgent (orchestrator) model key |
 | `YOLOSCRIBE_WRITER_MODEL` | backend | ContentWriterAgent model key (default: `haiku`) |
 | `YOLOSCRIBE_CREATOR_MODEL` | backend | CreatorAgent / PageCreatorAgent model key (default: `sonnet`) |
 | `YOLOSCRIBE_RUNNER_MODEL` | agent-runner | agent-runner default when `agent.md` has no `## Model` section |
 | `YOLOSCRIBE_MEMORY_REASONER_MODEL` | agent-runner | Per-signal `HaikuMemoryReasoner` model key (default: `haiku`); Anthropic-provider keys only |
 | `YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL` | agent-runner | Nightly `ConsolidationMemoryReasoner` model key (default: `sonnet`); Anthropic-provider keys only |
-| `YOLOSCRIBE_MODEL_BASE_URL` | backend + agent-runner | Optional base URL for the Anthropic API client (e.g. a Bedrock Mantle endpoint); when set, all Anthropic model calls are directed to this URL instead of the default |
+| `YOLOSCRIBE_MODEL_BASE_URL` | agent-runner | Optional Anthropic API base URL for the Librarian memory reasoners only (main model path uses `LITELLM_BASE_URL`); slated for removal with the Librarian (YOL-509) |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `PHOENIX_API_ENDPOINT` | backend + agent-runner | Base URL for the Arize Phoenix REST API (e.g. `http://phoenix:6006`); enables `annotate_trace` MCP tool and eval annotation log post-processing |
 | `CLOUDFRONT_SIGNING_KEY_ID` | backend | CloudFront key pair ID for signed-cookie media auth (e.g. `K2JCJMDEHXQW5F`) |
@@ -273,20 +275,14 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
 
-### Model registry keys
+### Model routing (LiteLLM)
 
-Valid model keys for all `YOLOSCRIBE_*_MODEL` env vars and the `model:` frontmatter field in `agent.md`:
+As of YOL-512, **all** model calls route through a **LiteLLM proxy** — there is no native per-provider model building in YoloScribe. `yoloscribe_io.models.build_strands_model(key)` returns an OpenAI-compatible Strands model pointed at `LITELLM_BASE_URL`, passing the model key straight through as the OpenAI `model`. Both backend and agent-runner use this single shared builder (`libs/yoloscribe_io/yoloscribe_io/models.py`); there is no longer a `backend/agents/models.py` or an inline `_MODEL_REGISTRY` in the runner.
 
-| Key | Provider | Model |
-|---|---|---|
-| `haiku` | Anthropic | claude-haiku-4-5-20251001 |
-| `sonnet` | Anthropic | claude-sonnet-4-6 |
-| `opus` | Anthropic | claude-opus-4-6 |
-| `glm` | OpenAI (Bedrock Mantle) | zai.glm-5 |
-| `bedrock-haiku` | Bedrock | claude-haiku-4-5 (cross-region) |
-| `bedrock-sonnet` | Bedrock | claude-sonnet-4-6 (cross-region) |
-| `bedrock-opus` | Bedrock | claude-opus-4-6 (cross-region) |
+Provider / model / credential resolution lives in the **LiteLLM config**, not in YoloScribe code. The model keys used by `YOLOSCRIBE_*_MODEL` env vars and the `model:` frontmatter field (`haiku`, `sonnet`, `opus`, `glm`, `bedrock-*`) are the `model_name` entries in `infra/litellm/config.example.yaml` — edit that file (or your deployed LiteLLM config) to add/change models, credentials, or providers. `LITELLM_BASE_URL` must be set; there is no per-provider fallback. Empty keys resolve to `DEFAULT_MODEL_KEY` (`sonnet`).
 
-Unrecognised keys fall back to `sonnet`.
+**Policy that stays in YoloScribe:** the per-agent-type defaults (`YOLOSCRIBE_CHAT_MODEL`, `YOLOSCRIBE_WRITER_MODEL`, `YOLOSCRIBE_CREATOR_MODEL`, `YOLOSCRIBE_RUNNER_MODEL` → `YOLOSCRIBE_MODEL` fallback) — which agent prefers which tier — via `resolve_model_key(...)`.
+
+Deployment: LiteLLM is a separate service (its official `berriai/litellm-helm` chart, or the `litellm` service in `docker-compose.yml` for local dev). See YOL-505 for the full deployment approach.
 
 Copy `env.example` to `.env` at the project root for local development. All scripts and the backend dev server load from there.

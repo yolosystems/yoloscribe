@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .base import BaseAgent, SiteTools
-from .models import resolve_model_key
+from yoloscribe_io.models import resolve_model_key
 
 
 class CreatorAgent(BaseAgent):

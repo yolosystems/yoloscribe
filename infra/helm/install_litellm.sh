@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Deploy the LiteLLM proxy that carries YoloScribe's model routing, using the
+# OFFICIAL berriai/litellm-helm chart + a YoloScribe values file. LiteLLM's
+# infrastructure (Postgres DB, provider-credential secrets) is assumed to
+# already exist — this only deploys the proxy. See infra/helm/litellm.example.values.yaml.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../../.env"
 
-# Load root .env if present, without permanently polluting the environment
+# Load root .env if present, without permanently polluting the environment.
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck source=/dev/null
   source "$ENV_FILE"
   set +a
 fi
+
+# Official LiteLLM Helm chart. Pin LITELLM_CHART_VERSION for reproducible deploys.
+LITELLM_CHART="${LITELLM_CHART:-oci://ghcr.io/berriai/litellm-helm}"
+LITELLM_CHART_VERSION="${LITELLM_CHART_VERSION:-}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
@@ -38,30 +47,22 @@ if [[ -z "${REGION:-}" ]]; then
   exit 1
 fi
 
-VALUES_FILE="$SCRIPT_DIR/agent-runner.${STAGE}.${REGION}.values.yaml"
+if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
+  echo "Error: LITELLM_MASTER_KEY is not set in environment or .env"
+  exit 1
+fi
+
+VALUES_FILE="$SCRIPT_DIR/litellm.${STAGE}.${REGION}.values.yaml"
 if [[ ! -f "$VALUES_FILE" ]]; then
   echo "Error: values file not found: $VALUES_FILE"
   exit 1
 fi
 
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "Error: ANTHROPIC_API_KEY is not set in environment or .env"
-  exit 1
-fi
-
-if [[ -z "${GHCR_PAT:-}" ]]; then
-  echo "Error: GHCR_PAT is not set in environment or .env"
-  exit 1
-fi
-
-helm upgrade --install yoloscribe-agent-runner \
-  "$SCRIPT_DIR/yoloscribe-agent-runner" \
+helm upgrade --install yoloscribe-litellm \
+  "$LITELLM_CHART" \
+  ${LITELLM_CHART_VERSION:+--version "$LITELLM_CHART_VERSION"} \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \
-  --set anthropicApiKey="$ANTHROPIC_API_KEY" \
-  --set ghcr.pat="$GHCR_PAT" \
-  ${LITELLM_MASTER_KEY:+--set litellmApiKey="$LITELLM_MASTER_KEY"} \
-  ${OTEL_EXPORTER_OTLP_ENDPOINT:+--set otel.endpoint="$OTEL_EXPORTER_OTLP_ENDPOINT"} \
-  ${OTEL_EXPORTER_OTLP_HEADERS:+--set otel.headers="$OTEL_EXPORTER_OTLP_HEADERS"} \
+  --set masterkey="$LITELLM_MASTER_KEY" \
   "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

@@ -22,7 +22,7 @@ from .base import (
     agents_prefix,
     parse_agent_md,
 )
-from .models import build_strands_model, resolve_model_key
+from yoloscribe_io.models import build_strands_model, resolve_model_key
 from .content_writer import ContentWriterAgent
 from .creator import CreatorAgent
 from .page_creator import PageCreatorAgent

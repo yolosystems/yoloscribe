@@ -79,6 +79,32 @@ services:
     # No healthcheck — ElasticMQ starts in <100ms; wget/curl are not available
     # in the GraalVM native image.
 
+  # ── LiteLLM — model routing proxy (YOL-512) ───────────────────────────────────
+  # The single model path for backend + agent-runner (native per-provider builders
+  # were removed under YOL-512). Stateless — no DB needed for pure routing. Model
+  # groups live in infra/litellm/config.example.yaml; the Anthropic groups work
+  # with just ANTHROPIC_API_KEY, bedrock-*/glm need AWS creds below.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./infra/litellm/config.example.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness').status==200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   # ── Backend ───────────────────────────────────────────────────────────────────
   backend:
     build:
@@ -93,6 +119,8 @@ services:
         condition: service_started
       dynamodb-init:
         condition: service_completed_successfully
+      litellm:
+        condition: service_healthy
     environment:
       # Local dev flags
       LOCAL_MODE: "true"
@@ -118,6 +146,11 @@ services:
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
 
+      # LiteLLM model routing (YOL-512) — the only model path. Points at the
+      # litellm service by default; override in .env to target an external proxy.
+      LITELLM_BASE_URL: "${LITELLM_BASE_URL:-http://litellm:4000/v1}"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
+
       # DynamoDB Local
       DYNAMODB_ENDPOINT_URL: "http://dynamodb-local:8000"
       DDB_AGENT_LOCKS_TABLE: "yoloscribe-agent-locks"
@@ -137,6 +170,8 @@ services:
         condition: service_started
       dynamodb-init:
         condition: service_completed_successfully
+      litellm:
+        condition: service_healthy
     environment:
       # MinIO (S3)
       BUCKET: "${S3_BUCKET:-yoloscribe}"
@@ -163,6 +198,10 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN}"
+
+      # LiteLLM model routing (YOL-512) — the only model path. Override in .env for an external proxy.
+      LITELLM_BASE_URL: "${LITELLM_BASE_URL:-http://litellm:4000/v1}"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY:-sk-yoloscribe-local}"
     # To use local STDIO MCP servers, copy local-mcp-servers.json.example to
     # local-mcp-servers.json, fill it in, then uncomment these lines:
     volumes:

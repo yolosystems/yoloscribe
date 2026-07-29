@@ -1,0 +1,99 @@
+# YoloScribe → LiteLLM proxy — values for the OFFICIAL LiteLLM Helm chart
+# (berriai/litellm-helm), deployed via infra/helm/install_litellm.sh.
+#
+# YoloScribe does NOT bundle LiteLLM into its own app charts (unlike YoloBrain,
+# which bundles it for Honcho). This stands up a standalone LiteLLM proxy that
+# carries YoloScribe's model routing. LiteLLM's *infrastructure* — its Postgres
+# database and provider-credential secrets — is assumed to ALREADY EXIST (the
+# operator's responsibility); this only deploys the proxy pointed at that infra.
+# See YOL-505 for the full deployment rationale.
+#
+# NOTE: the value keys below follow the berriai/litellm-helm chart. Verify them
+# against the chart version you pin in install_litellm.sh — the chart's schema
+# evolves. Copy this to litellm.{STAGE}.{REGION}.values.yaml in yoloscribe-ops
+# and fill in the placeholders.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/berriai/litellm
+  tag: main-stable
+
+# ── Proxy config (becomes LiteLLM's config.yaml) ──────────────────────────────
+# model_name == the YoloScribe model key passed through as the OpenAI `model`.
+# Keep this list in sync with infra/litellm/config.example.yaml (the
+# docker-compose local-dev copy of the same routing).
+proxy_config:
+  model_list:
+    - model_name: haiku
+      litellm_params:
+        model: anthropic/claude-haiku-4-5-20251001
+        api_key: os.environ/ANTHROPIC_API_KEY
+        max_tokens: 16384
+    - model_name: sonnet
+      litellm_params:
+        model: anthropic/claude-sonnet-4-6
+        api_key: os.environ/ANTHROPIC_API_KEY
+        max_tokens: 16384
+    - model_name: opus
+      litellm_params:
+        model: anthropic/claude-opus-4-6
+        api_key: os.environ/ANTHROPIC_API_KEY
+        max_tokens: 16384
+    - model_name: bedrock-haiku
+      litellm_params:
+        model: bedrock/anthropic.claude-haiku-4-5-20251001-v1:0
+        aws_region_name: os.environ/AWS_REGION
+        max_tokens: 16384
+    - model_name: bedrock-sonnet
+      litellm_params:
+        model: bedrock/anthropic.claude-sonnet-4-6-20250514-v1:0
+        aws_region_name: os.environ/AWS_REGION
+        max_tokens: 16384
+    - model_name: bedrock-opus
+      litellm_params:
+        model: bedrock/anthropic.claude-opus-4-6-20250514-v1:0
+        aws_region_name: os.environ/AWS_REGION
+        max_tokens: 16384
+    # GLM via Bedrock Mantle — validate against the Mantle endpoint before relying
+    # on it (see infra/litellm/config.example.yaml for the OpenAI-shape fallback).
+    - model_name: glm
+      litellm_params:
+        model: bedrock/zai.glm-5
+        aws_region_name: os.environ/AWS_REGION
+        aws_bedrock_runtime_endpoint: https://bedrock-mantle.us-west-2.api.aws
+  litellm_settings:
+    drop_params: true
+
+# ── Master key (the proxy's admin / front-door key) ───────────────────────────
+# install_litellm.sh injects this from $LITELLM_MASTER_KEY via --set; do NOT
+# commit a real key. YoloScribe presents it (or, under YOL-513, a per-user
+# virtual key) as LITELLM_API_KEY.
+# masterkey: "sk-..."   # supplied by install_litellm.sh
+
+# ── Provider credentials (needed by the proxy pod) ────────────────────────────
+# ANTHROPIC_API_KEY for the Anthropic groups; AWS creds/region for bedrock-*/glm
+# (or grant the pod an IRSA role instead). Reference an existing secret you
+# manage — part of the "assume the infra exists" contract.
+environmentSecrets:
+  - yoloscribe-litellm-provider-creds   # must supply ANTHROPIC_API_KEY, AWS_REGION, AWS_* (unless using IRSA)
+
+# ── Database — ASSUMED TO ALREADY EXIST ───────────────────────────────────────
+# Point LiteLLM at your existing Postgres; do NOT deploy the bundled subchart.
+# (Required for LiteLLM virtual keys / budgets — the substrate YOL-513 builds on.)
+db:
+  useExisting: true
+  # endpoint: litellm-postgres.yolo.svc.cluster.local
+  # database: litellm
+  # secret:
+  #   name: yoloscribe-litellm-db
+  #   usernameKey: username
+  #   passwordKey: password
+postgresql:
+  enabled: false
+
+service:
+  type: ClusterIP
+  port: 4000
+
+resources: {}
