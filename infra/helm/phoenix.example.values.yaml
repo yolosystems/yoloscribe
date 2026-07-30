@@ -1,0 +1,82 @@
+# Arize Phoenix — example values for the OFFICIAL Phoenix Helm chart
+# (Arize-ai/phoenix, helm/values.yaml). YoloScribe uses Phoenix for OTEL tracing
+# and eval-annotation (the backend/runner point PHOENIX_API_ENDPOINT + the OTEL
+# exporter at it — see the env-var table in CLAUDE.md).
+#
+# This example assumes:
+#   - NO ingress — access via `kubectl port-forward` (no public exposure).
+#   - An EXTERNAL Postgres (e.g. RDS) already exists — the chart does NOT deploy
+#     an in-cluster Postgres.
+#
+# Copy to phoenix.{STAGE}.{REGION}.values.yaml in yoloscribe-ops, fill the TODOs,
+# and inject secrets at install (`--set`) rather than committing them. Verify the
+# keys against the chart version you pin.
+#
+# Install (official chart):
+#   helm upgrade --install phoenix oci://... -f phoenix.dev.us-west-2.values.yaml \
+#     --namespace <ns> --create-namespace \
+#     --set database.postgres.password="$PHOENIX_PG_PASSWORD" \
+#     --set auth.secret[1].value="$PHOENIX_PG_PASSWORD" \
+#     --set auth.secret[0].value="$PHOENIX_SECRET" \
+#     --set auth.defaultAdminPassword="$PHOENIX_ADMIN_PASSWORD"
+# Then: kubectl port-forward svc/<phoenix-svc> -n <ns> 6006:6006
+
+image:
+  registry: docker.io
+  repository: arizephoenix/phoenix
+  tag: version-19.9.0-nonroot   # pin to a known-good release
+
+# ── External Postgres (RDS) — do NOT deploy the bundled subchart ──────────────
+postgresql:
+  enabled: false
+
+database:
+  # If set, a full connection string wins over the postgres.* fields below.
+  # e.g. postgresql://phoenix:<pw>@<rds-endpoint>:5432/phoenix
+  url: ""
+  readReplicaUrl: ""
+  postgres:
+    host: "<rds-endpoint>.xxxxxxxx.us-west-2.rds.amazonaws.com"  # TODO
+    port: 5432
+    db: "phoenix"      # create this database on the RDS instance first
+    user: "phoenix"    # TODO
+    schema: ""
+    # Password must match auth.secret PHOENIX_POSTGRES_PASSWORD below. Do NOT
+    # commit a real value — inject at install via --set. For an IAM-auth RDS
+    # instance instead, set useAwsIamAuth: true, drop the password, and give the
+    # Phoenix pod an IRSA role with rds-db:connect.
+    password: ""       # TODO (inject at install)
+    useAwsIamAuth: false
+
+# ── No ingress — reach the UI/API via port-forward ────────────────────────────
+#   kubectl port-forward svc/<phoenix-svc> -n <ns> 6006:6006
+ingress:
+  enabled: false
+
+service:
+  type: ClusterIP   # in-cluster only; port-forward for local access
+
+server:
+  port: 6006        # web UI + HTTP API + OTLP/http  (PHOENIX_API_ENDPOINT, OTEL http)
+  grpcPort: 4317    # OTLP/gRPC collector
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+# Kept on (chart default). For a private port-forward-only dev instance you may
+# set enableAuth: false to skip login + API-key wiring for the YoloScribe→Phoenix
+# calls (annotate_trace / trace-fetcher). Inject the secret values at install.
+auth:
+  enableAuth: true
+  defaultAdminPassword: ""   # TODO — inject at install, don't commit
+  createSecret: true
+  name: phoenix-secret
+  secret:
+    - key: PHOENIX_SECRET
+      value: ""              # TODO — random secret, inject at install
+    - key: PHOENIX_POSTGRES_PASSWORD
+      value: ""              # TODO — must equal database.postgres.password
+
+resources: {}
+
+# After Phoenix is up, point YoloScribe at it (yoloscribe-ops backend/runner values):
+#   config.phoenixApiEndpoint: "http://<phoenix-svc>.<ns>.svc.cluster.local:6006"
+#   otel.endpoint:             "http://<phoenix-svc>.<ns>.svc.cluster.local:6006"  (OTLP/http)
