@@ -65,6 +65,23 @@ proxy_config:
   litellm_settings:
     drop_params: true
 
+  # ── Third-party tool MCP servers (YOL-505) ──────────────────────────────────
+  # Exposed via LiteLLM's MCP gateway at POST /{server}/mcp (e.g. /linear/mcp).
+  # No auth_type: LiteLLM forwards the client-supplied
+  # `x-mcp-{server}-authorization: Bearer <token>` to the upstream; YoloScribe
+  # keeps the per-user OAuth token vaulted (Secrets Manager, IRSA) and passes it
+  # per request. The runner's per-user virtual key needs MCP access granted to
+  # these servers before its calls are allowed.
+  mcp_servers:
+    linear:
+      url: "https://mcp.linear.app/mcp"
+      transport: "http"
+      description: "Linear project management — issues, projects, cycles. OAuth; token supplied per-request."
+    github:
+      url: "https://api.githubcopilot.com/mcp/"
+      transport: "http"
+      description: "GitHub — issues, PRs, code, repos via the GitHub MCP server. OAuth; token supplied per-request."
+
 # ── Master key (the proxy's admin / front-door key) ───────────────────────────
 # install_litellm.sh injects this from $LITELLM_MASTER_KEY via --set; do NOT
 # commit a real key. YoloScribe presents it (or, under YOL-513, a per-user
