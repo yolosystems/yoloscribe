@@ -71,23 +71,36 @@ model_list:
   #       api_base: https://bedrock-mantle.us-west-2.api.aws/v1
   #       api_key: os.environ/MANTLE_API_KEY
 
-# ── Third-party tool MCP servers (YOL-505) ────────────────────────────────────
-# Exposed through LiteLLM's MCP gateway at POST /{server}/mcp (e.g. /linear/mcp).
-# No `auth_type` here on purpose: LiteLLM FORWARDS the client-supplied
-# `x-mcp-{server}-authorization: Bearer <token>` header to the upstream. The
-# per-user OAuth token stays vaulted in YoloScribe (Secrets Manager, IRSA-scoped)
-# and is passed per request — LiteLLM orchestrates/proxies but is not the vault.
-# The runner's per-user virtual key must be granted MCP access to these servers
-# (key/team access group) before its calls are allowed.
-mcp_servers:
-  linear:
-    url: "https://mcp.linear.app/mcp"
-    transport: "http"
-    description: "Linear project management — issues, projects, cycles. OAuth; token supplied per-request."
-  github:
-    url: "https://api.githubcopilot.com/mcp/"
-    transport: "http"
-    description: "GitHub — issues, PRs, code, repos via the GitHub MCP server. OAuth; token supplied per-request."
+# ── Third-party tool MCP servers (YOL-505) — OPTIONAL, admin-managed ──────────
+# MCP tool servers are optional and NOT shipped as active config. Configure them
+# in the LiteLLM admin UI (stored in LiteLLM's Postgres) — that keeps OAuth client
+# credentials inside LiteLLM and avoids a config-vs-DB duplicate. This file's
+# active config carries only the models YoloScribe needs; the commented block
+# below is a REFERENCE for the delegated-PKCE shape. Leave it commented.
+#
+# Delegated PKCE: LiteLLM delegates the OAuth handshake to the upstream; the
+# client (YoloScribe) drives PKCE THROUGH the gateway (connecting at /mcp/{server})
+# and vaults the returned tokens per-user in Secrets Manager. Every call carries
+# x-litellm-api-key (virtual key → budget/attribution) + Authorization: Bearer
+# <upstream token>, which LiteLLM forwards as-is. auth_type / oauth2_flow /
+# delegate_auth_to_upstream are all required; allow_all_keys lets any valid virtual
+# key use the server (else per-key object_permission grants).
+#
+# mcp_servers:
+#   linear:                        # DCR/PKCE — no client credentials
+#     url: "https://mcp.linear.app/mcp"
+#     transport: "http"
+#     auth_type: "oauth2"
+#     oauth2_flow: "authorization_code"
+#     delegate_auth_to_upstream: true
+#     allow_all_keys: true
+#   github:                        # confidential client — client_id/secret in the UI
+#     url: "https://api.githubcopilot.com/mcp/"
+#     transport: "http"
+#     auth_type: "oauth2"
+#     oauth2_flow: "authorization_code"
+#     delegate_auth_to_upstream: true
+#     allow_all_keys: true
 
 general_settings:
   # Must start with "sk-". YoloScribe presents this (or a per-user virtual key,
