@@ -127,4 +127,27 @@ service:
   type: ClusterIP
   port: 4000
 
+# ── Ingress (OPTIONAL) ────────────────────────────────────────────────────────
+# ClusterIP is enough if only in-cluster workloads reach the proxy. Expose it via
+# ingress only when an external client needs the MCP gateway / OAuth handshake
+# reachable (e.g. a browser driving delegated PKCE at https://{host}/mcp/{server}).
+# The official berriai/litellm-helm chart ships a standard ingress block — enable
+# it here. TLS/DNS/cert wiring is your responsibility (annotations depend on your
+# ingress controller: AWS ALB, nginx, etc.). Example:
+#
+# ingress:
+#   enabled: true
+#   className: alb            # or "nginx", etc.
+#   annotations:
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+#     alb.ingress.kubernetes.io/certificate-arn: <your-acm-cert-arn>
+#   hosts:
+#     - host: litellm.example.com
+#       paths:
+#         - path: /
+#           pathType: Prefix
+#   tls: []                   # or your TLS secret refs for non-ACM setups
+
 resources: {}
