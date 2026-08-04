@@ -18,6 +18,15 @@ import PageSettingsPanel from './components/PageSettingsPanel'
 import AccessDeniedView from './components/AccessDeniedView'
 import TokensPanel from './components/TokensPanel'
 import ProposedChangeBanner from './components/ProposedChangeBanner'
+import OAuthConsent from './components/OAuthConsent'
+
+// Top-level route split: the OAuth 2.1 consent screen renders standalone (outside
+// the site/wiki shell), since Supabase redirects the browser to /oauth/consent
+// during the inbound MCP authorization flow. Everything else is the site app.
+export default function App() {
+  if (window.location.pathname === '/oauth/consent') return <OAuthConsent />
+  return <SiteApp />
+}
 
 type AccessLevel = 'full-control' | 'write' | 'view' | 'denied' | null
 
@@ -211,7 +220,7 @@ function getPagePath(filePath: string): string {
 type Mode = 'view' | 'edit' | 'tools'
 type AppView = 'loading' | 'landing' | 'onboarding' | 'site'
 
-export default function App() {
+function SiteApp() {
   const [inviteLinkError] = useState<string | null>(getInviteLinkError)
   const [filePath, setFilePath] = useState(getFilePath)
   const [content, setContent] = useState<string | null>(null)
