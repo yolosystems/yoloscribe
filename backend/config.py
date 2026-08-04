@@ -38,6 +38,11 @@ CLOUDFRONT_COOKIE_DOMAIN = (
 CLOUDFRONT_MEDIA_DISTRIBUTION_ID = os.environ.get("CLOUDFRONT_MEDIA_DISTRIBUTION_ID", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "http://localhost:8000/oauth/callback")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
+# Public base URL of the LiteLLM MCP gateway (YOL-505). Tool OAuth enrollment
+# runs against {LITELLM_MCP_URL}/mcp/{tool} (delegated PKCE): YoloScribe is a
+# public client to LiteLLM, which brokers the handshake to the upstream. Must be
+# publicly reachable so the browser can complete the authorize redirect.
+LITELLM_MCP_URL = os.environ.get("LITELLM_MCP_URL", "").rstrip("/")
 FRONTEND_URL = (
     f"https://{CLOUDFRONT_DOMAIN}"
     if CLOUDFRONT_DOMAIN
