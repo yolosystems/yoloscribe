@@ -13,23 +13,18 @@ class JWTClaims:
 
 
 class AuthProvider(ABC):
-    """Handles JWT validation and OAuth PKCE flows."""
+    """Validates externally-issued OIDC JWTs and handles account deletion.
+
+    YoloScribe runs no OAuth authorization server of its own (YOL-505): token
+    issuance and login live entirely in the external OIDC provider. This provider
+    only *validates* the tokens that provider issued and deletes accounts — the
+    old authorize / code-exchange / refresh methods were removed with the internal
+    MCP OAuth server.
+    """
 
     @abstractmethod
     def decode_jwt(self, token: str) -> JWTClaims:
         """Validate a JWT and return user claims. Raises HTTPException on failure."""
-
-    @abstractmethod
-    def get_authorize_url(self, redirect_uri: str, code_challenge: str) -> str:
-        """Return the provider's authorization URL for a PKCE OAuth flow."""
-
-    @abstractmethod
-    async def exchange_code(self, code: str, code_verifier: str) -> dict:
-        """Exchange a PKCE authorization code for tokens. Returns the token response dict."""
-
-    @abstractmethod
-    async def refresh_token(self, refresh_token: str) -> dict:
-        """Refresh an access token. Returns the token response dict."""
 
     @abstractmethod
     def delete_user(self, user_id: str) -> None:

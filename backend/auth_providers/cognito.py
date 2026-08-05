@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 
 import boto3
-import httpx
 import jwt as pyjwt
 from fastapi import HTTPException
 from jwt import PyJWKClient
@@ -56,52 +51,6 @@ class CognitoAuthProvider(AuthProvider):
         except pyjwt.exceptions.PyJWTError as exc:
             raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
 
-    def get_authorize_url(self, redirect_uri: str, code_challenge: str) -> str:
-        params = urllib.parse.urlencode({
-            "response_type": "code",
-            "client_id": self._client_id,
-            "redirect_uri": redirect_uri,
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-        })
-        return f"{self._domain}/oauth2/authorize?{params}"
-
-    async def exchange_code(self, code: str, code_verifier: str) -> dict:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{self._domain}/oauth2/token",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": "",  # caller must match the redirect_uri used in authorize
-                    "code_verifier": code_verifier,
-                    "client_id": self._client_id,
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    **self._basic_auth_header(),
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
-
-    async def refresh_token(self, refresh_token: str) -> dict:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{self._domain}/oauth2/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": self._client_id,
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    **self._basic_auth_header(),
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
-
     def delete_user(self, user_id: str) -> None:
         try:
             self._cognito_client.admin_delete_user(
@@ -112,10 +61,6 @@ class CognitoAuthProvider(AuthProvider):
             pass  # already deleted — treat as success
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Cognito delete error: {exc}") from exc
-
-    def _basic_auth_header(self) -> dict[str, str]:
-        creds = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
-        return {"Authorization": f"Basic {creds}"}
 
 
 class DynamoDBUserSiteRepository(UserSiteRepository):
