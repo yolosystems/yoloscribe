@@ -75,6 +75,13 @@ SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+# External OIDC issuer whose JWTs the MCP server validates. Advertised in the RFC
+# 9728 protected-resource metadata so MCP clients / the LiteLLM gateway discover the
+# authorization server — YoloScribe runs no OAuth AS of its own (YOL-505). Defaults
+# to Supabase's issuer; Item 3 (provider-agnostic auth) makes this fully generic.
+MCP_OAUTH_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "") or (
+    f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else ""
+)
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 # Shared secret gating POST /internal/runs/mint — wholly internal to one deployment
 # (never handed to a third party), so rotation is just a redeploy. See internal_auth.py.

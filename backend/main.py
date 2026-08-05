@@ -31,7 +31,7 @@ from routers import (
     health_router,
     ingest_router,
     internal_router,
-    mcp_oauth_router,
+    well_known_router,
     message_router,
     messaging_router,
     oauth_router,
@@ -192,8 +192,7 @@ app.include_router(signal_sinks_router)
 app.include_router(chat_router)
 app.include_router(tools_router)
 app.include_router(oauth_router)
-if not LOCAL_MODE:
-    app.include_router(mcp_oauth_router)
+app.include_router(well_known_router)
 app.include_router(site_router)
 app.include_router(token_budget_router)
 app.include_router(tokens_router)

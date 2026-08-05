@@ -9,7 +9,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import httpx
 import jwt as pyjwt
 from fastapi import HTTPException
 from jwt import PyJWKClient
@@ -41,37 +40,6 @@ class SupabaseAuthProvider(AuthProvider):
             return JWTClaims(user_id=payload["sub"], email=payload.get("email"))
         except pyjwt.exceptions.PyJWTError as exc:
             raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
-
-    def get_authorize_url(self, redirect_uri: str, code_challenge: str) -> str:
-        return (
-            f"{self._url}/auth/v1/authorize"
-            f"?provider=google"
-            f"&code_challenge={urllib.parse.quote(code_challenge, safe='')}"
-            f"&code_challenge_method=S256"
-            f"&redirect_to={urllib.parse.quote(redirect_uri, safe='')}"
-        )
-
-    async def exchange_code(self, code: str, code_verifier: str) -> dict:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{self._url}/auth/v1/token",
-                params={"grant_type": "pkce"},
-                json={"auth_code": code, "code_verifier": code_verifier},
-                headers={"apikey": self._key},
-            )
-            resp.raise_for_status()
-            return resp.json()
-
-    async def refresh_token(self, refresh_token: str) -> dict:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{self._url}/auth/v1/token",
-                params={"grant_type": "refresh_token"},
-                json={"refresh_token": refresh_token},
-                headers={"apikey": self._key},
-            )
-            resp.raise_for_status()
-            return resp.json()
 
     def delete_user(self, user_id: str) -> None:
         req = urllib.request.Request(

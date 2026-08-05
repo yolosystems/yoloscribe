@@ -44,6 +44,7 @@ from s3_storage import storage as _storage
 from k8s_agent import delete_agent_cronjob, enqueue_schedule_bootstrap
 from queue_helpers import enqueue_notify_agent
 from auth_providers.base import AuthProvider, UserSiteRepository
+from auth import resolve_api_token
 import km_signals
 from mcp_file_factory import make_agent_file, make_skill_file, make_wiki_page
 
@@ -160,7 +161,9 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
         if self._local_mode:
             return 'Bearer realm="YoloScribe (local)"'
         if self._base_url:
-            metadata_url = f"{self._base_url}/.well-known/oauth-authorization-server"
+            # RFC 9728 protected-resource metadata — advertises the external OIDC
+            # authorization server (Supabase). YoloScribe runs no OAuth AS itself.
+            metadata_url = f"{self._base_url}/.well-known/oauth-protected-resource"
             return f'Bearer realm="YoloScribe", resource_metadata="{metadata_url}"'
         return 'Bearer realm="YoloScribe"'
 
@@ -211,8 +214,28 @@ class _MCPAuthMiddleware(BaseHTTPMiddleware):
             )
             return await call_next(request)
 
+        # Static API key (as_-prefixed, YoloScribe-vended) — the same mechanism the
+        # REST API uses (auth.resolve_api_token): sha256 lookup + expiry check. This
+        # is the "simple standalone install" inbound path, alongside external JWTs.
+        if token.startswith("as_"):
+            try:
+                api_user_id, api_site = resolve_api_token(token)
+            except HTTPException as exc:
+                return JSONResponse(
+                    {"error": exc.detail},
+                    status_code=exc.status_code,
+                    headers={"WWW-Authenticate": self._www_authenticate()},
+                )
+            if not api_site:
+                return JSONResponse(
+                    {"error": "No site provisioned for this account."},
+                    status_code=403,
+                )
+            request.state.mcp_user = _MCPUser(user_id=api_user_id, email=None, site=api_site)
+            return await call_next(request)
+
         if self._local_mode:
-            # Not the static key and not a run token — LOCAL_MODE has no
+            # Not the static key, run token, or as_ key — LOCAL_MODE has no
             # Supabase/Cognito provider to fall back to.
             return JSONResponse(
                 {"error": f"Invalid API key. Use: Authorization: Bearer {self._local_api_key}"},
