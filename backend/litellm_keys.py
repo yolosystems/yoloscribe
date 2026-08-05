@@ -1,4 +1,4 @@
-"""LiteLLM admin API — mint / delete per-user virtual keys (YOL-513).
+"""LiteLLM admin API — per-user virtual keys (YOL-513) + MCP server catalog (YOL-505).
 
 Each user gets one budgeted virtual key: the proxy enforces the budget and
 returns 429 when exhausted, so YoloScribe no longer tracks token usage itself.
@@ -86,6 +86,35 @@ def key_info(key: str) -> dict | None:
     except Exception as exc:
         log.warning("LiteLLM key_info failed: %s", exc)
         return None
+
+
+def list_mcp_servers() -> list[dict]:
+    """Return the MCP tool servers registered in the LiteLLM gateway (YOL-505).
+
+    Admin listing (master key); the servers are admin-managed in the LiteLLM UI/DB.
+    Each entry carries at least ``server_name`` and ``auth_type`` (e.g. ``oauth2``).
+    Best-effort: returns [] if the proxy is unconfigured/unreachable, so the Tools
+    catalog simply shows no gateway tools rather than erroring."""
+    base, admin_key = _admin()
+    if not base or not admin_key:
+        return []
+    try:
+        resp = httpx.get(
+            f"{base}/v1/mcp/server",
+            headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            servers = data.get("servers") or data.get("data") or []
+            return servers if isinstance(servers, list) else []
+        return []
+    except Exception as exc:
+        log.warning("LiteLLM MCP server listing failed: %s", exc)
+        return []
 
 
 def delete_user_key(key: str) -> None:

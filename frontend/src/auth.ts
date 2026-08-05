@@ -34,6 +34,18 @@ export interface AuthClient {
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
 const AUTH_PROVIDER = import.meta.env.VITE_AUTH_PROVIDER ?? 'supabase'
 
+// Raw Supabase client, exposed for Supabase-specific flows that the provider-
+// agnostic AuthClient interface doesn't cover — currently the OAuth 2.1 consent
+// screen (`supabaseClient.auth.oauth.*`). null when the provider isn't Supabase.
+export const supabaseClient =
+  !LOCAL_MODE && AUTH_PROVIDER === 'supabase'
+    ? createClient(
+        import.meta.env.VITE_SUPABASE_URL as string,
+        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+        { auth: { flowType: 'implicit' } },
+      )
+    : null
+
 function createAuthClient(): AuthClient {
   // In LOCAL_MODE auth is bypassed entirely on the backend; return a no-op client.
   if (LOCAL_MODE) {
@@ -52,12 +64,8 @@ function createAuthClient(): AuthClient {
     })
   }
 
-  // Default: Supabase
-  const client = createClient(
-    import.meta.env.VITE_SUPABASE_URL as string,
-    import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-    { auth: { flowType: 'implicit' } },
-  )
+  // Default: Supabase — reuse the single shared client so session/storage match.
+  const client = supabaseClient!
 
   return {
     onAuthStateChange(callback) {

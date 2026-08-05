@@ -65,6 +65,37 @@ proxy_config:
   litellm_settings:
     drop_params: true
 
+  # ── Third-party tool MCP servers (YOL-505) — OPTIONAL, admin-managed ────────
+  # MCP tool servers are optional and NOT shipped as active config. Configure them
+  # in the LiteLLM admin UI (stored in LiteLLM's Postgres) — that keeps OAuth
+  # client credentials inside LiteLLM and avoids a config-vs-DB duplicate. The
+  # active proxy_config carries only the models YoloScribe needs; the commented
+  # block below is a REFERENCE for the delegated-PKCE shape. Leave it commented.
+  #
+  # Delegated PKCE: LiteLLM delegates the OAuth handshake to the upstream; the
+  # client (YoloScribe) drives PKCE THROUGH the gateway (connecting at /mcp/{server})
+  # and vaults the returned tokens per-user in Secrets Manager. Every call carries
+  # x-litellm-api-key (→ budget/attribution) + Authorization: Bearer <upstream
+  # token>, which LiteLLM forwards as-is. auth_type / oauth2_flow /
+  # delegate_auth_to_upstream are all required; allow_all_keys lets any valid
+  # virtual key use the server (else per-key object_permission grants).
+  #
+  # mcp_servers:
+  #   linear:                        # DCR/PKCE — no client credentials
+  #     url: "https://mcp.linear.app/mcp"
+  #     transport: "http"
+  #     auth_type: "oauth2"
+  #     oauth2_flow: "authorization_code"
+  #     delegate_auth_to_upstream: true
+  #     allow_all_keys: true
+  #   github:                        # confidential client — client_id/secret in the UI
+  #     url: "https://api.githubcopilot.com/mcp/"
+  #     transport: "http"
+  #     auth_type: "oauth2"
+  #     oauth2_flow: "authorization_code"
+  #     delegate_auth_to_upstream: true
+  #     allow_all_keys: true
+
 # ── Master key (the proxy's admin / front-door key) ───────────────────────────
 # install_litellm.sh injects this from $LITELLM_MASTER_KEY via --set; do NOT
 # commit a real key. YoloScribe presents it (or, under YOL-513, a per-user
@@ -95,5 +126,28 @@ postgresql:
 service:
   type: ClusterIP
   port: 4000
+
+# ── Ingress (OPTIONAL) ────────────────────────────────────────────────────────
+# ClusterIP is enough if only in-cluster workloads reach the proxy. Expose it via
+# ingress only when an external client needs the MCP gateway / OAuth handshake
+# reachable (e.g. a browser driving delegated PKCE at https://{host}/mcp/{server}).
+# The official berriai/litellm-helm chart ships a standard ingress block — enable
+# it here. TLS/DNS/cert wiring is your responsibility (annotations depend on your
+# ingress controller: AWS ALB, nginx, etc.). Example:
+#
+# ingress:
+#   enabled: true
+#   className: alb            # or "nginx", etc.
+#   annotations:
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+#     alb.ingress.kubernetes.io/certificate-arn: <your-acm-cert-arn>
+#   hosts:
+#     - host: litellm.example.com
+#       paths:
+#         - path: /
+#           pathType: Prefix
+#   tls: []                   # or your TLS secret refs for non-ACM setups
 
 resources: {}

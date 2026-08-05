@@ -1,4 +1,3 @@
-import json
 import logging
 import secrets
 import time
@@ -13,15 +12,11 @@ from mcp_oauth import PKCEChallenge, build_authorization_url, discover, dynamic_
 from mcp_oauth.discovery import AuthorizationServerMetadata
 from mcp_oauth.oauth_flow import exchange_code
 
-from agents.base import tools_prefix
 from auth import get_user_context
-from config import FRONTEND_URL, OAUTH_REDIRECT_URI, S3_BUCKET, boto_session, s3, secrets_store
+from config import FRONTEND_URL, LITELLM_MCP_URL, OAUTH_REDIRECT_URI, boto_session, secrets_store
 from credentials import (
     get_aws_sso_client_config,
-    get_tool_auth_type,
     load_oauth_token,
-    load_platform_client_secret,
-    load_tool_oauth_client,
     oauth_secret_id,
     save_aws_sso_client_config,
     save_oauth_token,
@@ -66,74 +61,51 @@ async def oauth_initiate(
     if tool_name == "aws-sso":
         return await _initiate_aws_sso(user_id, user_site)
 
-    key = f"{tools_prefix()}/{tool_name}/mcp.json"
-    try:
-        obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
-        mcp_config = json.loads(obj["Body"].read())
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found or has no mcp.json")
+    if not LITELLM_MCP_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="LITELLM_MCP_URL is not configured — tool OAuth routes through the LiteLLM MCP gateway.",
+        )
 
-    server_url: str | None = None
-    for server_cfg in mcp_config.get("mcpServers", {}).values():
-        if "url" in server_cfg:
-            server_url = server_cfg["url"]
-            break
-    if not server_url:
-        raise HTTPException(status_code=400, detail=f"Tool '{tool_name}' is not a remote MCP tool")
+    # Enroll against the LiteLLM MCP gateway (delegated PKCE): YoloScribe is a
+    # public client to LiteLLM, which brokers the handshake to the upstream and
+    # holds any confidential app credentials (e.g. GitHub's client_secret).
+    # server_url is the gateway endpoint; the tokens returned are the upstream's,
+    # stored per-user in Secrets Manager exactly as before.
+    server_url = f"{LITELLM_MCP_URL}/mcp/{tool_name}"
 
     cleanup_oauth_state()
 
-    pre_registered = load_tool_oauth_client(tool_name)
+    try:
+        _prm, auth_meta = await discover(server_url)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OAuth discovery failed for {server_url}: {exc}") from exc
+    if auth_meta is None:
+        raise HTTPException(status_code=502, detail=f"No OAuth authorization server found for {server_url}")
 
-    auth_meta: AuthorizationServerMetadata | None = None
-    if pre_registered and pre_registered.get("authorization_endpoint") and pre_registered.get("token_endpoint"):
-        auth_meta = AuthorizationServerMetadata(
-            issuer=pre_registered.get("issuer", pre_registered["authorization_endpoint"]),
-            authorization_endpoint=pre_registered["authorization_endpoint"],
-            token_endpoint=pre_registered["token_endpoint"],
-            registration_endpoint=pre_registered.get("registration_endpoint"),
-            scopes_supported=pre_registered.get("scopes", []),
-            code_challenge_methods_supported=pre_registered.get("code_challenge_methods_supported", ["S256"]),
+    # YoloScribe registers itself as a public client with the gateway (DCR).
+    if not auth_meta.registration_endpoint:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The LiteLLM MCP gateway at {server_url} did not advertise a Dynamic "
+                f"Client Registration endpoint; cannot register YoloScribe as an OAuth client."
+            ),
         )
-    else:
-        try:
-            _prm, auth_meta = await discover(server_url)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"OAuth discovery failed for {server_url}: {exc}") from exc
-        if auth_meta is None:
-            raise HTTPException(status_code=502, detail=f"No OAuth authorization server found for {server_url}")
-
-    if pre_registered:
-        client_id: str = pre_registered["client_id"]
-        client_secret: str | None = load_platform_client_secret(tool_name)
-        scopes: list[str] = pre_registered.get("scopes") or (
-            list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
-        )
-    else:
-        if not auth_meta.registration_endpoint:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"Tool '{tool_name}' has no pre-registered OAuth client "
-                    f"and the MCP server at {server_url} does not support "
-                    f"Dynamic Client Registration. Upload an oauth_client.json "
-                    f"to .tools/{tool_name}/ in S3 with the pre-registered client_id."
-                ),
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            client_data = await dynamic_client_registration(
+                client,
+                auth_meta.registration_endpoint,
+                OAUTH_REDIRECT_URI,
+                "YoloScribe",
             )
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                client_data = await dynamic_client_registration(
-                    client,
-                    auth_meta.registration_endpoint,
-                    OAUTH_REDIRECT_URI,
-                    "YoloScribe",
-                )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Dynamic client registration failed: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Dynamic client registration failed: {exc}") from exc
 
-        client_id = client_data["client_id"]
-        client_secret = client_data.get("client_secret")
-        scopes = list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
+    client_id: str = client_data["client_id"]
+    client_secret: str | None = client_data.get("client_secret")
+    scopes: list[str] = list(auth_meta.scopes_supported) if auth_meta.scopes_supported else []
 
     pkce = PKCEChallenge()
     state = secrets.token_urlsafe(32)

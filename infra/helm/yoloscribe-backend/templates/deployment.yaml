@@ -138,6 +138,14 @@ spec:
                   name: {{ include "yoloscribe-backend.secretName" . }}
                   key: {{ .Values.litellmExistingSecretKey | default "litellm-api-key" }}
             {{- end }}
+            {{- if .Values.config.litellmMcpUrl }}
+            - name: LITELLM_MCP_URL
+              value: {{ .Values.config.litellmMcpUrl | quote }}
+            {{- end }}
+            {{- if .Values.config.toolsHiddenMcpServers }}
+            - name: TOOLS_HIDDEN_MCP_SERVERS
+              value: {{ .Values.config.toolsHiddenMcpServers | quote }}
+            {{- end }}
             {{- if .Values.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

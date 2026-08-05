@@ -259,6 +259,7 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `YOLOSCRIBE_MEMORY_REASONER_MODEL` | agent-runner | Per-signal `HaikuMemoryReasoner` model key (default: `haiku`); Anthropic-provider keys only |
 | `YOLOSCRIBE_CONSOLIDATION_REASONER_MODEL` | agent-runner | Nightly `ConsolidationMemoryReasoner` model key (default: `sonnet`); Anthropic-provider keys only |
 | `YOLOSCRIBE_MODEL_BASE_URL` | agent-runner | Optional Anthropic API base URL for the Librarian memory reasoners only (main model path uses `LITELLM_BASE_URL`); slated for removal with the Librarian (YOL-509) |
+| `LITELLM_MCP_URL` | backend | Public base URL of the LiteLLM MCP gateway; tool OAuth enrollment runs against `{LITELLM_MCP_URL}/mcp/{tool}` (delegated PKCE). Must be publicly reachable for the browser authorize redirect (YOL-505) |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `PHOENIX_API_ENDPOINT` | backend + agent-runner | Base URL for the Arize Phoenix REST API (e.g. `http://phoenix:6006`); enables `annotate_trace` MCP tool and eval annotation log post-processing |
 | `CLOUDFRONT_SIGNING_KEY_ID` | backend | CloudFront key pair ID for signed-cookie media auth (e.g. `K2JCJMDEHXQW5F`) |
