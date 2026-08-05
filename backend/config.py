@@ -43,6 +43,13 @@ MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "")
 # public client to LiteLLM, which brokers the handshake to the upstream. Must be
 # publicly reachable so the browser can complete the authorize redirect.
 LITELLM_MCP_URL = os.environ.get("LITELLM_MCP_URL", "").rstrip("/")
+# MCP servers to HIDE from the Tools catalog (comma-separated names). These are
+# inbound/self servers registered in LiteLLM so external MCP clients can reach
+# YoloScribe's OWN MCP (e.g. "yoloscribe") — they're auth_type oauth2 but are not
+# outbound 3P tools a user connects, so they must not appear in the Tools panel.
+TOOLS_HIDDEN_MCP_SERVERS = {
+    n.strip() for n in os.environ.get("TOOLS_HIDDEN_MCP_SERVERS", "").split(",") if n.strip()
+}
 FRONTEND_URL = (
     f"https://{CLOUDFRONT_DOMAIN}"
     if CLOUDFRONT_DOMAIN

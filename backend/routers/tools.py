@@ -3,7 +3,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_user_id, get_user_context
-from config import secrets_store
+from config import TOOLS_HIDDEN_MCP_SERVERS, secrets_store
 from credentials import (
     VAR_NAME_RE,
     get_tool_auth_type,
@@ -46,6 +46,10 @@ async def get_tools(ctx: tuple[str, str | None] = Depends(get_user_context)) -> 
             continue
         tool_name = srv.get("server_name")
         if not tool_name:
+            continue
+        # Skip inbound/self servers (e.g. YoloScribe's own MCP fronted for external
+        # clients) — they're oauth2 but not outbound tools a user connects.
+        if tool_name in TOOLS_HIDDEN_MCP_SERVERS:
             continue
         enabled = tool_name in enabled_tools
         token = load_oauth_token(user_id, tool_name) if enabled else None

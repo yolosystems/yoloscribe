@@ -107,6 +107,10 @@ config:
   # reachable (the LiteLLM ingress hostname), NOT a cluster-internal service DNS.
   # Leave empty to disable tool OAuth (/oauth/initiate returns 500 when unset).
   litellmMcpUrl: ""
+  # Comma-separated LiteLLM MCP server names to HIDE from the Tools panel — the
+  # inbound/self servers (e.g. "yoloscribe") that front YoloScribe's own MCP for
+  # external clients. They're oauth2 but aren't outbound tools a user connects.
+  toolsHiddenMcpServers: ""
   # Auth provider — supabase (default) or cognito
   authProvider: "supabase"
   # Supabase (only used when authProvider=supabase)

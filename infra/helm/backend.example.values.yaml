@@ -37,3 +37,6 @@ config:
   # must be the public ingress hostname, NOT a cluster-internal service DNS. Requires
   # the LiteLLM ingress to be exposed. Leave empty to disable tool OAuth.
   litellmMcpUrl: "https://litellm.example.com"
+  # Hide inbound/self MCP servers from the Tools panel (comma-separated names) —
+  # e.g. the "yoloscribe" server that fronts YoloScribe's own MCP for external clients.
+  toolsHiddenMcpServers: "yoloscribe"
