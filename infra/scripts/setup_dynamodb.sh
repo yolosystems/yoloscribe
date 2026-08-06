@@ -9,12 +9,14 @@
 # Override table names with env vars:
 #   DYNAMODB_USER_SITE_TABLE=yoloscribe-user-site
 #   DYNAMODB_API_TOKENS_TABLE=yoloscribe-api-tokens
+#   DYNAMODB_MESSAGING_CONFIGS_TABLE=yoloscribe-messaging-configs
 
 set -euo pipefail
 
 REGION="${AWS_REGION:-us-east-1}"
 USER_SITE_TABLE="${DYNAMODB_USER_SITE_TABLE:-yoloscribe-user-site}"
 API_TOKENS_TABLE="${DYNAMODB_API_TOKENS_TABLE:-yoloscribe-api-tokens}"
+MESSAGING_CONFIGS_TABLE="${DYNAMODB_MESSAGING_CONFIGS_TABLE:-yoloscribe-messaging-configs}"
 AGENT_LOCKS_TABLE="${DYNAMODB_AGENT_LOCKS_TABLE:-yoloscribe-agent-locks}"
 ENDPOINT="${DYNAMODB_ENDPOINT_URL:-}"  # set for local testing (e.g. http://localhost:8000)
 
@@ -30,10 +32,11 @@ table_exists() {
   aws_cmd dynamodb describe-table --table-name "$1" > /dev/null 2>&1
 }
 
-echo "Region:            ${REGION}"
-echo "User-site table:   ${USER_SITE_TABLE}"
-echo "API-tokens table:  ${API_TOKENS_TABLE}"
-echo "Agent-locks table: ${AGENT_LOCKS_TABLE}"
+echo "Region:                 ${REGION}"
+echo "User-site table:        ${USER_SITE_TABLE}"
+echo "API-tokens table:       ${API_TOKENS_TABLE}"
+echo "Messaging-configs table: ${MESSAGING_CONFIGS_TABLE}"
+echo "Agent-locks table:      ${AGENT_LOCKS_TABLE}"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -99,6 +102,39 @@ else
   echo "✓ Created '${API_TOKENS_TABLE}'."
 fi
 
+# ---------------------------------------------------------------------------
+# yoloscribe-messaging-configs
+# PK:   id (S)
+# GSI1: api_token_id-index — PK: api_token_id  (list configs for a site's tokens)
+# NOTE: rows are written by the messaging-bot; on a non-Supabase install the bot's
+# store must be migrated before this table is populated (Item 3 follow-up).
+# ---------------------------------------------------------------------------
+
+if table_exists "${MESSAGING_CONFIGS_TABLE}"; then
+  echo "✓ Table '${MESSAGING_CONFIGS_TABLE}' already exists — skipping."
+else
+  echo "Creating '${MESSAGING_CONFIGS_TABLE}'..."
+  aws_cmd dynamodb create-table \
+    --table-name "${MESSAGING_CONFIGS_TABLE}" \
+    --attribute-definitions \
+      AttributeName=id,AttributeType=S \
+      AttributeName=api_token_id,AttributeType=S \
+    --key-schema \
+      AttributeName=id,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST \
+    --global-secondary-indexes \
+      '[
+        {
+          "IndexName": "api_token_id-index",
+          "KeySchema": [
+            {"AttributeName": "api_token_id", "KeyType": "HASH"}
+          ],
+          "Projection": {"ProjectionType": "ALL"}
+        }
+      ]' \
+    --tags Key=app,Value=yoloscribe
+  echo "✓ Created '${MESSAGING_CONFIGS_TABLE}'."
+fi
 
 # ---------------------------------------------------------------------------
 # yoloscribe-agent-locks
