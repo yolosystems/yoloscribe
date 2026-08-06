@@ -92,10 +92,24 @@ spec:
                   name: {{ include "yoloscribe-backend.secretName" . }}
                   key: cognito-client-secret
             {{- end }}
+            {{- else if eq .Values.config.authProvider "oidc" }}
+            - name: OIDC_CONFIG_URL
+              value: {{ .Values.config.oidc.configUrl | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.config.oidc.clientId | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ .Values.config.oidc.audience | quote }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.config.oidc.issuer | quote }}
+            {{- end }}
+            {{- if has (.Values.config.authProvider | default "supabase") (list "cognito" "oidc") }}
+            {{- /* cognito + oidc share the DynamoDB repositories */}}
             - name: DYNAMODB_USER_SITE_TABLE
-              value: {{ .Values.cognito.dynamoDbUserSiteTable | quote }}
+              value: {{ .Values.dynamodb.userSiteTable | quote }}
             - name: DYNAMODB_API_TOKENS_TABLE
-              value: {{ .Values.cognito.dynamoDbApiTokensTable | quote }}
+              value: {{ .Values.dynamodb.apiTokensTable | quote }}
+            - name: DYNAMODB_MESSAGING_CONFIGS_TABLE
+              value: {{ .Values.dynamodb.messagingConfigsTable | quote }}
             {{- end }}
             {{- if .Values.config.cloudfrontDomain }}
             - name: CLOUDFRONT_DOMAIN

@@ -76,3 +76,27 @@ class ApiTokenRepository(ABC):
     @abstractmethod
     def update_last_used(self, token_id: str) -> None:
         """Update last_used_at for a token. Best-effort; never raises."""
+
+
+class MessagingConfigRepository(ABC):
+    """Stores messaging-channel connections (channel → API-token mappings).
+
+    Rows are *written* by the separate messaging-bot service; the backend only
+    lists and deletes them on behalf of the site owner. Methods mirror the
+    queries in `routers/messaging.py`.
+    """
+
+    @abstractmethod
+    def list_by_token_ids(self, token_ids: list[str]) -> list[dict]:
+        """Return configs owned by any of the given API-token IDs.
+
+        Each dict carries: id, platform, connection (dict), created_at, api_token_id.
+        """
+
+    @abstractmethod
+    def get(self, config_id: str) -> dict | None:
+        """Look up a single config by ID. Returns at least {id, api_token_id}, or None."""
+
+    @abstractmethod
+    def delete(self, config_id: str) -> None:
+        """Delete a config by ID. Raises HTTPException on backend failure."""

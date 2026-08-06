@@ -75,12 +75,21 @@ SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+# Generic-OIDC config (AUTH_PROVIDER=oidc). The discovery URL is
+# {issuer}/.well-known/openid-configuration; the issuer, when not given explicitly,
+# is derived from it below.
+OIDC_CONFIG_URL = os.environ.get("OIDC_CONFIG_URL", "")
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "") or (
+    OIDC_CONFIG_URL.split("/.well-known/")[0] if OIDC_CONFIG_URL else ""
+)
 # External OIDC issuer whose JWTs the MCP server validates. Advertised in the RFC
 # 9728 protected-resource metadata so MCP clients / the LiteLLM gateway discover the
-# authorization server — YoloScribe runs no OAuth AS of its own (YOL-505). Defaults
-# to Supabase's issuer; Item 3 (provider-agnostic auth) makes this fully generic.
-MCP_OAUTH_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "") or (
-    f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else ""
+# authorization server — YoloScribe runs no OAuth AS of its own (YOL-505). Prefers
+# an explicit override, then the generic-OIDC issuer, then Supabase's issuer.
+MCP_OAUTH_ISSUER = (
+    os.environ.get("MCP_OAUTH_ISSUER", "")
+    or OIDC_ISSUER
+    or (f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else "")
 )
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 # Shared secret gating POST /internal/runs/mint — wholly internal to one deployment
@@ -113,7 +122,7 @@ MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))  
 
 from auth_providers import create_providers  # noqa: E402
 
-auth_provider, user_site_repo, api_token_repo = create_providers()
+auth_provider, user_site_repo, api_token_repo, messaging_config_repo = create_providers()
 
 # ── AWS clients ────────────────────────────────────────────────────────────────
 
