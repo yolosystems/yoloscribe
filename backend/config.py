@@ -91,7 +91,6 @@ MCP_OAUTH_ISSUER = (
     or OIDC_ISSUER
     or (f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else "")
 )
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 # Shared secret gating POST /internal/runs/mint — wholly internal to one deployment
 # (never handed to a third party), so rotation is just a redeploy. See internal_auth.py.
 # Defaults to "local" in LOCAL_MODE so the endpoint works out of the box, matching

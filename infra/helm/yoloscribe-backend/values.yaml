@@ -124,10 +124,6 @@ config:
     audience: ""    # optional explicit token audience (else falls back to clientId)
     issuer: ""      # optional issuer override (else derived from discovery)
 
-# ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
-# Pass via --set on the command line; never commit a real value here.
-webhookSecret: ""
-
 # ── Supabase service role key (authProvider=supabase) ─────────────────────────
 # Pass via --set on the command line; never commit a real value here.
 supabaseServiceRoleKey: ""

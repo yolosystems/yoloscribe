@@ -61,20 +61,18 @@ YoloScribe uses [Supabase](https://supabase.com) for auth by default. Free tier 
 - Create a project and enable **Google OAuth** under Authentication → Providers
 - Note your **Project URL** (`SUPABASE_URL`) and **service role key** (`SUPABASE_SERVICE_ROLE_KEY`)
 - Note your **anon key** (`VITE_SUPABASE_ANON_KEY`) for the frontend build
-- Configure a **webhook** on the Auth → Webhooks page pointing at `https://your-domain/webhooks/user-created` (event: `INSERT` on `auth.users`); set `WEBHOOK_SECRET` to match
 
-The webhook fires when a user signs up and triggers per-user IAM role + Kubernetes ServiceAccount provisioning.
+Per-user infrastructure (site, IAM role, Kubernetes ServiceAccount, Secrets Manager placeholder) is provisioned on first sign-in through the onboarding flow: the frontend calls the authenticated `POST /provision` after the user picks a site name.
 
 #### Cognito (alternative — all-AWS, no Supabase)
 
 If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_PROVIDER=cognito` on the backend.
 
 - Create a **User Pool** with your identity provider (Google, Okta, SAML, etc.) and the Hosted UI enabled
-- Create **two app clients**: a confidential client (with secret) for the backend, and a public PKCE-only client for the browser
-- Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on the confidential client
-- Configure a **post-confirmation Lambda trigger** to POST to `https://your-domain/webhooks/user-created` with `{"user_id": "<sub>", "email": "<email>"}` and `X-Webhook-Secret` header
+- Create a single **public, PKCE-only app client** for the browser (no client secret — a browser cannot hold one securely, and the backend only validates issued JWTs)
+- Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on that client
 
-Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below). (No client secret is needed — the backend only validates the JWTs Cognito issues.)
+Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below). Per-user infrastructure is provisioned on first sign-in via the authenticated `POST /provision` onboarding flow (same as the Supabase path).
 
 #### Messaging bot (optional)
 

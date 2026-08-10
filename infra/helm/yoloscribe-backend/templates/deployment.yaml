@@ -58,14 +58,6 @@ spec:
               value: {{ .Values.config.awsRegion | quote }}
             - name: K8S_NAMESPACE
               value: {{ .Values.config.k8sNamespace | quote }}
-            {{- if .Values.webhookSecret }}
-            - name: WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "yoloscribe-backend.fullname" . }}-webhook
-                  key: webhook-secret
-                  optional: true
-            {{- end }}
             - name: AUTH_PROVIDER
               value: {{ .Values.config.authProvider | default "supabase" | quote }}
             {{- if eq (.Values.config.authProvider | default "supabase") "supabase" }}

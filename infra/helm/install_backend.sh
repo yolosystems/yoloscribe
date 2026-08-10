@@ -49,11 +49,6 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
-  echo "Error: WEBHOOK_SECRET is not set in environment or .env"
-  exit 1
-fi
-
 if [[ -z "${GHCR_PAT:-}" ]]; then
   echo "Error: GHCR_PAT is not set in environment or .env"
   exit 1
@@ -70,7 +65,6 @@ helm upgrade --install yoloscribe-backend \
   --create-namespace \
   --values "$VALUES_FILE" \
   --set anthropicApiKey="$ANTHROPIC_API_KEY" \
-  --set webhookSecret="$WEBHOOK_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
   ${LITELLM_MASTER_KEY:+--set litellmApiKey="$LITELLM_MASTER_KEY"} \
