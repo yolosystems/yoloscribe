@@ -7,7 +7,18 @@ for *all* model/inference traffic over **internal K8s DNS**
 genuinely needs the public ingress is the **browser-driven MCP tool-OAuth
 handshake** (`{LITELLM_MCP_URL}/mcp/{tool}`, `backend/routers/oauth.py`).
 
-## What the WebACL allows / blocks
+## ⚠️ Shared ALB — host-based scoping
+
+The **same ALB** also serves the YoloScribe backend at `api-dev.yoloscribe.com`.
+Because a WebACL is attached to the *load balancer* (not a hostname), it evaluates
+**every** request to **both** hosts. The default-deny is meant only for the
+LiteLLM host, so the first rule (`allow-api-dev-host`, priority 0) matches the
+`Host` header `api-dev.yoloscribe.com` and **allows it unconditionally** — the
+backend has its own JWT auth and path safety and must not be filtered here. Every
+allow/block rule below it therefore applies only to `litellm-dev` (and any other
+host). If the backend ever moves to a different hostname, update that rule.
+
+## What the WebACL allows / blocks (litellm-dev host)
 
 | Path | Public? | Why |
 |---|---|---|
@@ -15,7 +26,10 @@ handshake** (`{LITELLM_MCP_URL}/mcp/{tool}`, `backend/routers/oauth.py`).
 | `/.well-known/oauth-authorization-server*` | ✅ allow | OAuth AS discovery for the above |
 | `/.well-known/oauth-protected-resource*` | ✅ allow | OAuth PRM discovery for the above |
 | `/callback` | ✅ allow | Upstream IdP redirects back to the gateway's callback in delegated PKCE |
+| `/{server}/authorize`, `/{server}/token`, `/{server}/register` | ✅ allow | Per-MCP-server OAuth endpoints (authorize / token / DCR) that LiteLLM's AS metadata advertises at the domain root, e.g. `/yoloscribe/authorize`. Matched by `^/[^/]+/(authorize\|token\|register)` — the suffix constraint means no inference/admin/management path qualifies, and deeper paths like `/v1/mcp/oauth/authorize` stay blocked. |
 | everything else | ⛔ block (403) | Reached over internal DNS, never from the internet |
+
+> **Why the discovery docs already worked but authorize didn't:** LiteLLM's protected-resource metadata (`/.well-known/oauth-protected-resource/mcp/{server}`) points at a per-server authorization server `https://{host}/{server}`, whose metadata (`/.well-known/oauth-authorization-server/{server}`) advertises `authorize`/`token`/`register` at the **domain root** (`/{server}/…`), not under `/mcp`. The `.well-known` prefixes were allowed; the root OAuth endpoints were not — hence the 403 at `/yoloscribe/authorize`.
 
 Blocked-by-default includes: `/v1/chat/completions`, `/v1/completions`,
 `/v1/embeddings`, `/v1/messages`, `/anthropic/*`, `/v1/models`, `/rerank`,
@@ -23,12 +37,15 @@ Blocked-by-default includes: `/v1/chat/completions`, `/v1/completions`,
 `/user/*`, `/team/*`, `/organization/*`, `/spend/*`, `/global/*`, `/model/*`,
 `/config/*`, `/audit/*` (management); `/docs`, `/redoc`, `/openapi.json`.
 
-Extra guardrails in the WebACL:
-- **`block-path-traversal`** (priority 0) — blocks any `..` in the (URL-decoded)
+Rule order in the WebACL (evaluated top-down; first Allow/Block wins, else the
+default Block):
+- **`allow-api-dev-host`** (priority 0, Allow) — see the shared-ALB section above.
+- **`block-path-traversal`** (priority 1) — blocks any `..` in the (URL-decoded)
   path so an attacker can't smuggle `/mcp/../v1/chat/completions` past the allow
   rule.
-- **`rate-limit-mcp`** (priority 1) — 300 requests / 5 min per IP against the
+- **`rate-limit-mcp`** (priority 2) — 300 requests / 5 min per IP against the
   `/mcp` surface, to blunt abuse of the one exposed endpoint. Tune in the JSON.
+- **`allow-mcp-oauth`** (priority 3, Allow) — the allowlist in the table above.
 
 > **ALB health checks are unaffected.** The ALB→target health check originates
 > inside the VPC and is not evaluated by WAF, so no `/health/*` allow is needed.
@@ -58,8 +75,11 @@ To disable, remove the annotation and redeploy in yolobrain. The WebACL created
 here is unaffected either way — it just sits unattached until an ingress references it.
 
 **Optional defense-in-depth (also in yolobrain):** narrow the ingress `paths:`
-to the three OAuth prefixes so the ALB `404`s non-OAuth requests before WAF even
-evaluates them:
+so the ALB `404`s non-OAuth requests before WAF even evaluates them. Note this is
+less complete than the WAF: the per-server OAuth roots (`/{server}/authorize|token
+|register`) can only be narrowed by pinning each server name (e.g. `/yoloscribe`),
+so new MCP servers would need new entries — the WAF's suffix rule covers them
+generically. Rely on the WAF as the primary control; treat this as belt-and-braces:
 
 ```yaml
   hosts:
@@ -69,6 +89,7 @@ evaluates them:
         - { path: /.well-known/oauth-authorization-server, pathType: Prefix }
         - { path: /.well-known/oauth-protected-resource,   pathType: Prefix }
         - { path: /callback,                               pathType: Prefix }
+        - { path: /yoloscribe,                             pathType: Prefix }  # per MCP server
 ```
 
 ## Verify after attaching

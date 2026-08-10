@@ -1,7 +1,7 @@
 {
   "Name": "yoloscribe-litellm-ingress",
   "Scope": "REGIONAL",
-  "Description": "Default-DENY for the public LiteLLM ALB. Allows only the browser MCP tool-OAuth handshake: /mcp and OAuth discovery. All inference, admin UI, management and docs are internal-only over K8s DNS and are blocked here. See infra/waf/README.md",
+  "Description": "Shared ALB WebACL. Allows all api-dev.yoloscribe.com traffic. litellm-dev is default-DENY except the MCP OAuth handshake: /mcp, OAuth discovery, per-server authorize/token/register. Inference, admin, management, docs blocked. See infra/waf/README.md",
   "DefaultAction": { "Block": {} },
   "VisibilityConfig": {
     "SampledRequestsEnabled": true,
@@ -10,8 +10,25 @@
   },
   "Rules": [
     {
-      "Name": "block-path-traversal",
+      "Name": "allow-api-dev-host",
       "Priority": 0,
+      "Action": { "Allow": {} },
+      "Statement": {
+        "RegexMatchStatement": {
+          "RegexString": "^api-dev\\.yoloscribe\\.com(:[0-9]+)?$",
+          "FieldToMatch": { "SingleHeader": { "Name": "host" } },
+          "TextTransformations": [ { "Priority": 0, "Type": "LOWERCASE" } ]
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "allow-api-dev-host"
+      }
+    },
+    {
+      "Name": "block-path-traversal",
+      "Priority": 1,
       "Action": { "Block": {} },
       "Statement": {
         "RegexMatchStatement": {
@@ -31,7 +48,7 @@
     },
     {
       "Name": "rate-limit-mcp",
-      "Priority": 1,
+      "Priority": 2,
       "Action": { "Block": {} },
       "Statement": {
         "RateBasedStatement": {
@@ -55,7 +72,7 @@
     },
     {
       "Name": "allow-mcp-oauth",
-      "Priority": 2,
+      "Priority": 3,
       "Action": { "Allow": {} },
       "Statement": {
         "OrStatement": {
@@ -84,6 +101,13 @@
             {
               "RegexMatchStatement": {
                 "RegexString": "^/callback(/|$)",
+                "FieldToMatch": { "UriPath": {} },
+                "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+              }
+            },
+            {
+              "RegexMatchStatement": {
+                "RegexString": "^/[^/]+/(authorize|token|register)(/|$)",
                 "FieldToMatch": { "UriPath": {} },
                 "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
               }
