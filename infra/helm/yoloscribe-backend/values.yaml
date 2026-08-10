@@ -145,9 +145,15 @@ dynamodb:
   apiTokensTable: "yoloscribe-api-tokens"
   messagingConfigsTable: "yoloscribe-messaging-configs"
 
-# ── Cognito app client secret (authProvider=cognito) ──────────────────────────
-# Pass via --set on the command line; never commit a real value here.
-cognitoClientSecret: ""
+# ── OIDC client secret ───────────────────────────────────────────────────────
+# Intentionally unused. POLICY: frontend login is public-client PKCE only —
+# browsers cannot hold a secret safely — and the backend is a pure resource
+# server that only VALIDATES issued JWTs. Neither path uses a client secret, and
+# a confidential/secret-bearing browser login is explicitly NOT supported. A
+# secret could only ever apply to a hypothetical SERVER-SIDE flow (e.g. a BFF or
+# machine-to-machine exchange), never the browser; if that ever ships, store it
+# under the provider-neutral key `oidc-client-secret` (value `oidcClientSecret`).
+# Pass via --set; never commit a real value here.
 
 # ── OTEL / Arize Phoenix tracing ─────────────────────────────────────────────
 # Set endpoint to the internal Phoenix service DNS name to enable tracing.

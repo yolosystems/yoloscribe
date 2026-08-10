@@ -85,13 +85,6 @@ spec:
               value: {{ .Values.cognito.clientId | quote }}
             - name: COGNITO_DOMAIN
               value: {{ .Values.cognito.domain | quote }}
-            {{- if .Values.cognitoClientSecret }}
-            - name: COGNITO_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "yoloscribe-backend.secretName" . }}
-                  key: cognito-client-secret
-            {{- end }}
             {{- else if eq .Values.config.authProvider "oidc" }}
             - name: OIDC_CONFIG_URL
               value: {{ .Values.config.oidc.configUrl | quote }}

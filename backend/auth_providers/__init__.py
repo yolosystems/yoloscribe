@@ -60,13 +60,12 @@ def create_providers() -> Providers:
     if provider == "cognito":
         user_pool_id = os.environ.get("COGNITO_USER_POOL_ID", "")
         client_id = os.environ.get("COGNITO_CLIENT_ID", "")
-        client_secret = os.environ.get("COGNITO_CLIENT_SECRET", "")
         cognito_domain = os.environ.get("COGNITO_DOMAIN", "")
         region = os.environ.get("AWS_REGION", "us-east-1")
         if not user_pool_id or not client_id or not cognito_domain:
             return None, None, None, None
         from .cognito import CognitoAuthProvider  # noqa: PLC0415
-        return (CognitoAuthProvider(user_pool_id, client_id, client_secret, cognito_domain, region), *_dynamodb_repos(region))
+        return (CognitoAuthProvider(user_pool_id, client_id, cognito_domain, region), *_dynamodb_repos(region))
 
     if provider == "oidc":
         config_url = os.environ.get("OIDC_CONFIG_URL", "")

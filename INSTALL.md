@@ -74,7 +74,7 @@ If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_
 - Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on the confidential client
 - Configure a **post-confirmation Lambda trigger** to POST to `https://your-domain/webhooks/user-created` with `{"user_id": "<sub>", "email": "<email>"}` and `X-Webhook-Secret` header
 
-Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below).
+Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below). (No client secret is needed — the backend only validates the JWTs Cognito issues.)
 
 #### Messaging bot (optional)
 

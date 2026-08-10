@@ -24,13 +24,11 @@ class CognitoAuthProvider(AuthProvider):
         self,
         user_pool_id: str,
         client_id: str,
-        client_secret: str,
         cognito_domain: str,
         region: str,
     ) -> None:
         self._user_pool_id = user_pool_id
         self._client_id = client_id
-        self._client_secret = client_secret
         self._domain = cognito_domain.rstrip("/")
         self._region = region
         jwks_url = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
