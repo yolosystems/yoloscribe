@@ -149,6 +149,19 @@ annotations:
 
 The Helm charts in `infra/helm/` handle this automatically when you set `serviceAccount.iamRoleArn` in the values file.
 
+#### Cluster add-ons (prerequisites)
+
+YoloScribe assumes a few standard EKS cluster add-ons are already installed. These are cluster-wide, installed once by whoever operates the cluster, and are **not** vendored by YoloScribe — install each from its upstream project. Anyone running EKS in production will typically have these already.
+
+| Add-on | Why YoloScribe needs it |
+|---|---|
+| [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) | Provisions the ALB for each `Ingress` (backend, and the LiteLLM proxy). Required for the `className: alb` ingresses and for the WAF association annotation (`infra/waf/`). |
+| [ExternalDNS](https://kubernetes-sigs.github.io/external-dns/) | Creates the Route 53 records for ingress hostnames. EKS gives you no DNS automation out of the box. |
+| [EBS CSI driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) | Dynamic `PersistentVolume` provisioning for any stateful dependency you self-host in-cluster (e.g. Postgres, Phoenix). |
+| [External Secrets Operator (ESO)](https://external-secrets.io/) | Syncs AWS Secrets Manager → Kubernetes `Secret`s. Point a chart's `existingSecret` value at an ESO-materialized secret to keep plaintext out of Helm `--set` / release values (recommended over injecting secrets at install time). |
+
+> **EKS Auto Mode note:** Auto Mode ships its own load-balancing and requires `IngressClass` + `IngressClassParams` rather than the legacy ALB controller annotations, and still has no built-in Route 53 integration — install ExternalDNS separately.
+
 #### Secrets Manager
 
 No manual setup required. The backend creates per-user secret prefixes (`yoloscribe/{user_id}/`) automatically when users connect skills (GitHub, Linear, etc.). The backend IAM role needs `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` resources.
