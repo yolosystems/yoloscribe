@@ -1,7 +1,7 @@
 {
   "Name": "yoloscribe-litellm-ingress",
   "Scope": "REGIONAL",
-  "Description": "Default-DENY for the public LiteLLM ALB. Allows ONLY the browser MCP tool-OAuth handshake (/mcp/* + OAuth discovery). All inference (/v1/*, /anthropic/*), admin UI (/ui, /sso), management (/key,/user,/team,/spend,...) and docs are reached by YoloScribe over internal K8s DNS and are blocked here. See infra/waf/README.md.",
+  "Description": "Default-DENY for the public LiteLLM ALB. Allows only the browser MCP tool-OAuth handshake: /mcp and OAuth discovery. All inference, admin UI, management and docs are internal-only over K8s DNS and are blocked here. See infra/waf/README.md",
   "DefaultAction": { "Block": {} },
   "VisibilityConfig": {
     "SampledRequestsEnabled": true,
@@ -77,6 +77,13 @@
             {
               "RegexMatchStatement": {
                 "RegexString": "^/\\.well-known/oauth-protected-resource",
+                "FieldToMatch": { "UriPath": {} },
+                "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+              }
+            },
+            {
+              "RegexMatchStatement": {
+                "RegexString": "^/callback(/|$)",
                 "FieldToMatch": { "UriPath": {} },
                 "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
               }

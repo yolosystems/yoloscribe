@@ -14,6 +14,7 @@ handshake** (`{LITELLM_MCP_URL}/mcp/{tool}`, `backend/routers/oauth.py`).
 | `/mcp`, `/mcp/*` | ✅ allow | Browser delegated-PKCE OAuth handshake |
 | `/.well-known/oauth-authorization-server*` | ✅ allow | OAuth AS discovery for the above |
 | `/.well-known/oauth-protected-resource*` | ✅ allow | OAuth PRM discovery for the above |
+| `/callback` | ✅ allow | Upstream IdP redirects back to the gateway's callback in delegated PKCE |
 | everything else | ⛔ block (403) | Reached over internal DNS, never from the internet |
 
 Blocked-by-default includes: `/v1/chat/completions`, `/v1/completions`,
@@ -67,6 +68,7 @@ evaluates them:
         - { path: /mcp,                                    pathType: Prefix }
         - { path: /.well-known/oauth-authorization-server, pathType: Prefix }
         - { path: /.well-known/oauth-protected-resource,   pathType: Prefix }
+        - { path: /callback,                               pathType: Prefix }
 ```
 
 ## Verify after attaching
@@ -79,8 +81,10 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST "$B/v1/chat/completions" \
 # Admin/docs blocked:
 for p in /ui/ /sso/key/generate /openapi.json /redoc; do
   curl -s -o /dev/null -w "%{http_code}  $p\n" "$B$p"; done
-# OAuth discovery still reachable (expect 200/401/404 from LiteLLM, NOT a WAF 403):
+# OAuth discovery + gateway callback still reachable (expect 200/302/401/404 from
+# LiteLLM, NOT a WAF 403):
 curl -s -o /dev/null -w "%{http_code}\n" "$B/.well-known/oauth-protected-resource"
+curl -s -o /dev/null -w "%{http_code}\n" "$B/callback"
 # Traversal smuggling blocked (expect 403):
 curl -s -o /dev/null -w "%{http_code}\n" "$B/mcp/../v1/models"
 ```

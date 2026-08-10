@@ -35,6 +35,18 @@ fi
 
 command -v jq >/dev/null || { echo "Error: jq is required"; exit 1; }
 
+# WAF caps Description at 256 chars and forbids some punctuation (no parentheses
+# or '*'); fail early with a clear message instead of an opaque ValidationException.
+DESC="$(jq -r '.Description // ""' "$ACL_JSON")"
+if (( ${#DESC} > 256 )); then
+  echo "Error: WebACL Description is ${#DESC} chars (max 256). Shorten it in $ACL_JSON."
+  exit 1
+fi
+if [[ "$DESC" == *"("* || "$DESC" == *")"* || "$DESC" == *"*"* ]]; then
+  echo "Error: WebACL Description contains a disallowed character ( ) or *. Fix it in $ACL_JSON."
+  exit 1
+fi
+
 echo "Looking up existing WebACL '$NAME' in $REGION ..."
 EXISTING="$("${AWS[@]}" wafv2 list-web-acls --scope "$SCOPE" \
   --query "WebACLs[?Name=='$NAME'].[Id,LockToken]" --output text || true)"
