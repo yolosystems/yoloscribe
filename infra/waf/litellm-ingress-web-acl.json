@@ -1,0 +1,94 @@
+{
+  "Name": "yoloscribe-litellm-ingress",
+  "Scope": "REGIONAL",
+  "Description": "Default-DENY for the public LiteLLM ALB. Allows ONLY the browser MCP tool-OAuth handshake (/mcp/* + OAuth discovery). All inference (/v1/*, /anthropic/*), admin UI (/ui, /sso), management (/key,/user,/team,/spend,...) and docs are reached by YoloScribe over internal K8s DNS and are blocked here. See infra/waf/README.md.",
+  "DefaultAction": { "Block": {} },
+  "VisibilityConfig": {
+    "SampledRequestsEnabled": true,
+    "CloudWatchMetricsEnabled": true,
+    "MetricName": "yoloscribe-litellm-ingress"
+  },
+  "Rules": [
+    {
+      "Name": "block-path-traversal",
+      "Priority": 0,
+      "Action": { "Block": {} },
+      "Statement": {
+        "RegexMatchStatement": {
+          "RegexString": "\\.\\.",
+          "FieldToMatch": { "UriPath": {} },
+          "TextTransformations": [
+            { "Priority": 0, "Type": "URL_DECODE" },
+            { "Priority": 1, "Type": "COMPRESS_WHITE_SPACE" }
+          ]
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "block-path-traversal"
+      }
+    },
+    {
+      "Name": "rate-limit-mcp",
+      "Priority": 1,
+      "Action": { "Block": {} },
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 300,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "RegexMatchStatement": {
+              "RegexString": "^/mcp(/|$)",
+              "FieldToMatch": { "UriPath": {} },
+              "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+            }
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "rate-limit-mcp"
+      }
+    },
+    {
+      "Name": "allow-mcp-oauth",
+      "Priority": 2,
+      "Action": { "Allow": {} },
+      "Statement": {
+        "OrStatement": {
+          "Statements": [
+            {
+              "RegexMatchStatement": {
+                "RegexString": "^/mcp(/|$)",
+                "FieldToMatch": { "UriPath": {} },
+                "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+              }
+            },
+            {
+              "RegexMatchStatement": {
+                "RegexString": "^/\\.well-known/oauth-authorization-server",
+                "FieldToMatch": { "UriPath": {} },
+                "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+              }
+            },
+            {
+              "RegexMatchStatement": {
+                "RegexString": "^/\\.well-known/oauth-protected-resource",
+                "FieldToMatch": { "UriPath": {} },
+                "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" } ]
+              }
+            }
+          ]
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "allow-mcp-oauth"
+      }
+    }
+  ]
+}
