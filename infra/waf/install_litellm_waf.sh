@@ -42,8 +42,18 @@ if (( ${#DESC} > 256 )); then
   echo "Error: WebACL Description is ${#DESC} chars (max 256). Shorten it in $ACL_JSON."
   exit 1
 fi
-if [[ "$DESC" == *"("* || "$DESC" == *")"* || "$DESC" == *"*"* ]]; then
-  echo "Error: WebACL Description contains a disallowed character ( ) or *. Fix it in $ACL_JSON."
+
+# Check against WAF's actual allowed set rather than a denylist of characters we
+# happened to trip over. AWS validates Description as:
+#   ^[\w+=:#@/\-,\.][\w+=:#@/\-,\.\s]+$
+# so anything outside word chars and + = : # @ / - , . plus whitespace is
+# rejected — parentheses and '*', but also ';', '!', quotes and more, which a
+# denylist kept missing one at a time.
+if [[ ! "$DESC" =~ ^[A-Za-z0-9_+=:\#@/,.-][A-Za-z0-9_+=:\#@/,.[:space:]-]+$ ]]; then
+  BAD="$(printf '%s' "$DESC" | tr -d 'A-Za-z0-9_+=:#@/,.[:space:]-' | fold -w1 | sort -u | tr -d '\n')"
+  echo "Error: WebACL Description contains disallowed character(s): ${BAD:-<leading whitespace>}"
+  echo "Allowed: letters, digits, whitespace, and _ + = : # @ / - , ."
+  echo "Fix it in $ACL_JSON."
   exit 1
 fi
 

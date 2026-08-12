@@ -1,7 +1,7 @@
 {
   "Name": "yoloscribe-litellm-ingress",
   "Scope": "REGIONAL",
-  "Description": "Shared ALB WebACL. /internal/* and path traversal blocked on all hosts, ahead of the api-dev allow; rest of api-dev allowed. litellm-dev default-DENY except the MCP OAuth handshake. Details in infra/waf/README.md",
+  "Description": "Shared ALB WebACL. Blocks /internal paths and path traversal on all hosts, ahead of the api-dev allow. Rest of api-dev allowed. litellm-dev default-DENY except the MCP OAuth handshake. Details in infra/waf/README.md",
   "DefaultAction": { "Block": {} },
   "VisibilityConfig": {
     "SampledRequestsEnabled": true,
