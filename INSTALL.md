@@ -80,6 +80,10 @@ Backend: `OIDC_CONFIG_URL` (required), plus optional `OIDC_CLIENT_ID`, `OIDC_AUD
 
 > **Invite links are Supabase-only.** The magic-link invite flow (`inviteUserByEmail` and the expired-link page) is a Supabase feature. Under `oidc` the identity provider owns sign-up, and YoloScribe provisions on first successful sign-in instead.
 
+**Keep `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` set even under `oidc`, if inbound MCP clients authorize through Supabase.** The `/oauth/consent` screen is the approval UI for Supabase's headless OAuth 2.1 server — the flow LiteLLM and Claude Code use to authorize against your MCP endpoint. That is independent of how your own users sign in, so the frontend builds it whenever a Supabase project is configured rather than only when Supabase is the login provider. Drop those two variables and `/oauth/consent` reports that the deployment isn't configured for Supabase OAuth, breaking third-party MCP authorization.
+
+**Using Supabase itself as the OIDC provider** is the cheapest way to prove the generic path before introducing a third-party IdP — same users, same tokens, and its discovery document advertises everything the browser client needs (`S256` PKCE, `none` token-endpoint auth, `authorization_code` + `refresh_token`, `offline_access`, `query` response mode, ES256 keys). Create an OAuth app in the Supabase dashboard as a public/PKCE client with the site origin as its redirect URI — there is no `registration_endpoint`, so it must be registered by hand — then point `OIDC_CONFIG_URL` / `VITE_OIDC_CONFIG_URL` at `<project>/auth/v1/.well-known/openid-configuration` and use the app's client ID on both sides. Note Supabase publishes no `end_session_endpoint`, so sign-out clears the local session without ending the Supabase one.
+
 #### Messaging bot (optional)
 
 - Create a Discord application at [discord.com/developers](https://discord.com/developers/applications)
