@@ -64,15 +64,21 @@ YoloScribe uses [Supabase](https://supabase.com) for auth by default. Free tier 
 
 Per-user infrastructure (site, IAM role, Kubernetes ServiceAccount, Secrets Manager placeholder) is provisioned on first sign-in through the onboarding flow: the frontend calls the authenticated `POST /provision` after the user picks a site name.
 
-#### Cognito (alternative — all-AWS, no Supabase)
+#### Any OIDC provider (alternative — Auth0, Keycloak, Okta, Entra, Cognito)
 
-If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_PROVIDER=cognito` on the backend.
+YoloScribe can authenticate against any OIDC-compliant identity provider. Set `AUTH_PROVIDER=oidc` on the backend and `VITE_AUTH_PROVIDER=oidc` on the frontend build. Both sides are discovery-driven: point them at the provider's `.well-known/openid-configuration` and the endpoints and signing keys are read from it.
 
-- Create a **User Pool** with your identity provider (Google, Okta, SAML, etc.) and the Hosted UI enabled
-- Create a single **public, PKCE-only app client** for the browser (no client secret — a browser cannot hold one securely, and the backend only validates issued JWTs)
-- Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on that client
+- Register a **public / SPA client** using authorization code + PKCE. Do not issue a client secret — the browser cannot hold one, and the backend is a pure resource server that only *validates* tokens. Neither ever needs it.
+- Set the client's redirect URI to your site origin (e.g. `https://app.yoloscribe.com`); the browser client uses `window.location.origin`.
+- Enable the `offline_access` scope if you want sessions to renew silently rather than ending at the access-token lifetime.
 
-Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below). Per-user infrastructure is provisioned on first sign-in via the authenticated `POST /provision` onboarding flow (same as the Supabase path).
+Backend: `OIDC_CONFIG_URL` (required), plus optional `OIDC_CLIENT_ID`, `OIDC_AUDIENCE`, `OIDC_ISSUER`. Frontend build: `VITE_OIDC_CONFIG_URL`, `VITE_OIDC_CLIENT_ID`, and the optional `VITE_OIDC_SCOPE` / `VITE_OIDC_TOKEN` — see `frontend/.env.example`. Create the DynamoDB tables (see below). Per-user infrastructure is provisioned on first sign-in via the authenticated `POST /provision` onboarding flow, same as the Supabase path.
+
+**Audience must agree across the two sides.** By default the browser sends the **ID token** as the bearer, whose `aud` is the client ID, and the backend defaults its expected audience to `OIDC_CLIENT_ID`. If you instead configure an API audience via `OIDC_AUDIENCE`, set `VITE_OIDC_TOKEN=access` so the browser sends the access token carrying that audience. A mismatch shows up as a 401 on every authenticated request.
+
+**Cognito is configured this way too** — it publishes a standard discovery document at `https://cognito-idp.{region}.amazonaws.com/{userPoolId}/.well-known/openid-configuration`. The backend additionally accepts `AUTH_PROVIDER=cognito`, which behaves identically for token validation but adds an admin `delete_user` call that generic OIDC has no standard equivalent for. The frontend has no Cognito-specific mode; use `oidc`.
+
+> **Invite links are Supabase-only.** The magic-link invite flow (`inviteUserByEmail` and the expired-link page) is a Supabase feature. Under `oidc` the identity provider owns sign-up, and YoloScribe provisions on first successful sign-in instead.
 
 #### Messaging bot (optional)
 
@@ -171,18 +177,21 @@ YoloScribe assumes a few standard EKS cluster add-ons are already installed. The
 
 No manual setup required. The backend creates per-user secret prefixes (`yoloscribe/{user_id}/`) automatically when users connect skills (GitHub, Linear, etc.). The backend IAM role needs `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` resources.
 
-#### DynamoDB (Cognito path only)
+#### DynamoDB (non-Supabase auth only)
 
-Only required if using Cognito auth. Create two tables:
+Required when `AUTH_PROVIDER` is `oidc` or `cognito` — these paths keep user data in DynamoDB rather than Supabase tables. Not needed on the Supabase path. Create three tables:
 
 | Table | Partition key | Purpose |
 |---|---|---|
 | `yoloscribe-user-site` | `user_id` (S) | Maps user UUID → site name |
 | `yoloscribe-api-tokens` | `token_id` (S) | Stores hashed API tokens |
+| `yoloscribe-messaging-configs` | `id` (S) | Messaging bot channel bindings |
 
-`yoloscribe-api-tokens` also needs two GSIs: `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`).
+GSIs: `yoloscribe-api-tokens` needs `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`); `yoloscribe-messaging-configs` needs `api_token_id-index` (PK: `api_token_id`).
 
-Set `DYNAMODB_USER_SITE_TABLE` and `DYNAMODB_API_TOKENS_TABLE` if you use non-default names.
+`infra/scripts/setup_dynamodb.sh` creates all three with the right keys and indexes. Set `DYNAMODB_USER_SITE_TABLE`, `DYNAMODB_API_TOKENS_TABLE`, and `DYNAMODB_MESSAGING_CONFIGS_TABLE` if you use non-default names.
+
+The backend's IAM role needs DynamoDB access to these tables — see the `DynamoDBUserStores` statement in `infra/iam/yoloscribe-backend-policy.json`.
 
 #### CloudFront + S3 — frontend hosting
 

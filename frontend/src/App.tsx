@@ -49,7 +49,14 @@ const MARKETING_SITE_URL = import.meta.env.VITE_MARKETING_SITE_URL || 'https://y
 // When a magic link or invite link is expired or already used, Supabase redirects
 // back with: #error=access_denied&error_code=otp_expired&error_description=...
 // We must capture this before Supabase clears the hash.
+//
+// Supabase-only by design: the invite/magic-link flow is a Supabase feature, and
+// generic OIDC providers own their own sign-up. Under VITE_AUTH_PROVIDER=oidc an
+// `error=` in the callback means something else entirely (declined consent, for
+// example), so returning null here keeps us from showing an invite-expiry page
+// for an unrelated error. OidcAuthClient handles that case itself.
 function getInviteLinkError(): string | null {
+  if ((import.meta.env.VITE_AUTH_PROVIDER ?? 'supabase') !== 'supabase') return null
   const hash = window.location.hash
   if (!hash.includes('error_description=')) return null
   try {

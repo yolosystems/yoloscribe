@@ -67,6 +67,8 @@ Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under 
 ### Invite / magic link flow (waitlist sign-up)
 New users arrive at `app.yoloscribe.com` (or `app-dev.yoloscribe.com`) via a Supabase invite magic link sent by the waitlist Edge Function. Supabase's implicit flow (`flowType: 'implicit'` in `auth.ts`) automatically processes the `#access_token=...&type=invite` hash on page load, fires `onAuthStateChange`, and establishes the session. The existing routing then calls `GET /my-site` → null → `OnboardingView` → `POST /provision`.
 
+**This flow is specific to `VITE_AUTH_PROVIDER=supabase`.** Under `oidc` the identity provider owns sign-up entirely; there is no invite link and no expired-invite page (`getInviteLinkError()` in `App.tsx` returns null for non-Supabase providers). Provisioning still happens on first successful sign-in through the same `GET /my-site` → `OnboardingView` → `POST /provision` path.
+
 **Required Supabase project configuration (Auth → URL Configuration):**
 - Add `https://app.yoloscribe.com` and `https://app-dev.yoloscribe.com` to the **Redirect URLs** allowlist. Without this, `inviteUserByEmail` calls from the Edge Function will be rejected.
 - The invite TTL is configurable under Auth → Email → OTP Expiry (default 24 h; consider raising to 72 h or more).
@@ -275,6 +277,11 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `LOCAL_RUNNER` | agent-runner + indexer | Set `true` to run agent/index jobs inline (no K8s) |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
+| `VITE_AUTH_PROVIDER` | frontend build | `supabase` (default) \| `oidc` — selects the browser auth client |
+| `VITE_OIDC_CONFIG_URL` | frontend build | OIDC discovery URL (`oidc` only); endpoints are read from it |
+| `VITE_OIDC_CLIENT_ID` | frontend build | Public/SPA client ID (`oidc` only); never a confidential client |
+| `VITE_OIDC_SCOPE` | frontend build | Optional; default `openid email profile offline_access` |
+| `VITE_OIDC_TOKEN` | frontend build | Optional; `id` (default) \| `access` — which token is sent as the bearer |
 
 ### Model routing (LiteLLM)
 

@@ -1,13 +1,18 @@
 /**
  * Provider-agnostic auth client.
  *
- * Selected at build time via VITE_AUTH_PROVIDER=supabase|cognito (default: supabase).
+ * Selected at build time via VITE_AUTH_PROVIDER=supabase|oidc (default: supabase).
  * Both implementations expose the same AuthClient interface so App.tsx has no
  * provider-specific logic.
+ *
+ * `oidc` is discovery-driven and works against any OIDC-compliant provider —
+ * Auth0, Keycloak, Okta, Cognito, Entra. There is no separate Cognito client:
+ * Cognito publishes a standard discovery document, so it is configured through
+ * `oidc` like any other provider.
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { CognitoAuthClient } from './auth_cognito'
+import { OidcAuthClient } from './auth_oidc'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -56,11 +61,13 @@ function createAuthClient(): AuthClient {
     }
   }
 
-  if (AUTH_PROVIDER === 'cognito') {
-    return new CognitoAuthClient({
-      clientId: import.meta.env.VITE_COGNITO_CLIENT_ID as string,
-      domain: import.meta.env.VITE_COGNITO_DOMAIN as string,
+  if (AUTH_PROVIDER === 'oidc') {
+    return new OidcAuthClient({
+      configUrl: import.meta.env.VITE_OIDC_CONFIG_URL as string,
+      clientId: import.meta.env.VITE_OIDC_CLIENT_ID as string,
       redirectUri: window.location.origin,
+      scope: import.meta.env.VITE_OIDC_SCOPE as string | undefined,
+      bearer: (import.meta.env.VITE_OIDC_TOKEN as 'id' | 'access' | undefined) ?? 'id',
     })
   }
 
