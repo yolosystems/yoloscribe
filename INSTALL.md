@@ -126,9 +126,16 @@ Create three IAM roles with IRSA trust policies (trust the EKS OIDC provider for
 
 | Role | Policy file | Used by |
 |---|---|---|
-| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
+| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3 (incl. object versions), DynamoDB, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
 | `yoloscribe-agent-runner` | `yoloscribe-agent-runner-policy.json` | Agent-runner pod — SQS poll, S3 read (agent/skill definitions only) |
 | `yoloscribe-indexer` | `yoloscribe-indexer-policy.json` | Indexer pod — SQS poll, S3 read, Bedrock, S3 Vectors |
+
+**Bedrock: inference vs. embeddings.** These two paths have different requirements, and conflating them is the usual source of IAM surprises here.
+
+- **Inference** (all agent and chat model calls) goes through the **LiteLLM proxy** since YOL-512. Only the LiteLLM pod's role needs model-invocation permissions — see `infra/helm/litellm.<env>.values.yaml`. The YoloScribe roles do **not** need a Bedrock inference policy attached, including `AmazonBedrockMantleInferenceAccess`.
+- **Embeddings** deliberately bypass LiteLLM. The backend, agent-runner, and indexer each call `bedrock-runtime:InvokeModel` directly against `amazon.titan-embed-text-v2:0` for semantic search. These roles need a `bedrock:InvokeModel` grant scoped to the embedding model — see the `BedrockEmbed` statement in each policy file.
+
+> **If you are removing a previously attached Bedrock managed policy from these roles, check the inline policy first.** A role whose inline policy has no `BedrockEmbed` statement may be relying on the broader managed policy for its embedding calls, and detaching it will cause semantic search to start returning 403s with no other symptom.
 
 Per-user roles (`yoloscribe/yoloscribe-user-{user_id}`) are provisioned automatically at sign-up by the backend using the template in `infra/iam/yoloscribe-user-policy-template.json`. Each role is scoped to that user's S3 prefix and Secrets Manager namespace only.
 

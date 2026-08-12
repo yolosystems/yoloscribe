@@ -6,13 +6,30 @@
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
+        "s3:GetObjectVersion",
         "s3:PutObject",
         "s3:DeleteObject",
-        "s3:ListBucket"
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
       ],
       "Resource": [
         "arn:aws:s3:::yoloscribe-*",
         "arn:aws:s3:::yoloscribe-*/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDBUserStores",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:*:*:table/yoloscribe-*",
+        "arn:aws:dynamodb:*:*:table/yoloscribe-*/index/*"
       ]
     },
     {
@@ -35,17 +52,6 @@
         "iam:GetRole"
       ],
       "Resource": "arn:aws:iam::*:role/yoloscribe/yoloscribe-user-*"
-    },
-    {
-      "Sid": "IAMAttachBedrockPolicyToUserRoles",
-      "Effect": "Allow",
-      "Action": "iam:AttachRolePolicy",
-      "Resource": "arn:aws:iam::*:role/yoloscribe/yoloscribe-user-*",
-      "Condition": {
-        "ArnEquals": {
-          "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
-        }
-      }
     },
     {
       "Sid": "SQSSend",

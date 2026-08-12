@@ -164,10 +164,9 @@ aws "${AWS_ARGS[@]}" iam put-role-policy \
   --policy-name "yoloscribe-user-access" \
   --policy-document "$INLINE_POLICY"
 
-echo "Attaching AmazonBedrockMantleInferenceAccess managed policy..."
-aws "${AWS_ARGS[@]}" iam attach-role-policy \
-  --role-name "$ROLE_NAME" \
-  --policy-arn "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
+# No Bedrock policy is attached. Per-user roles never invoke Bedrock: inference
+# goes through the LiteLLM proxy (YOL-512), and embedding calls are made by the
+# backend and agent-runner under their own IRSA roles, not an assumed user role.
 
 # ── K8s ServiceAccount ─────────────────────────────────────────────────────────
 
