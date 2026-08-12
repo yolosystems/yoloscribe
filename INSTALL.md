@@ -84,9 +84,15 @@ Backend: `OIDC_CONFIG_URL` (required), plus optional `OIDC_CLIENT_ID`, `OIDC_AUD
 
 - Create a Discord application at [discord.com/developers](https://discord.com/developers/applications)
 - Create a bot user, enable the **Message Content** privileged intent, and copy the bot token (`DISCORD_BOT_TOKEN`)
-- Generate a 32-byte AES key for encrypting per-server API tokens: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` → set as `MESSAGING_AES_KEY`
-- Set `YOLOSCRIBE_API_URL` to your backend's public URL, and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` to your Supabase project's values
+- Generate a shared secret: `openssl rand -hex 32` → set as `MESSAGING_BOT_SECRET` on **both** the bot and the backend (the backend also needs `messagingBotEnabled=true`)
+- Set `YOLOSCRIBE_API_URL` to the backend's **in-cluster** service DNS, e.g. `http://yoloscribe-backend.yolo.svc.cluster.local:8000`
 - Set `ENABLED_ADAPTERS` to the comma-separated list of platform adapters to enable (currently `discord`)
+
+The bot holds **no** database credential, no encryption key, and no user API token. It authenticates to the backend's `/internal/messaging/*` endpoints with `MESSAGING_BOT_SECRET` and names a channel; the backend resolves channel → API token → owning site and runs the request as that user. A user's token is handled exactly once, during `/setup`, and is forwarded rather than stored — the stored binding records only the token's ID, so revoking a token disconnects its channels automatically.
+
+> **`MESSAGING_BOT_SECRET` must differ from `INTERNAL_MINT_SECRET`.** The bot processes untrusted input from chat platforms, and `/internal/runs/mint` accepts an arbitrary `site` + `user_id`. One shared value would let a compromised bot mint run tokens for any site. `install_messaging_bot.sh` refuses to deploy if the two match.
+
+> **`YOLOSCRIBE_API_URL` must be the in-cluster address, not the public hostname.** `/internal/*` is blocked at the ALB by the WAF (see `infra/waf/README.md`), so a public URL here returns 403 on every request. In-cluster traffic goes pod → ClusterIP → pod and never reaches the load balancer.
 
 The bot is deployed as a standalone container from `messaging-bot/Dockerfile`.
 

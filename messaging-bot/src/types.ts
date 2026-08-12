@@ -24,8 +24,6 @@ export interface IncomingMessage {
   ack(emoji: AckEmoji): Promise<void>
   /** Post an optional warning (e.g. message near length limit). */
   warn(text: string): Promise<void>
-  /** Retrieve the decrypted API token and site name for this channel. */
-  credentials(): Promise<{ token: string; siteName: string }>
 }
 
 export type MessageHandler = (msg: IncomingMessage) => Promise<void>

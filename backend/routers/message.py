@@ -68,6 +68,21 @@ async def message(
     req: MessageRequest,
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> MessageResponse:
+    return await handle_message(ctx, req)
+
+
+async def handle_message(
+    ctx: tuple[str, str | None],
+    req: MessageRequest,
+) -> MessageResponse:
+    """Core message handling, independent of how the caller was authenticated.
+
+    Shared with the internal messaging endpoint (YOL-523), which resolves the
+    caller from a channel binding instead of a bearer token. Kept separate from
+    the route so the internal path doesn't inherit the IP-keyed rate limit —
+    all bot traffic arrives from one pod IP, so a per-IP limit there would let
+    one busy channel throttle every other site.
+    """
     user_id, site = ctx
     if not site:
         raise HTTPException(status_code=401, detail="API token is not associated with a site")

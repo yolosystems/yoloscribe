@@ -12,11 +12,17 @@ handshake** (`{LITELLM_MCP_URL}/mcp/{tool}`, `backend/routers/oauth.py`).
 The **same ALB** also serves the YoloScribe backend at `api-dev.yoloscribe.com`.
 Because a WebACL is attached to the *load balancer* (not a hostname), it evaluates
 **every** request to **both** hosts. The default-deny is meant only for the
-LiteLLM host, so the first rule (`allow-api-dev-host`, priority 0) matches the
-`Host` header `api-dev.yoloscribe.com` and **allows it unconditionally** — the
-backend has its own JWT auth and path safety and must not be filtered here. Every
-allow/block rule below it therefore applies only to `litellm-dev` (and any other
-host). If the backend ever moves to a different hostname, update that rule.
+LiteLLM host, so `allow-api-dev-host` matches the `Host` header
+`api-dev.yoloscribe.com` and allows it — the backend has its own JWT auth and
+path safety and must not be filtered here. Every allow/block rule *below* it
+therefore applies only to `litellm-dev` (and any other host). If the backend ever
+moves to a different hostname, update that rule.
+
+> **Allow is terminating, so rule order is load-bearing.** Anything placed after
+> `allow-api-dev-host` is dead for the backend host — evaluation stops the moment
+> that rule matches. Rules that must apply to *every* host therefore have to sit
+> **ahead** of it. `block-internal-paths` and `block-path-traversal` do; when
+> adding a rule, decide deliberately which side of the host allow it belongs on.
 
 ## What the WebACL allows / blocks (litellm-dev host)
 
@@ -39,13 +45,21 @@ Blocked-by-default includes: `/v1/chat/completions`, `/v1/completions`,
 
 Rule order in the WebACL (evaluated top-down; first Allow/Block wins, else the
 default Block):
-- **`allow-api-dev-host`** (priority 0, Allow) — see the shared-ALB section above.
+- **`block-internal-paths`** (priority 0) — blocks `/internal/*` on **every**
+  host. These are backend-to-backend endpoints (run-token minting, messaging
+  channel resolution) reached over cluster DNS; in-cluster traffic goes
+  pod → ClusterIP → pod and never passes through the ALB, so blocking them at
+  the edge costs legitimate callers nothing. They carry a shared-secret header,
+  but `/internal/runs/mint` takes an arbitrary `site` + `user_id`, so it must not
+  be reachable from the internet on the strength of one secret alone.
 - **`block-path-traversal`** (priority 1) — blocks any `..` in the (URL-decoded)
   path so an attacker can't smuggle `/mcp/../v1/chat/completions` past the allow
-  rule.
-- **`rate-limit-mcp`** (priority 2) — 300 requests / 5 min per IP against the
+  rule, or `/foo/../internal/runs/mint` past the rule above.
+- **`allow-api-dev-host`** (priority 2, Allow) — see the shared-ALB section above.
+- **`rate-limit-mcp`** (priority 3) — 300 requests / 5 min per IP against the
   `/mcp` surface, to blunt abuse of the one exposed endpoint. Tune in the JSON.
-- **`allow-mcp-oauth`** (priority 3, Allow) — the allowlist in the table above.
+  Note this sits *after* the host allow, so it does not apply to `api-dev`.
+- **`allow-mcp-oauth`** (priority 4, Allow) — the allowlist in the table above.
 
 > **ALB health checks are unaffected.** The ALB→target health check originates
 > inside the VPC and is not evaluated by WAF, so no `/health/*` allow is needed.

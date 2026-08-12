@@ -165,6 +165,27 @@ class DynamoDBApiTokenRepository(ApiTokenRepository):
         except Exception:
             return None
 
+    def get_by_id(self, token_id: str) -> dict | None:
+        try:
+            resp = self._dynamodb.get_item(
+                TableName=self._table_name,
+                Key={"token_id": {"S": token_id}},
+                ProjectionExpression="token_id,user_id,site_name,expires_at,revoked_at",
+            )
+        except Exception:
+            return None
+        item = resp.get("Item")
+        # A revoked token resolves to nothing, so revoking it also disconnects
+        # any messaging channels bound to it.
+        if not item or "revoked_at" in item:
+            return None
+        return {
+            "id": item["token_id"]["S"],
+            "user_id": item["user_id"]["S"],
+            "site_name": item["site_name"]["S"],
+            "expires_at": item["expires_at"]["S"] if "expires_at" in item else None,
+        }
+
     def update_last_used(self, token_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         try:
@@ -181,11 +202,16 @@ class DynamoDBApiTokenRepository(ApiTokenRepository):
 class DynamoDBMessagingConfigRepository(MessagingConfigRepository):
     """DynamoDB store for messaging-channel configs.
 
-    NOTE: the messaging-bot (messaging-bot/src/store.ts) still *writes* these rows
-    to Supabase, so on a non-Supabase install this table is inert until the bot's
-    storage layer is migrated. Table `{name}` uses `id` (S) as the primary key and
-    an `api_token_id-index` GSI so configs can be listed by owning token. The
-    `connection` attribute is stored as a JSON string and parsed on read.
+    Rows are written by the backend's internal messaging endpoints (YOL-523); the
+    bot itself has no database access. Table `{name}` uses `id` (S) as the primary
+    key, with two GSIs: `api_token_id-index` (list a site's configs) and
+    `platform_channel-index` (resolve an inbound message to its owner).
+
+    `platform_channel` is a derived attribute, "{platform}:{channel_id}", because
+    DynamoDB cannot index into the nested `connection` map. It is written on every
+    upsert and must stay consistent with `connection['channel_id']`.
+
+    The `connection` attribute is stored as a JSON string and parsed on read.
     """
 
     def __init__(self, table_name: str, region: str) -> None:
@@ -221,6 +247,47 @@ class DynamoDBMessagingConfigRepository(MessagingConfigRepository):
         if not item:
             return None
         return {"id": item["id"]["S"], "api_token_id": item["api_token_id"]["S"]}
+
+    def get_by_channel(self, platform: str, channel_id: str) -> dict | None:
+        try:
+            resp = self._dynamodb.query(
+                TableName=self._table_name,
+                IndexName="platform_channel-index",
+                KeyConditionExpression="platform_channel = :pc",
+                ExpressionAttributeValues={":pc": {"S": f"{platform}:{channel_id}"}},
+                ProjectionExpression="id,api_token_id",
+                Limit=1,
+            )
+        except Exception:
+            return None
+        items = resp.get("Items", [])
+        if not items:
+            return None
+        return {"id": items[0]["id"]["S"], "api_token_id": items[0]["api_token_id"]["S"]}
+
+    def upsert(self, platform: str, api_token_id: str, connection: dict) -> str:
+        channel_id = str(connection.get("channel_id", ""))
+        if not channel_id:
+            raise HTTPException(status_code=400, detail="connection.channel_id is required")
+
+        # Rebind rather than duplicate: reuse the existing row's id when this
+        # channel is already linked, so re-running /setup re-points it.
+        existing = self.get_by_channel(platform, channel_id)
+        config_id = existing["id"] if existing else str(uuid.uuid4())
+
+        item = {
+            "id": {"S": config_id},
+            "platform": {"S": platform},
+            "platform_channel": {"S": f"{platform}:{channel_id}"},
+            "api_token_id": {"S": api_token_id},
+            "connection": {"S": json.dumps(connection)},
+            "created_at": {"S": datetime.now(timezone.utc).isoformat()},
+        }
+        try:
+            self._dynamodb.put_item(TableName=self._table_name, Item=item)
+            return config_id
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"DynamoDB error: {exc}") from exc
 
     def delete(self, config_id: str) -> None:
         try:

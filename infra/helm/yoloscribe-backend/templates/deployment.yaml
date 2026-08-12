@@ -141,6 +141,13 @@ spec:
             - name: LITELLM_MCP_URL
               value: {{ .Values.config.litellmMcpUrl | quote }}
             {{- end }}
+            {{- if .Values.messagingBotEnabled }}
+            - name: MESSAGING_BOT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.secretName" . }}
+                  key: {{ .Values.messagingBotExistingSecretKey | default "messaging-bot-secret" }}
+            {{- end }}
             {{- if .Values.config.toolsHiddenMcpServers }}
             - name: TOOLS_HIDDEN_MCP_SERVERS
               value: {{ .Values.config.toolsHiddenMcpServers | quote }}

@@ -74,6 +74,15 @@ class ApiTokenRepository(ABC):
         """Look up an active (non-revoked) token by hash."""
 
     @abstractmethod
+    def get_by_id(self, token_id: str) -> dict | None:
+        """Look up an active (non-revoked) token by its row ID.
+
+        Returns at least {id, user_id, site_name, expires_at}, or None if the
+        token is unknown or revoked. Used to resolve a messaging-channel binding
+        back to its owner, so revoking a token also disconnects its channels.
+        """
+
+    @abstractmethod
     def update_last_used(self, token_id: str) -> None:
         """Update last_used_at for a token. Best-effort; never raises."""
 
@@ -81,9 +90,10 @@ class ApiTokenRepository(ABC):
 class MessagingConfigRepository(ABC):
     """Stores messaging-channel connections (channel → API-token mappings).
 
-    Rows are *written* by the separate messaging-bot service; the backend only
-    lists and deletes them on behalf of the site owner. Methods mirror the
-    queries in `routers/messaging.py`.
+    A row binds one platform channel to one API token; the token in turn
+    identifies the owning user and site. Deliberately stores no credential —
+    resolution goes channel → api_token_id → (user_id, site_name), so the
+    messaging bot never handles a user's API token (YOL-523).
     """
 
     @abstractmethod
@@ -96,6 +106,18 @@ class MessagingConfigRepository(ABC):
     @abstractmethod
     def get(self, config_id: str) -> dict | None:
         """Look up a single config by ID. Returns at least {id, api_token_id}, or None."""
+
+    @abstractmethod
+    def get_by_channel(self, platform: str, channel_id: str) -> dict | None:
+        """Look up a config by platform + channel. Returns {id, api_token_id}, or None."""
+
+    @abstractmethod
+    def upsert(self, platform: str, api_token_id: str, connection: dict) -> str:
+        """Create or replace the binding for `connection['channel_id']` on `platform`.
+
+        Re-running /setup on an already-linked channel must rebind it rather than
+        create a duplicate. Returns the config ID.
+        """
 
     @abstractmethod
     def delete(self, config_id: str) -> None:

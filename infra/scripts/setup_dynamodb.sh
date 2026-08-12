@@ -105,13 +105,44 @@ fi
 # ---------------------------------------------------------------------------
 # yoloscribe-messaging-configs
 # PK:   id (S)
-# GSI1: api_token_id-index — PK: api_token_id  (list configs for a site's tokens)
-# NOTE: rows are written by the messaging-bot; on a non-Supabase install the bot's
-# store must be migrated before this table is populated (Item 3 follow-up).
+# GSI1: api_token_id-index     — PK: api_token_id     (list configs for a site's tokens)
+# GSI2: platform_channel-index — PK: platform_channel (resolve an inbound message)
+#
+# platform_channel is a derived attribute, "{platform}:{channel_id}", because
+# DynamoDB cannot index into the nested `connection` map. It is written on every
+# upsert and must stay consistent with connection.channel_id.
+#
+# Rows are written by the backend's internal messaging endpoints (YOL-523); the
+# messaging bot has no database access of its own.
 # ---------------------------------------------------------------------------
 
 if table_exists "${MESSAGING_CONFIGS_TABLE}"; then
-  echo "✓ Table '${MESSAGING_CONFIGS_TABLE}' already exists — skipping."
+  echo "✓ Table '${MESSAGING_CONFIGS_TABLE}' already exists — skipping creation."
+  # Older deployments predate platform_channel-index; add it in place. A table
+  # can only take one GSI addition at a time, so this is its own call.
+  if aws_cmd dynamodb describe-table --table-name "${MESSAGING_CONFIGS_TABLE}" \
+      --query 'Table.GlobalSecondaryIndexes[?IndexName==`platform_channel-index`]' \
+      --output text 2>/dev/null | grep -q .; then
+    echo "✓ GSI 'platform_channel-index' already present."
+  else
+    echo "Adding missing GSI 'platform_channel-index'..."
+    aws_cmd dynamodb update-table \
+      --table-name "${MESSAGING_CONFIGS_TABLE}" \
+      --attribute-definitions AttributeName=platform_channel,AttributeType=S \
+      --global-secondary-index-updates \
+        '[
+          {
+            "Create": {
+              "IndexName": "platform_channel-index",
+              "KeySchema": [
+                {"AttributeName": "platform_channel", "KeyType": "HASH"}
+              ],
+              "Projection": {"ProjectionType": "ALL"}
+            }
+          }
+        ]'
+    echo "✓ GSI creation started (backfills asynchronously)."
+  fi
 else
   echo "Creating '${MESSAGING_CONFIGS_TABLE}'..."
   aws_cmd dynamodb create-table \
@@ -119,6 +150,7 @@ else
     --attribute-definitions \
       AttributeName=id,AttributeType=S \
       AttributeName=api_token_id,AttributeType=S \
+      AttributeName=platform_channel,AttributeType=S \
     --key-schema \
       AttributeName=id,KeyType=HASH \
     --billing-mode PAY_PER_REQUEST \
@@ -128,6 +160,13 @@ else
           "IndexName": "api_token_id-index",
           "KeySchema": [
             {"AttributeName": "api_token_id", "KeyType": "HASH"}
+          ],
+          "Projection": {"ProjectionType": "ALL"}
+        },
+        {
+          "IndexName": "platform_channel-index",
+          "KeySchema": [
+            {"AttributeName": "platform_channel", "KeyType": "HASH"}
           ],
           "Projection": {"ProjectionType": "ALL"}
         }

@@ -216,6 +216,25 @@ class SupabaseApiTokenRepository(ApiTokenRepository):
         except Exception:
             return None
 
+    def get_by_id(self, token_id: str) -> dict | None:
+        qs = urllib.parse.urlencode({
+            "id": f"eq.{token_id}",
+            "revoked_at": "is.null",
+            "select": "id,user_id,site_name,expires_at",
+            "limit": "1",
+        })
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/api_tokens?{qs}",
+            method="GET",
+            headers=self._headers(),
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                rows = json.loads(resp.read())
+                return rows[0] if rows else None
+        except Exception:
+            return None
+
     def update_last_used(self, token_id: str) -> None:
         qs = urllib.parse.urlencode({"id": f"eq.{token_id}"})
         req = urllib.request.Request(
@@ -267,6 +286,36 @@ class SupabaseMessagingConfigRepository(MessagingConfigRepository):
         })
         rows = self._get(f"{self._url}/rest/v1/messaging_configs?{qs}")
         return rows[0] if rows else None
+
+    def get_by_channel(self, platform: str, channel_id: str) -> dict | None:
+        qs = urllib.parse.urlencode({
+            "platform": f"eq.{platform}",
+            "connection->>channel_id": f"eq.{channel_id}",
+            "select": "id,api_token_id",
+            "limit": "1",
+        })
+        rows = self._get(f"{self._url}/rest/v1/messaging_configs?{qs}")
+        return rows[0] if rows else None
+
+    def upsert(self, platform: str, api_token_id: str, connection: dict) -> str:
+        row = {"platform": platform, "api_token_id": api_token_id, "connection": connection}
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/messaging_configs",
+            method="POST",
+            headers={
+                **self._headers(),
+                # Table has a unique constraint on (platform, connection->>'channel_id'),
+                # so re-running /setup on a linked channel rebinds instead of duplicating.
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            data=json.dumps(row).encode(),
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                rows = json.loads(resp.read())
+                return rows[0]["id"] if rows else ""
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Supabase error: {exc}") from exc
 
     def delete(self, config_id: str) -> None:
         req = urllib.request.Request(

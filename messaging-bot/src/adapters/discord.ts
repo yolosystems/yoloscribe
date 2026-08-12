@@ -8,7 +8,6 @@
  * Page targeting: [/page-path] message text  (defaults to root page)
  */
 
-import crypto from 'node:crypto'
 import {
   Client,
   Events,
@@ -24,11 +23,9 @@ import {
   type TextChannel,
 } from 'discord.js'
 import { DISCORD_BOT_TOKEN } from '../config.js'
-import { decryptPayload, encryptPayload } from '../crypto.js'
 import { recordRequest } from '../rate-tracker.js'
-import { getApiTokenByHash, getConfigByChannel, upsertConfig } from '../store.js'
 import type { MessageHandler, PlatformAdapter } from '../types.js'
-import { triggerIngest, uploadIngestFile } from '../yoloscribe.js'
+import { isChannelLinked, linkChannel, triggerIngest, uploadIngestFile } from '../yoloscribe.js'
 
 const MAX_CHARS = 2000
 const PAGE_RE = /^\[\/([^\]]*)\]\s*/
@@ -129,30 +126,29 @@ export class DiscordAdapter implements PlatformAdapter {
       return
     }
 
-    const hash = crypto.createHash('sha256').update(apiToken).digest('hex')
-    const row = await getApiTokenByHash(hash)
-    if (!row) {
+    // The token is forwarded to the backend and never stored here — the binding
+    // the backend writes records only the token's ID.
+    let siteName: string | null
+    try {
+      siteName = await linkChannel('discord', String(interaction.channelId), apiToken, {
+        guild_id: String(interaction.guildId ?? ''),
+      })
+    } catch (err) {
+      console.error('[discord] setup link failed:', err)
+      await interaction.followUp({ content: '❌ Failed to save configuration. Please try again.', ephemeral: true })
+      return
+    }
+
+    if (!siteName) {
       await interaction.followUp({
-        content: '❌ Token not found or revoked. Please generate a new token.',
+        content: '❌ Token not found, revoked, or expired. Please generate a new token.',
         ephemeral: true,
       })
       return
     }
 
-    const encrypted = encryptPayload(apiToken, row.site_name)
-    try {
-      await upsertConfig('discord', row.id, encrypted, {
-        channel_id: String(interaction.channelId),
-        guild_id: String(interaction.guildId ?? ''),
-      })
-    } catch (err) {
-      console.error('[discord] setup upsert failed:', err)
-      await interaction.followUp({ content: '❌ Failed to save configuration. Please try again.', ephemeral: true })
-      return
-    }
-
     await interaction.followUp({
-      content: `✅ This channel is now connected to YoloScribe site **${row.site_name}**. Send any message here to chat with your wiki.`,
+      content: `✅ This channel is now connected to YoloScribe site **${siteName}**. Send any message here to chat with your wiki.`,
       ephemeral: true,
     })
   }
@@ -160,32 +156,30 @@ export class DiscordAdapter implements PlatformAdapter {
   private async _handleAttachments(
     message: Message,
     attachments: Attachment[],
-    config: Awaited<ReturnType<typeof getConfigByChannel>>,
   ): Promise<void> {
     await message.react('⏳').catch(() => {})
     let ackEmoji = '✅'
+    const channelId = String(message.channelId)
 
     try {
-      const { token } = decryptPayload(config!.encrypted_token)
-
       for (const attachment of attachments) {
         // Fetch immediately — Discord CDN URLs expire quickly
         const fileRes = await fetch(attachment.url, { signal: AbortSignal.timeout(60_000) })
         if (!fileRes.ok) throw new Error(`Failed to fetch ${attachment.name} (HTTP ${fileRes.status})`)
         const bytes = Buffer.from(await fileRes.arrayBuffer())
         const contentType = attachment.contentType ?? 'application/octet-stream'
-        await uploadIngestFile(token, attachment.name, bytes, contentType)
+        await uploadIngestFile('discord', channelId, attachment.name, bytes, contentType)
       }
 
       // If the message also has text, save it as a caption alongside the first attachment
       const caption = message.content.trim()
       if (caption) {
         const captionFilename = `${attachments[0].name}.caption.txt`
-        await uploadIngestFile(token, captionFilename, Buffer.from(caption, 'utf-8'), 'text/plain')
+        await uploadIngestFile('discord', channelId, captionFilename, Buffer.from(caption, 'utf-8'), 'text/plain')
       }
 
       // Trigger ingest agents now that files are in the queue
-      await triggerIngest(token)
+      await triggerIngest('discord', channelId)
 
       const n = attachments.length
       const thread = await getOrCreateThread(message)
@@ -206,13 +200,12 @@ export class DiscordAdapter implements PlatformAdapter {
   private async _handleMessage(message: Message, handler: MessageHandler): Promise<void> {
     if (message.author.bot) return
 
-    const config = await getConfigByChannel('discord', String(message.channelId))
-    if (!config) return
+    if (!(await isChannelLinked('discord', String(message.channelId)))) return
 
     const attachments = [...message.attachments.values()]
 
     if (attachments.length > 0) {
-      await this._handleAttachments(message, attachments, config)
+      await this._handleAttachments(message, attachments)
       return
     }
 
@@ -252,7 +245,6 @@ export class DiscordAdapter implements PlatformAdapter {
           const thread = await getOrCreateThread(message)
           await thread.send(t).catch(() => {})
         },
-        credentials: async () => decryptPayload(config.encrypted_token),
       })
     } catch (err: unknown) {
       console.error('[discord] handler error:', err)

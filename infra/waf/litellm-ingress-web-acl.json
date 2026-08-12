@@ -1,7 +1,7 @@
 {
   "Name": "yoloscribe-litellm-ingress",
   "Scope": "REGIONAL",
-  "Description": "Shared ALB WebACL. Allows all api-dev.yoloscribe.com traffic. litellm-dev is default-DENY except the MCP OAuth handshake: /mcp, OAuth discovery, per-server authorize/token/register. Inference, admin, management, docs blocked. See infra/waf/README.md",
+  "Description": "Shared ALB WebACL. /internal/* and path traversal are blocked on every host, ahead of the api-dev allow; remaining api-dev.yoloscribe.com traffic is allowed. litellm-dev is default-DENY except the MCP OAuth handshake: /mcp, OAuth discovery, per-server authorize/token/register. Inference, admin, management, docs blocked. See infra/waf/README.md",
   "DefaultAction": { "Block": {} },
   "VisibilityConfig": {
     "SampledRequestsEnabled": true,
@@ -10,20 +10,20 @@
   },
   "Rules": [
     {
-      "Name": "allow-api-dev-host",
+      "Name": "block-internal-paths",
       "Priority": 0,
-      "Action": { "Allow": {} },
+      "Action": { "Block": {} },
       "Statement": {
         "RegexMatchStatement": {
-          "RegexString": "^api-dev\\.yoloscribe\\.com(:[0-9]+)?$",
-          "FieldToMatch": { "SingleHeader": { "Name": "host" } },
-          "TextTransformations": [ { "Priority": 0, "Type": "LOWERCASE" } ]
+          "RegexString": "^/internal(/|$)",
+          "FieldToMatch": { "UriPath": {} },
+          "TextTransformations": [ { "Priority": 0, "Type": "URL_DECODE" }, { "Priority": 1, "Type": "LOWERCASE" } ]
         }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
-        "MetricName": "allow-api-dev-host"
+        "MetricName": "block-internal-paths"
       }
     },
     {
@@ -47,8 +47,25 @@
       }
     },
     {
-      "Name": "rate-limit-mcp",
+      "Name": "allow-api-dev-host",
       "Priority": 2,
+      "Action": { "Allow": {} },
+      "Statement": {
+        "RegexMatchStatement": {
+          "RegexString": "^api-dev\\.yoloscribe\\.com(:[0-9]+)?$",
+          "FieldToMatch": { "SingleHeader": { "Name": "host" } },
+          "TextTransformations": [ { "Priority": 0, "Type": "LOWERCASE" } ]
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "allow-api-dev-host"
+      }
+    },
+    {
+      "Name": "rate-limit-mcp",
+      "Priority": 3,
       "Action": { "Block": {} },
       "Statement": {
         "RateBasedStatement": {
@@ -72,7 +89,7 @@
     },
     {
       "Name": "allow-mcp-oauth",
-      "Priority": 3,
+      "Priority": 4,
       "Action": { "Allow": {} },
       "Statement": {
         "OrStatement": {

@@ -176,6 +176,22 @@ anthropicApiKey: ""
 litellmApiKey: ""
 litellmExistingSecretKey: litellm-api-key
 
+# ── Messaging bot shared secret (YOL-523) ─────────────────────────────────────
+# Authenticates the messaging-bot to the backend's /internal/messaging/*
+# endpoints via the X-Internal-Auth header. Set messagingBotEnabled=true to wire
+# MESSAGING_BOT_SECRET into the pod; the value must match the bot chart's
+# `messagingBotSecret`.
+#
+# MUST NOT reuse INTERNAL_MINT_SECRET: the bot processes untrusted chat input,
+# and /internal/runs/mint accepts an arbitrary site + user_id, so one shared
+# value would let a compromised bot mint run tokens for any site.
+#
+# With existingSecret, add the key to that secret and leave messagingBotSecret
+# empty. Otherwise pass it via --set. Generate: openssl rand -hex 32
+messagingBotEnabled: false
+messagingBotSecret: ""
+messagingBotExistingSecretKey: messaging-bot-secret
+
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:
   requests:

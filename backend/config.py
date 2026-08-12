@@ -96,6 +96,13 @@ MCP_OAUTH_ISSUER = (
 # Defaults to "local" in LOCAL_MODE so the endpoint works out of the box, matching
 # LOCAL_MCP_API_KEY's own convention; production must set a real value explicitly.
 INTERNAL_MINT_SECRET = os.environ.get("INTERNAL_MINT_SECRET", "local" if LOCAL_MODE else "")
+
+# Separate from INTERNAL_MINT_SECRET on purpose (YOL-523). The messaging bot is
+# exposed to arbitrary user input from Discord/Slack, and /internal/runs/mint
+# takes site + user_id as parameters — sharing one secret would let a compromised
+# bot mint run tokens for any site. This credential only reaches the messaging
+# endpoints, which are scoped to already-linked channels.
+MESSAGING_BOT_SECRET = os.environ.get("MESSAGING_BOT_SECRET", "local" if LOCAL_MODE else "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
