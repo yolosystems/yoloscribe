@@ -126,6 +126,9 @@ if table_exists "${MESSAGING_CONFIGS_TABLE}"; then
     echo "✓ GSI 'platform_channel-index' already present."
   else
     echo "Adding missing GSI 'platform_channel-index'..."
+    # update-table also requires an ACTIVE table; a previous partial run can
+    # leave it UPDATING.
+    aws_cmd dynamodb wait table-exists --table-name "${MESSAGING_CONFIGS_TABLE}"
     aws_cmd dynamodb update-table \
       --table-name "${MESSAGING_CONFIGS_TABLE}" \
       --attribute-definitions AttributeName=platform_channel,AttributeType=S \
@@ -183,7 +186,23 @@ fi
 # ---------------------------------------------------------------------------
 
 if table_exists "${AGENT_LOCKS_TABLE}"; then
-  echo "✓ Table '${AGENT_LOCKS_TABLE}' already exists — skipping."
+  echo "✓ Table '${AGENT_LOCKS_TABLE}' already exists — skipping creation."
+  # TTL is a separate call from create-table, so a run that failed between the
+  # two leaves the table present but without TTL. Repair that rather than
+  # skipping past it — stale locks would otherwise never expire.
+  TTL_STATUS="$(aws_cmd dynamodb describe-time-to-live \
+    --table-name "${AGENT_LOCKS_TABLE}" \
+    --query 'TimeToLiveDescription.TimeToLiveStatus' --output text 2>/dev/null || echo UNKNOWN)"
+  if [[ "${TTL_STATUS}" == "ENABLED" || "${TTL_STATUS}" == "ENABLING" ]]; then
+    echo "✓ TTL on 'expires_at' already ${TTL_STATUS}."
+  else
+    echo "Enabling missing TTL on 'expires_at' (status was ${TTL_STATUS})..."
+    aws_cmd dynamodb wait table-exists --table-name "${AGENT_LOCKS_TABLE}"
+    aws_cmd dynamodb update-time-to-live \
+      --table-name "${AGENT_LOCKS_TABLE}" \
+      --time-to-live-specification "Enabled=true,AttributeName=expires_at"
+    echo "✓ TTL enabled."
+  fi
 else
   echo "Creating '${AGENT_LOCKS_TABLE}'..."
   aws_cmd dynamodb create-table \
@@ -196,6 +215,11 @@ else
       AttributeName=page_path,KeyType=RANGE \
     --billing-mode PAY_PER_REQUEST \
     --tags Key=app,Value=yoloscribe
+  # create-table returns while the table is still CREATING, and TTL can only be
+  # set on an ACTIVE table — without this wait the next call fails with
+  # ResourceNotFoundException.
+  echo "  waiting for '${AGENT_LOCKS_TABLE}' to become ACTIVE..."
+  aws_cmd dynamodb wait table-exists --table-name "${AGENT_LOCKS_TABLE}"
   aws_cmd dynamodb update-time-to-live \
     --table-name "${AGENT_LOCKS_TABLE}" \
     --time-to-live-specification "Enabled=true,AttributeName=expires_at"
