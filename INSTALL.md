@@ -199,6 +199,27 @@ GSIs: `yoloscribe-api-tokens` needs `user_id-index` (PK: `user_id`, SK: `created
 
 The backend's IAM role needs DynamoDB access to these tables — see the `DynamoDBUserStores` statement in `infra/iam/yoloscribe-backend-policy.json`.
 
+Also note `yoloscribe-messaging-configs` needs a second GSI, `platform_channel-index` (PK: `platform_channel`), used to resolve an inbound chat message to its owning site. `platform_channel` is a derived `"{platform}:{channel_id}"` attribute, because DynamoDB cannot index into the nested `connection` map. The setup script adds it to existing tables in place as well as creating it on new ones.
+
+#### Migrating an existing install from Supabase to DynamoDB
+
+Only `user_site` is migrated. This is a deliberate decision — the three tables move, or don't, as a set:
+
+| Table | Migrated | Why |
+|---|---|---|
+| `user_site` | **yes** | Without it a user cannot resolve their site, and there's no way for them to recreate it |
+| `api_tokens` | no | Users generate a new token after cutover |
+| `messaging_configs` | no | A binding's only link to an owner is `api_token_id`; regenerated tokens get new UUIDs, so migrated rows would reference IDs that don't exist and every channel would resolve to "not linked" |
+
+```bash
+AWS_PROFILE=... AWS_REGION=... SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+  uv run python backend/migrate_supabase_to_dynamodb.py --dry-run   # then without
+```
+
+After cutover, each user generates a new API token in the UI and re-runs `/setup` in every connected chat channel. They must do the second step regardless, since the token they pasted at setup time no longer exists.
+
+> If you'd rather cut over silently, migrate `api_tokens` too, preserving `id` and `token_hash` — then migrating `messaging_configs` becomes meaningful. It must be both or neither: migrating `messaging_configs` alone produces rows that look correct and are all dead.
+
 #### CloudFront + S3 — frontend hosting
 
 Create an S3 bucket for the frontend build output and a CloudFront distribution pointing at it. Set `CLOUDFRONT_DOMAIN` and `FRONTEND_BUCKET`.

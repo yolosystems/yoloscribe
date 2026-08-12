@@ -1,11 +1,17 @@
 #!/usr/bin/env python
 """One-off: purge stored API tokens from messaging_configs (YOL-523).
 
-Existing rows already carry everything resolution needs — `api_token_id` and
-`connection.channel_id` — so channel → owner lookup works against them without
-any data migration. What they also carry is `encrypted_token`: an AES-encrypted
-copy of the user's API token, which the backend no longer reads and no longer
-wants at rest. This script blanks that column.
+This is an in-place cleanup of the SUPABASE table. Despite living next to
+migrate_supabase_to_dynamodb.py, it does NOT move anything to DynamoDB — see
+that script's docstring for why messaging_configs is deliberately not migrated
+on an auth-provider cutover (regenerated tokens get new UUIDs, so migrated
+bindings would all be dead; users re-run /setup instead).
+
+What this does: existing rows already carry everything resolution needs —
+`api_token_id` and `connection.channel_id` — so channel → owner lookup works
+against them unchanged on a Supabase install. What they *also* carry is
+`encrypted_token`: an AES-encrypted copy of the user's API token, which the
+backend no longer reads and no longer wants at rest. This blanks that column.
 
 Once every deployment has run this, drop the column entirely:
 

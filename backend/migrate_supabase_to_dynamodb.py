@@ -9,11 +9,24 @@ matches exactly what the backend reads.
 Idempotent — rows that already exist in DynamoDB are skipped (the repository's
 insert is conditional on the key not existing), so it is safe to re-run.
 
-Scope: this migrates the user→site mapping ONLY (what the account cutover needs
-to resolve a user's site). API tokens live in the Supabase `api_tokens` table and
-are NOT migrated here — after cutover, users regenerate tokens, or a companion
-migration can move them with the same pattern. Messaging configs are written by
-the messaging-bot and move with it (separate follow-up).
+Scope: this migrates the user→site mapping ONLY. That is a deliberate decision,
+not an omission, and the three tables move (or don't) as a set:
+
+  user_site         — migrated here. Without it a user cannot resolve their site,
+                      so there is no way to recreate it from the user's side.
+  api_tokens        — NOT migrated. Users generate a new token after cutover.
+  messaging_configs — NOT migrated, and cannot usefully be. A binding's only link
+                      to an owner is `api_token_id`; regenerated tokens get new
+                      UUIDs, so migrated rows would reference IDs that do not
+                      exist and every channel would resolve to "not linked".
+                      Users re-run /setup per channel, which they must do anyway
+                      once their token changes.
+
+If you ever want a silent cutover instead, migrate `api_tokens` preserving `id`
+and `token_hash` (a direct put_item — insert_token mints a fresh UUID, so the
+repository write path cannot be reused for this), and then migrating
+messaging_configs becomes meaningful. Both or neither; migrating
+messaging_configs alone produces rows that look correct and are all dead.
 
 Source (Supabase) env:   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 Dest (DynamoDB) env:     AWS creds/region, DYNAMODB_USER_SITE_TABLE (optional)
@@ -55,7 +68,17 @@ def _supabase_user_site_rows() -> list[dict]:
 
 
 def main() -> None:
-    dry_run = "--dry-run" in sys.argv[1:]
+    args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return
+    dry_run = "--dry-run" in args
+
+    missing = [v for v in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY") if not os.environ.get(v)]
+    if missing:
+        print(f"Missing required env var(s): {', '.join(missing)}", file=sys.stderr)
+        print("Run with --help for usage.", file=sys.stderr)
+        raise SystemExit(1)
 
     region = os.environ.get("AWS_REGION", "us-west-2")
     table = os.environ.get("DYNAMODB_USER_SITE_TABLE", "yoloscribe-user-site")
