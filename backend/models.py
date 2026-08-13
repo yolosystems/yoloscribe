@@ -53,10 +53,6 @@ class ChatResponse(BaseModel):
     token_budget: TokenBudgetInfo | None = None
 
 
-class UserCreatedEvent(BaseModel):
-    user_id: str
-
-
 class SecretValue(BaseModel):
     value: str
 

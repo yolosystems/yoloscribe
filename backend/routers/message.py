@@ -6,6 +6,8 @@ history from the in-memory cache, calls MessagingAgent, and appends the
 completed turn back to the cache.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from opentelemetry import trace as _ot
 from opentelemetry.trace import StatusCode
@@ -22,6 +24,7 @@ from message_history import append_history, get_history
 from models import TokenBudgetInfo
 from rate_limit import limiter
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.message")
 
@@ -68,6 +71,21 @@ async def message(
     req: MessageRequest,
     ctx: tuple[str, str | None] = Depends(get_user_context),
 ) -> MessageResponse:
+    return await handle_message(ctx, req)
+
+
+async def handle_message(
+    ctx: tuple[str, str | None],
+    req: MessageRequest,
+) -> MessageResponse:
+    """Core message handling, independent of how the caller was authenticated.
+
+    Shared with the internal messaging endpoint (YOL-523), which resolves the
+    caller from a channel binding instead of a bearer token. Kept separate from
+    the route so the internal path doesn't inherit the IP-keyed rate limit —
+    all bot traffic arrives from one pod IP, so a per-IP limit there would let
+    one busy channel throttle every other site.
+    """
     user_id, site = ctx
     if not site:
         raise HTTPException(status_code=401, detail="API token is not associated with a site")
@@ -102,6 +120,13 @@ async def message(
             )
         except Exception as exc:
             _span.set_status(StatusCode.ERROR, str(exc))
+            # Log before raising: the detail only reaches the HTTP response body,
+            # and callers (notably the messaging bot) discard it — leaving a bare
+            # "502 Bad Gateway" access-log line as the only trace of the failure.
+            log.exception(
+                "MessagingAgent failed for user=%s site=%s %s:%s — %s",
+                user_id, site, req.platform, req.channel_id, exc,
+            )
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         _span.set_attribute("output.value", reply)

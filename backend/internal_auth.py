@@ -14,12 +14,29 @@ run token's signing/scoping never change.
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import HTTPException
 
-from config import INTERNAL_MINT_SECRET
+from config import INTERNAL_MINT_SECRET, MESSAGING_BOT_SECRET
+
+
+def _check(presented: str, expected: str) -> None:
+    """Constant-time comparison. An unset expected secret denies everything."""
+    if not expected or not hmac.compare_digest(presented, expected):
+        raise HTTPException(status_code=403, detail="Invalid internal auth")
 
 
 def check_caller(x_internal_auth: str) -> None:
     """Raise HTTPException(403) if the caller is not trusted to mint run tokens."""
-    if not INTERNAL_MINT_SECRET or x_internal_auth != INTERNAL_MINT_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid internal auth")
+    _check(x_internal_auth, INTERNAL_MINT_SECRET)
+
+
+def check_messaging_bot(x_internal_auth: str) -> None:
+    """Raise HTTPException(403) if the caller is not the messaging bot.
+
+    Deliberately a *different* secret from check_caller: the bot processes
+    untrusted input from chat platforms and must not be able to reach
+    /internal/runs/mint, which accepts an arbitrary site + user_id (YOL-523).
+    """
+    _check(x_internal_auth, MESSAGING_BOT_SECRET)

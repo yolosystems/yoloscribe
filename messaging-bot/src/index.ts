@@ -2,8 +2,8 @@
  * YoloScribe Messaging Bot — entry point.
  *
  * Loads each enabled platform adapter and starts listening for messages.
- * Each incoming message is routed to the YoloScribe /chat endpoint using
- * the API token stored for that channel.
+ * Each incoming message is routed to the YoloScribe backend, which resolves the
+ * owning site from the channel binding — the bot holds no user API token.
  */
 
 import { ENABLED_ADAPTERS } from './config.js'
@@ -12,10 +12,8 @@ import { sendMessage, RateLimitError } from './yoloscribe.js'
 
 async function handleMessage(adapter: PlatformAdapter): Promise<MessageHandler> {
   return async (msg) => {
-    const { token } = await msg.credentials()
-
     try {
-      const reply = await sendMessage(token, adapter.platform, msg.channelId, msg.text)
+      const reply = await sendMessage(adapter.platform, msg.channelId, msg.text)
       await msg.reply(reply)
       await msg.ack('success')
     } catch (err) {

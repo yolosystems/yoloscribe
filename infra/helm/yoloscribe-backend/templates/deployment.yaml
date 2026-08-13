@@ -58,14 +58,6 @@ spec:
               value: {{ .Values.config.awsRegion | quote }}
             - name: K8S_NAMESPACE
               value: {{ .Values.config.k8sNamespace | quote }}
-            {{- if .Values.webhookSecret }}
-            - name: WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "yoloscribe-backend.fullname" . }}-webhook
-                  key: webhook-secret
-                  optional: true
-            {{- end }}
             - name: AUTH_PROVIDER
               value: {{ .Values.config.authProvider | default "supabase" | quote }}
             {{- if eq (.Values.config.authProvider | default "supabase") "supabase" }}
@@ -85,17 +77,24 @@ spec:
               value: {{ .Values.cognito.clientId | quote }}
             - name: COGNITO_DOMAIN
               value: {{ .Values.cognito.domain | quote }}
-            {{- if .Values.cognitoClientSecret }}
-            - name: COGNITO_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "yoloscribe-backend.secretName" . }}
-                  key: cognito-client-secret
+            {{- else if eq .Values.config.authProvider "oidc" }}
+            - name: OIDC_CONFIG_URL
+              value: {{ .Values.config.oidc.configUrl | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.config.oidc.clientId | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ .Values.config.oidc.audience | quote }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.config.oidc.issuer | quote }}
             {{- end }}
+            {{- if has (.Values.config.authProvider | default "supabase") (list "cognito" "oidc") }}
+            {{- /* cognito + oidc share the DynamoDB repositories */}}
             - name: DYNAMODB_USER_SITE_TABLE
-              value: {{ .Values.cognito.dynamoDbUserSiteTable | quote }}
+              value: {{ .Values.dynamodb.userSiteTable | quote }}
             - name: DYNAMODB_API_TOKENS_TABLE
-              value: {{ .Values.cognito.dynamoDbApiTokensTable | quote }}
+              value: {{ .Values.dynamodb.apiTokensTable | quote }}
+            - name: DYNAMODB_MESSAGING_CONFIGS_TABLE
+              value: {{ .Values.dynamodb.messagingConfigsTable | quote }}
             {{- end }}
             {{- if .Values.config.cloudfrontDomain }}
             - name: CLOUDFRONT_DOMAIN
@@ -141,6 +140,13 @@ spec:
             {{- if .Values.config.litellmMcpUrl }}
             - name: LITELLM_MCP_URL
               value: {{ .Values.config.litellmMcpUrl | quote }}
+            {{- end }}
+            {{- if .Values.messagingBotEnabled }}
+            - name: MESSAGING_BOT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.secretName" . }}
+                  key: {{ .Values.messagingBotExistingSecretKey | default "messaging-bot-secret" }}
             {{- end }}
             {{- if .Values.config.toolsHiddenMcpServers }}
             - name: TOOLS_HIDDEN_MCP_SERVERS

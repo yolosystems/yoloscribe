@@ -13,7 +13,13 @@ import jwt as pyjwt
 from fastapi import HTTPException
 from jwt import PyJWKClient
 
-from .base import ApiTokenRepository, AuthProvider, JWTClaims, UserSiteRepository
+from .base import (
+    ApiTokenRepository,
+    AuthProvider,
+    JWTClaims,
+    MessagingConfigRepository,
+    UserSiteRepository,
+)
 
 log = logging.getLogger(__name__)
 
@@ -210,6 +216,25 @@ class SupabaseApiTokenRepository(ApiTokenRepository):
         except Exception:
             return None
 
+    def get_by_id(self, token_id: str) -> dict | None:
+        qs = urllib.parse.urlencode({
+            "id": f"eq.{token_id}",
+            "revoked_at": "is.null",
+            "select": "id,user_id,site_name,expires_at",
+            "limit": "1",
+        })
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/api_tokens?{qs}",
+            method="GET",
+            headers=self._headers(),
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                rows = json.loads(resp.read())
+                return rows[0] if rows else None
+        except Exception:
+            return None
+
     def update_last_used(self, token_id: str) -> None:
         qs = urllib.parse.urlencode({"id": f"eq.{token_id}"})
         req = urllib.request.Request(
@@ -222,3 +247,83 @@ class SupabaseApiTokenRepository(ApiTokenRepository):
             urllib.request.urlopen(req)
         except Exception as exc:
             log.warning("Failed to update token last_used_at for %s: %s", token_id, exc)
+
+
+class SupabaseMessagingConfigRepository(MessagingConfigRepository):
+    def __init__(self, supabase_url: str, supabase_key: str) -> None:
+        self._url = supabase_url
+        self._key = supabase_key
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self._key}",
+            "apikey": self._key,
+            "Content-Type": "application/json",
+        }
+
+    def _get(self, url: str) -> list:
+        req = urllib.request.Request(url, method="GET", headers=self._headers())
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())
+        except Exception:
+            return []
+
+    def list_by_token_ids(self, token_ids: list[str]) -> list[dict]:
+        if not token_ids:
+            return []
+        qs = urllib.parse.urlencode({
+            "api_token_id": f"in.({','.join(token_ids)})",
+            "select": "id,platform,connection,created_at,api_token_id",
+        })
+        return self._get(f"{self._url}/rest/v1/messaging_configs?{qs}")
+
+    def get(self, config_id: str) -> dict | None:
+        qs = urllib.parse.urlencode({
+            "id": f"eq.{config_id}",
+            "select": "id,api_token_id",
+            "limit": "1",
+        })
+        rows = self._get(f"{self._url}/rest/v1/messaging_configs?{qs}")
+        return rows[0] if rows else None
+
+    def get_by_channel(self, platform: str, channel_id: str) -> dict | None:
+        qs = urllib.parse.urlencode({
+            "platform": f"eq.{platform}",
+            "connection->>channel_id": f"eq.{channel_id}",
+            "select": "id,api_token_id",
+            "limit": "1",
+        })
+        rows = self._get(f"{self._url}/rest/v1/messaging_configs?{qs}")
+        return rows[0] if rows else None
+
+    def upsert(self, platform: str, api_token_id: str, connection: dict) -> str:
+        row = {"platform": platform, "api_token_id": api_token_id, "connection": connection}
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/messaging_configs",
+            method="POST",
+            headers={
+                **self._headers(),
+                # Table has a unique constraint on (platform, connection->>'channel_id'),
+                # so re-running /setup on a linked channel rebinds instead of duplicating.
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            data=json.dumps(row).encode(),
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                rows = json.loads(resp.read())
+                return rows[0]["id"] if rows else ""
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Supabase error: {exc}") from exc
+
+    def delete(self, config_id: str) -> None:
+        req = urllib.request.Request(
+            f"{self._url}/rest/v1/messaging_configs?id=eq.{urllib.parse.quote(config_id)}",
+            method="DELETE",
+            headers=self._headers(),
+        )
+        try:
+            urllib.request.urlopen(req)
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Supabase error: {exc}") from exc

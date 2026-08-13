@@ -1,13 +1,18 @@
 /**
  * Provider-agnostic auth client.
  *
- * Selected at build time via VITE_AUTH_PROVIDER=supabase|cognito (default: supabase).
+ * Selected at build time via VITE_AUTH_PROVIDER=supabase|oidc (default: supabase).
  * Both implementations expose the same AuthClient interface so App.tsx has no
  * provider-specific logic.
+ *
+ * `oidc` is discovery-driven and works against any OIDC-compliant provider —
+ * Auth0, Keycloak, Okta, Cognito, Entra. There is no separate Cognito client:
+ * Cognito publishes a standard discovery document, so it is configured through
+ * `oidc` like any other provider.
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { CognitoAuthClient } from './auth_cognito'
+import { OidcAuthClient } from './auth_oidc'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,14 +41,24 @@ const AUTH_PROVIDER = import.meta.env.VITE_AUTH_PROVIDER ?? 'supabase'
 
 // Raw Supabase client, exposed for Supabase-specific flows that the provider-
 // agnostic AuthClient interface doesn't cover — currently the OAuth 2.1 consent
-// screen (`supabaseClient.auth.oauth.*`). null when the provider isn't Supabase.
+// screen (`supabaseClient.auth.oauth.*`).
+//
+// Gated on Supabase being CONFIGURED, not on it being the login provider. These
+// are orthogonal concerns: /oauth/consent is where *third-party* MCP clients
+// (LiteLLM, Claude Code) approve access against Supabase's headless OAuth 2.1
+// server, which is unrelated to how this SPA's own users sign in. Tying it to
+// AUTH_PROVIDER === 'supabase' broke inbound MCP authorization the moment the
+// SPA moved to VITE_AUTH_PROVIDER=oidc — including when the OIDC provider *is*
+// Supabase, where the consent screen is still very much required.
+//
+// null when no Supabase project is configured, which is the honest signal:
+// OAuthConsent renders its "not configured for Supabase OAuth" state.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+
 export const supabaseClient =
-  !LOCAL_MODE && AUTH_PROVIDER === 'supabase'
-    ? createClient(
-        import.meta.env.VITE_SUPABASE_URL as string,
-        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-        { auth: { flowType: 'implicit' } },
-      )
+  !LOCAL_MODE && SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { flowType: 'implicit' } })
     : null
 
 function createAuthClient(): AuthClient {
@@ -56,16 +71,24 @@ function createAuthClient(): AuthClient {
     }
   }
 
-  if (AUTH_PROVIDER === 'cognito') {
-    return new CognitoAuthClient({
-      clientId: import.meta.env.VITE_COGNITO_CLIENT_ID as string,
-      domain: import.meta.env.VITE_COGNITO_DOMAIN as string,
+  if (AUTH_PROVIDER === 'oidc') {
+    return new OidcAuthClient({
+      configUrl: import.meta.env.VITE_OIDC_CONFIG_URL as string,
+      clientId: import.meta.env.VITE_OIDC_CLIENT_ID as string,
       redirectUri: window.location.origin,
+      scope: import.meta.env.VITE_OIDC_SCOPE as string | undefined,
+      bearer: (import.meta.env.VITE_OIDC_TOKEN as 'id' | 'access' | undefined) ?? 'id',
     })
   }
 
   // Default: Supabase — reuse the single shared client so session/storage match.
-  const client = supabaseClient!
+  if (!supabaseClient) {
+    throw new Error(
+      'VITE_AUTH_PROVIDER is "supabase" but VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY ' +
+        'are not set at build time. Set them, or select a different provider.',
+    )
+  }
+  const client = supabaseClient
 
   return {
     onAuthStateChange(callback) {

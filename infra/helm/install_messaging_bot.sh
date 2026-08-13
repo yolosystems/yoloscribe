@@ -29,14 +29,19 @@ if [[ ! -f "$VALUES_FILE" ]]; then
   exit 1
 fi
 
-if [[ -z "${MESSAGING_AES_KEY:-}" ]]; then
-  echo "Error: MESSAGING_AES_KEY is not set in environment or .env"
-  echo "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\""
+if [[ -z "${MESSAGING_BOT_SECRET:-}" ]]; then
+  echo "Error: MESSAGING_BOT_SECRET is not set in environment or .env"
+  echo "Generate one with: openssl rand -hex 32"
+  echo "The same value must be passed to the backend (messagingBotEnabled=true,"
+  echo "messagingBotSecret=...). Do NOT reuse INTERNAL_MINT_SECRET."
   exit 1
 fi
 
-if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
-  echo "Error: SUPABASE_SERVICE_ROLE_KEY is not set in environment or .env"
+if [[ -n "${INTERNAL_MINT_SECRET:-}" && "${MESSAGING_BOT_SECRET}" == "${INTERNAL_MINT_SECRET}" ]]; then
+  echo "Error: MESSAGING_BOT_SECRET must not equal INTERNAL_MINT_SECRET."
+  echo "The bot processes untrusted chat input, and /internal/runs/mint accepts an"
+  echo "arbitrary site + user_id — sharing one value would let a compromised bot"
+  echo "mint run tokens for any site. Generate a separate secret."
   exit 1
 fi
 
@@ -56,8 +61,7 @@ helm upgrade --install yoloscribe-messaging-bot \
   --namespace yolo \
   --create-namespace \
   --values "$VALUES_FILE" \
-  --set messagingAesKey="$MESSAGING_AES_KEY" \
-  --set supabaseServiceRoleKey="$SUPABASE_SERVICE_ROLE_KEY" \
+  --set messagingBotSecret="$MESSAGING_BOT_SECRET" \
   --set ghcr.pat="$GHCR_PAT" \
   ${DISCORD_SET_ARG} \
   "$@"

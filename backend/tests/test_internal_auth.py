@@ -40,3 +40,37 @@ class TestCheckCaller:
         monkeypatch.setattr(internal_auth, "INTERNAL_MINT_SECRET", "")
         with pytest.raises(HTTPException):
             internal_auth.check_caller("")
+
+
+class TestCheckMessagingBot:
+    """The messaging bot's credential is deliberately separate from the mint secret."""
+
+    def test_correct_secret_passes(self, monkeypatch):
+        monkeypatch.setattr(internal_auth, "MESSAGING_BOT_SECRET", "bot-sekrit")
+        internal_auth.check_messaging_bot("bot-sekrit")  # must not raise
+
+    def test_wrong_secret_rejected(self, monkeypatch):
+        monkeypatch.setattr(internal_auth, "MESSAGING_BOT_SECRET", "bot-sekrit")
+        with pytest.raises(HTTPException) as exc_info:
+            internal_auth.check_messaging_bot("wrong")
+        assert exc_info.value.status_code == 403
+
+    def test_unconfigured_secret_always_rejects(self, monkeypatch):
+        monkeypatch.setattr(internal_auth, "MESSAGING_BOT_SECRET", "")
+        with pytest.raises(HTTPException):
+            internal_auth.check_messaging_bot("")
+
+    def test_mint_secret_does_not_authorize_the_bot(self, monkeypatch):
+        """The whole point of the split (YOL-523).
+
+        The bot processes untrusted chat input; /internal/runs/mint accepts an
+        arbitrary site + user_id. If one secret opened both doors, a compromised
+        bot could mint run tokens for any site.
+        """
+        monkeypatch.setattr(internal_auth, "INTERNAL_MINT_SECRET", "mint-sekrit")
+        monkeypatch.setattr(internal_auth, "MESSAGING_BOT_SECRET", "bot-sekrit")
+
+        with pytest.raises(HTTPException):
+            internal_auth.check_messaging_bot("mint-sekrit")
+        with pytest.raises(HTTPException):
+            internal_auth.check_caller("bot-sekrit")

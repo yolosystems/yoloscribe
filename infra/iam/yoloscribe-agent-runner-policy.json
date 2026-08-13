@@ -49,6 +49,12 @@
         "dynamodb:Scan"
       ],
       "Resource": "arn:aws:dynamodb:*:*:table/yoloscribe-agent-locks"
+    },
+    {
+      "Sid": "BedrockEmbed",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:*::foundation-model/*"
     }
   ]
 }

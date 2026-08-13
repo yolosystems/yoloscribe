@@ -111,14 +111,18 @@ config:
   # inbound/self servers (e.g. "yoloscribe") that front YoloScribe's own MCP for
   # external clients. They're oauth2 but aren't outbound tools a user connects.
   toolsHiddenMcpServers: ""
-  # Auth provider — supabase (default) or cognito
+  # Auth provider — supabase (default) | cognito | oidc
   authProvider: "supabase"
   # Supabase (only used when authProvider=supabase)
   supabaseUrl: ""
-
-# ── Webhook secret (for /webhooks/user-created) ───────────────────────────────
-# Pass via --set on the command line; never commit a real value here.
-webhookSecret: ""
+  # Generic OIDC (only used when authProvider=oidc). Point configUrl at any
+  # OIDC-compatible provider's discovery document; jwks_uri + issuer are read
+  # from it. No client secret is needed — YoloScribe only validates tokens.
+  oidc:
+    configUrl: ""   # e.g. https://your-tenant.auth0.com/.well-known/openid-configuration
+    clientId: ""    # used as the default token audience when audience is empty
+    audience: ""    # optional explicit token audience (else falls back to clientId)
+    issuer: ""      # optional issuer override (else derived from discovery)
 
 # ── Supabase service role key (authProvider=supabase) ─────────────────────────
 # Pass via --set on the command line; never commit a real value here.
@@ -129,12 +133,23 @@ cognito:
   userPoolId: ""
   clientId: ""
   domain: ""                                        # e.g. https://your-pool.auth.us-east-1.amazoncognito.com
-  dynamoDbUserSiteTable: "yoloscribe-user-site"
-  dynamoDbApiTokensTable: "yoloscribe-api-tokens"
 
-# ── Cognito app client secret (authProvider=cognito) ──────────────────────────
-# Pass via --set on the command line; never commit a real value here.
-cognitoClientSecret: ""
+# ── DynamoDB tables (authProvider=cognito or oidc) ────────────────────────────
+# The user→site, API-token, and messaging-config stores for any non-Supabase IdP.
+dynamodb:
+  userSiteTable: "yoloscribe-user-site"
+  apiTokensTable: "yoloscribe-api-tokens"
+  messagingConfigsTable: "yoloscribe-messaging-configs"
+
+# ── OIDC client secret ───────────────────────────────────────────────────────
+# Intentionally unused. POLICY: frontend login is public-client PKCE only —
+# browsers cannot hold a secret safely — and the backend is a pure resource
+# server that only VALIDATES issued JWTs. Neither path uses a client secret, and
+# a confidential/secret-bearing browser login is explicitly NOT supported. A
+# secret could only ever apply to a hypothetical SERVER-SIDE flow (e.g. a BFF or
+# machine-to-machine exchange), never the browser; if that ever ships, store it
+# under the provider-neutral key `oidc-client-secret` (value `oidcClientSecret`).
+# Pass via --set; never commit a real value here.
 
 # ── OTEL / Arize Phoenix tracing ─────────────────────────────────────────────
 # Set endpoint to the internal Phoenix service DNS name to enable tracing.
@@ -160,6 +175,22 @@ anthropicApiKey: ""
 # (from $LITELLM_MASTER_KEY); with existingSecret, add this key to that secret.
 litellmApiKey: ""
 litellmExistingSecretKey: litellm-api-key
+
+# ── Messaging bot shared secret (YOL-523) ─────────────────────────────────────
+# Authenticates the messaging-bot to the backend's /internal/messaging/*
+# endpoints via the X-Internal-Auth header. Set messagingBotEnabled=true to wire
+# MESSAGING_BOT_SECRET into the pod; the value must match the bot chart's
+# `messagingBotSecret`.
+#
+# MUST NOT reuse INTERNAL_MINT_SECRET: the bot processes untrusted chat input,
+# and /internal/runs/mint accepts an arbitrary site + user_id, so one shared
+# value would let a compromised bot mint run tokens for any site.
+#
+# With existingSecret, add the key to that secret and leave messagingBotSecret
+# empty. Otherwise pass it via --set. Generate: openssl rand -hex 32
+messagingBotEnabled: false
+messagingBotSecret: ""
+messagingBotExistingSecretKey: messaging-bot-secret
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 resources:

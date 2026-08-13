@@ -67,6 +67,8 @@ Skills are site-scoped (under `{site}/.skills/`). Agents are page-scoped (under 
 ### Invite / magic link flow (waitlist sign-up)
 New users arrive at `app.yoloscribe.com` (or `app-dev.yoloscribe.com`) via a Supabase invite magic link sent by the waitlist Edge Function. Supabase's implicit flow (`flowType: 'implicit'` in `auth.ts`) automatically processes the `#access_token=...&type=invite` hash on page load, fires `onAuthStateChange`, and establishes the session. The existing routing then calls `GET /my-site` → null → `OnboardingView` → `POST /provision`.
 
+**This flow is specific to `VITE_AUTH_PROVIDER=supabase`.** Under `oidc` the identity provider owns sign-up entirely; there is no invite link and no expired-invite page (`getInviteLinkError()` in `App.tsx` returns null for non-Supabase providers). Provisioning still happens on first successful sign-in through the same `GET /my-site` → `OnboardingView` → `POST /provision` path.
+
 **Required Supabase project configuration (Auth → URL Configuration):**
 - Add `https://app.yoloscribe.com` and `https://app-dev.yoloscribe.com` to the **Redirect URLs** allowlist. Without this, `inviteUserByEmail` calls from the Edge Function will be rejected.
 - The invite TTL is configurable under Auth → Email → OTP Expiry (default 24 h; consider raising to 72 h or more).
@@ -84,6 +86,26 @@ All writable paths must pass `SAFE_PATH` in `main.py`. Allowed patterns:
 - `.user/search.md`
 
 `.user/notifications.md` is **not** in SAFE_PATH — it is platform-controlled and may only be written by `notifications.write_notification()`. This is validated on both `PUT /content` and `POST /chat`.
+
+### Internal endpoints (`/internal/*`)
+
+Backend-to-backend routes in `backend/routers/internal.py`, authenticated by a shared secret in the `X-Internal-Auth` header (`backend/internal_auth.py`) rather than a user JWT or API token:
+
+| Route | Caller | Secret |
+|---|---|---|
+| `POST /internal/runs/mint` | agent-runner `polling_worker` | `INTERNAL_MINT_SECRET` |
+| `POST /internal/messaging/link` | messaging-bot (`/setup`) | `MESSAGING_BOT_SECRET` |
+| `GET /internal/messaging/binding` | messaging-bot | `MESSAGING_BOT_SECRET` |
+| `POST /internal/messaging/message` | messaging-bot | `MESSAGING_BOT_SECRET` |
+| `POST /internal/messaging/ingest/{upload,trigger}` | messaging-bot | `MESSAGING_BOT_SECRET` |
+
+**Two separate secrets, deliberately.** `/internal/runs/mint` takes an arbitrary `site` + `user_id`, so anything holding that secret can act as any user. The messaging bot processes untrusted input from chat platforms and must never reach it. `install_messaging_bot.sh` refuses to deploy if the two values match.
+
+**These are blocked at the ALB.** The `block-internal-paths` WAF rule denies `^/internal(/|$)` on every host, and sits at priority 0 because `allow-api-dev-host` is a *terminating* Allow that would otherwise shadow it (see `infra/waf/README.md`). Callers reach these routes over cluster DNS — pod → ClusterIP → pod never traverses the load balancer — so in-cluster clients must be configured with the **internal service address**, not the public hostname.
+
+The WAF is not the auth boundary: any pod in the cluster can reach a ClusterIP, which is why these routes still check a secret. The pairing is what matters — a leaked secret isn't remotely exploitable, and in-cluster reachability alone doesn't authorize anything.
+
+**Messaging resolution.** The bot holds no user API token: it names a channel, and the backend resolves channel → `api_token_id` → `(user_id, site)` through `MessagingConfigRepository.get_by_channel` + `ApiTokenRepository.get_by_id`. Bindings store no credential, so there is nothing to encrypt at rest, and revoking or expiring a token disconnects its channels automatically (`get_by_id` returns `None`). New sub-handlers should reuse `routers.message.handle_message` / `routers.ingest.*` rather than duplicating logic — note that `handle_message` is split out of the `/message` route specifically so the internal path does **not** inherit the IP-keyed rate limit, since all bot traffic shares one pod IP.
 
 ### Agent framework (Strands Agents)
 All agents inherit from `BaseAgent` (`backend/agents/base.py`), which itself inherits from `strands.Agent`. Each class has a `SYSTEM_PROMPT` class variable (a Python format-string; placeholders are filled via `**prompt_vars` in the constructor).
@@ -273,8 +295,15 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `LOCAL_SITE_NAME` | backend | Site name used when `LOCAL_MODE=true` (default: `local`) |
 | `LOCAL_USER_ID` | backend | User ID used when `LOCAL_MODE=true` |
 | `LOCAL_RUNNER` | agent-runner + indexer | Set `true` to run agent/index jobs inline (no K8s) |
+| `INTERNAL_MINT_SECRET` | backend + agent-runner | Shared secret for `POST /internal/runs/mint` (`X-Internal-Auth`) |
+| `MESSAGING_BOT_SECRET` | backend + messaging-bot | Shared secret for `/internal/messaging/*`. **Must differ from `INTERNAL_MINT_SECRET`** — see below |
 | `VITE_API_BASE` | frontend build | ALB URL for production |
 | `VITE_SITE` | frontend dev | Override site name in dev |
+| `VITE_AUTH_PROVIDER` | frontend build | `supabase` (default) \| `oidc` — selects the browser auth client |
+| `VITE_OIDC_CONFIG_URL` | frontend build | OIDC discovery URL (`oidc` only); endpoints are read from it |
+| `VITE_OIDC_CLIENT_ID` | frontend build | Public/SPA client ID (`oidc` only); never a confidential client |
+| `VITE_OIDC_SCOPE` | frontend build | Optional; default `openid email profile offline_access` |
+| `VITE_OIDC_TOKEN` | frontend build | Optional; `id` (default) \| `access` — which token is sent as the bearer |
 
 ### Model routing (LiteLLM)
 

@@ -11,22 +11,31 @@ ghcr:
 
 # ── Application config ────────────────────────────────────────────────────────
 config:
-  # Full URL of the YoloScribe backend API (e.g. https://api.runyolo.dev)
+  # Base URL of the YoloScribe backend.
+  #
+  # Must be the IN-CLUSTER service DNS name, e.g.
+  #   http://yoloscribe-backend.yolo.svc.cluster.local:8000
+  # The bot calls the backend's /internal/messaging/* endpoints, which the WAF
+  # blocks at the ALB (infra/waf/README.md) — a public hostname here would 403.
   yoloscribeApiUrl: ""
-  # Supabase project URL
-  supabaseUrl: ""
   # Comma-separated list of enabled adapters (e.g. "discord" or "discord,slack")
   enabledAdapters: "discord"
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # Pass all secret values via --set; never commit real values here.
 #
-# messagingAesKey          — base64-encoded 32-byte key for AES-256-GCM token encryption
-#                            Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-# supabaseServiceRoleKey   — Supabase service role key (bypasses RLS)
-# discordBotToken          — Discord bot token (required when discord adapter is enabled)
-messagingAesKey: ""
-supabaseServiceRoleKey: ""
+# messagingBotSecret — shared secret for the backend's /internal/messaging/*
+#                      endpoints, sent as X-Internal-Auth. MUST match the
+#                      backend's MESSAGING_BOT_SECRET, and MUST NOT be the same
+#                      value as the backend's INTERNAL_MINT_SECRET: this process
+#                      handles untrusted chat input, and /internal/runs/mint
+#                      accepts an arbitrary site + user_id (YOL-523).
+#                      Generate: openssl rand -hex 32
+# discordBotToken    — Discord bot token (required when discord adapter is enabled)
+#
+# The bot no longer holds a database credential, an encryption key, or any user
+# API token — the backend resolves channel → owner on every request.
+messagingBotSecret: ""
 discordBotToken: ""
 
 # ── Resources ─────────────────────────────────────────────────────────────────

@@ -61,28 +61,42 @@ YoloScribe uses [Supabase](https://supabase.com) for auth by default. Free tier 
 - Create a project and enable **Google OAuth** under Authentication → Providers
 - Note your **Project URL** (`SUPABASE_URL`) and **service role key** (`SUPABASE_SERVICE_ROLE_KEY`)
 - Note your **anon key** (`VITE_SUPABASE_ANON_KEY`) for the frontend build
-- Configure a **webhook** on the Auth → Webhooks page pointing at `https://your-domain/webhooks/user-created` (event: `INSERT` on `auth.users`); set `WEBHOOK_SECRET` to match
 
-The webhook fires when a user signs up and triggers per-user IAM role + Kubernetes ServiceAccount provisioning.
+Per-user infrastructure (site, IAM role, Kubernetes ServiceAccount, Secrets Manager placeholder) is provisioned on first sign-in through the onboarding flow: the frontend calls the authenticated `POST /provision` after the user picks a site name.
 
-#### Cognito (alternative — all-AWS, no Supabase)
+#### Any OIDC provider (alternative — Auth0, Keycloak, Okta, Entra, Cognito)
 
-If you prefer a fully AWS-native stack, Cognito can replace Supabase. Set `AUTH_PROVIDER=cognito` on the backend.
+YoloScribe can authenticate against any OIDC-compliant identity provider. Set `AUTH_PROVIDER=oidc` on the backend and `VITE_AUTH_PROVIDER=oidc` on the frontend build. Both sides are discovery-driven: point them at the provider's `.well-known/openid-configuration` and the endpoints and signing keys are read from it.
 
-- Create a **User Pool** with your identity provider (Google, Okta, SAML, etc.) and the Hosted UI enabled
-- Create **two app clients**: a confidential client (with secret) for the backend, and a public PKCE-only client for the browser
-- Register `https://your-domain/` and `https://your-domain/mcp/oauth/callback/*` as allowed redirect URIs on the confidential client
-- Configure a **post-confirmation Lambda trigger** to POST to `https://your-domain/webhooks/user-created` with `{"user_id": "<sub>", "email": "<email>"}` and `X-Webhook-Secret` header
+- Register a **public / SPA client** using authorization code + PKCE. Do not issue a client secret — the browser cannot hold one, and the backend is a pure resource server that only *validates* tokens. Neither ever needs it.
+- Set the client's redirect URI to your site origin (e.g. `https://app.yoloscribe.com`); the browser client uses `window.location.origin`.
+- Enable the `offline_access` scope if you want sessions to renew silently rather than ending at the access-token lifetime.
 
-Set `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_DOMAIN` on the backend. Create the two DynamoDB tables (see below).
+Backend: `OIDC_CONFIG_URL` (required), plus optional `OIDC_CLIENT_ID`, `OIDC_AUDIENCE`, `OIDC_ISSUER`. Frontend build: `VITE_OIDC_CONFIG_URL`, `VITE_OIDC_CLIENT_ID`, and the optional `VITE_OIDC_SCOPE` / `VITE_OIDC_TOKEN` — see `frontend/.env.example`. Create the DynamoDB tables (see below). Per-user infrastructure is provisioned on first sign-in via the authenticated `POST /provision` onboarding flow, same as the Supabase path.
+
+**Audience must agree across the two sides.** By default the browser sends the **ID token** as the bearer, whose `aud` is the client ID, and the backend defaults its expected audience to `OIDC_CLIENT_ID`. If you instead configure an API audience via `OIDC_AUDIENCE`, set `VITE_OIDC_TOKEN=access` so the browser sends the access token carrying that audience. A mismatch shows up as a 401 on every authenticated request.
+
+**Cognito is configured this way too** — it publishes a standard discovery document at `https://cognito-idp.{region}.amazonaws.com/{userPoolId}/.well-known/openid-configuration`. The backend additionally accepts `AUTH_PROVIDER=cognito`, which behaves identically for token validation but adds an admin `delete_user` call that generic OIDC has no standard equivalent for. The frontend has no Cognito-specific mode; use `oidc`.
+
+> **Invite links are Supabase-only.** The magic-link invite flow (`inviteUserByEmail` and the expired-link page) is a Supabase feature. Under `oidc` the identity provider owns sign-up, and YoloScribe provisions on first successful sign-in instead.
+
+**Keep `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` set even under `oidc`, if inbound MCP clients authorize through Supabase.** The `/oauth/consent` screen is the approval UI for Supabase's headless OAuth 2.1 server — the flow LiteLLM and Claude Code use to authorize against your MCP endpoint. That is independent of how your own users sign in, so the frontend builds it whenever a Supabase project is configured rather than only when Supabase is the login provider. Drop those two variables and `/oauth/consent` reports that the deployment isn't configured for Supabase OAuth, breaking third-party MCP authorization.
+
+**Using Supabase itself as the OIDC provider** is the cheapest way to prove the generic path before introducing a third-party IdP — same users, same tokens, and its discovery document advertises everything the browser client needs (`S256` PKCE, `none` token-endpoint auth, `authorization_code` + `refresh_token`, `offline_access`, `query` response mode, ES256 keys). Create an OAuth app in the Supabase dashboard as a public/PKCE client with the site origin as its redirect URI — there is no `registration_endpoint`, so it must be registered by hand — then point `OIDC_CONFIG_URL` / `VITE_OIDC_CONFIG_URL` at `<project>/auth/v1/.well-known/openid-configuration` and use the app's client ID on both sides. Note Supabase publishes no `end_session_endpoint`, so sign-out clears the local session without ending the Supabase one.
 
 #### Messaging bot (optional)
 
 - Create a Discord application at [discord.com/developers](https://discord.com/developers/applications)
 - Create a bot user, enable the **Message Content** privileged intent, and copy the bot token (`DISCORD_BOT_TOKEN`)
-- Generate a 32-byte AES key for encrypting per-server API tokens: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` → set as `MESSAGING_AES_KEY`
-- Set `YOLOSCRIBE_API_URL` to your backend's public URL, and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` to your Supabase project's values
+- Generate a shared secret: `openssl rand -hex 32` → set as `MESSAGING_BOT_SECRET` on **both** the bot and the backend (the backend also needs `messagingBotEnabled=true`)
+- Set `YOLOSCRIBE_API_URL` to the backend's **in-cluster** service DNS, e.g. `http://yoloscribe-backend.yolo.svc.cluster.local:8000`
 - Set `ENABLED_ADAPTERS` to the comma-separated list of platform adapters to enable (currently `discord`)
+
+The bot holds **no** database credential, no encryption key, and no user API token. It authenticates to the backend's `/internal/messaging/*` endpoints with `MESSAGING_BOT_SECRET` and names a channel; the backend resolves channel → API token → owning site and runs the request as that user. A user's token is handled exactly once, during `/setup`, and is forwarded rather than stored — the stored binding records only the token's ID, so revoking a token disconnects its channels automatically.
+
+> **`MESSAGING_BOT_SECRET` must differ from `INTERNAL_MINT_SECRET`.** The bot processes untrusted input from chat platforms, and `/internal/runs/mint` accepts an arbitrary `site` + `user_id`. One shared value would let a compromised bot mint run tokens for any site. `install_messaging_bot.sh` refuses to deploy if the two match.
+
+> **`YOLOSCRIBE_API_URL` must be the in-cluster address, not the public hostname.** `/internal/*` is blocked at the ALB by the WAF (see `infra/waf/README.md`), so a public URL here returns 403 on every request. In-cluster traffic goes pod → ClusterIP → pod and never reaches the load balancer.
 
 The bot is deployed as a standalone container from `messaging-bot/Dockerfile`.
 
@@ -128,9 +142,16 @@ Create three IAM roles with IRSA trust policies (trust the EKS OIDC provider for
 
 | Role | Policy file | Used by |
 |---|---|---|
-| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
+| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3 (incl. object versions), DynamoDB, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
 | `yoloscribe-agent-runner` | `yoloscribe-agent-runner-policy.json` | Agent-runner pod — SQS poll, S3 read (agent/skill definitions only) |
 | `yoloscribe-indexer` | `yoloscribe-indexer-policy.json` | Indexer pod — SQS poll, S3 read, Bedrock, S3 Vectors |
+
+**Bedrock: inference vs. embeddings.** These two paths have different requirements, and conflating them is the usual source of IAM surprises here.
+
+- **Inference** (all agent and chat model calls) goes through the **LiteLLM proxy** since YOL-512. Only the LiteLLM pod's role needs model-invocation permissions — see `infra/helm/litellm.<env>.values.yaml`. The YoloScribe roles do **not** need a Bedrock inference policy attached, including `AmazonBedrockMantleInferenceAccess`.
+- **Embeddings** deliberately bypass LiteLLM. The backend, agent-runner, and indexer each call `bedrock-runtime:InvokeModel` directly against `amazon.titan-embed-text-v2:0` for semantic search. These roles need a `bedrock:InvokeModel` grant scoped to the embedding model — see the `BedrockEmbed` statement in each policy file.
+
+> **If you are removing a previously attached Bedrock managed policy from these roles, check the inline policy first.** A role whose inline policy has no `BedrockEmbed` statement may be relying on the broader managed policy for its embedding calls, and detaching it will cause semantic search to start returning 403s with no other symptom.
 
 Per-user roles (`yoloscribe/yoloscribe-user-{user_id}`) are provisioned automatically at sign-up by the backend using the template in `infra/iam/yoloscribe-user-policy-template.json`. Each role is scoped to that user's S3 prefix and Secrets Manager namespace only.
 
@@ -149,22 +170,59 @@ annotations:
 
 The Helm charts in `infra/helm/` handle this automatically when you set `serviceAccount.iamRoleArn` in the values file.
 
+#### Cluster add-ons (prerequisites)
+
+YoloScribe assumes a few standard EKS cluster add-ons are already installed. These are cluster-wide, installed once by whoever operates the cluster, and are **not** vendored by YoloScribe — install each from its upstream project. Anyone running EKS in production will typically have these already.
+
+| Add-on | Why YoloScribe needs it |
+|---|---|
+| [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) | Provisions the ALB for each `Ingress` (backend, and the LiteLLM proxy). Required for the `className: alb` ingresses and for the WAF association annotation (`infra/waf/`). |
+| [ExternalDNS](https://kubernetes-sigs.github.io/external-dns/) | Creates the Route 53 records for ingress hostnames. EKS gives you no DNS automation out of the box. |
+| [EBS CSI driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) | Dynamic `PersistentVolume` provisioning for any stateful dependency you self-host in-cluster (e.g. Postgres, Phoenix). |
+| [External Secrets Operator (ESO)](https://external-secrets.io/) | Syncs AWS Secrets Manager → Kubernetes `Secret`s. Point a chart's `existingSecret` value at an ESO-materialized secret to keep plaintext out of Helm `--set` / release values (recommended over injecting secrets at install time). |
+
+> **EKS Auto Mode note:** Auto Mode ships its own load-balancing and requires `IngressClass` + `IngressClassParams` rather than the legacy ALB controller annotations, and still has no built-in Route 53 integration — install ExternalDNS separately.
+
 #### Secrets Manager
 
 No manual setup required. The backend creates per-user secret prefixes (`yoloscribe/{user_id}/`) automatically when users connect skills (GitHub, Linear, etc.). The backend IAM role needs `secretsmanager:CreateSecret`, `PutSecretValue`, `GetSecretValue`, `DescribeSecret` on `yoloscribe*` resources.
 
-#### DynamoDB (Cognito path only)
+#### DynamoDB (non-Supabase auth only)
 
-Only required if using Cognito auth. Create two tables:
+Required when `AUTH_PROVIDER` is `oidc` or `cognito` — these paths keep user data in DynamoDB rather than Supabase tables. Not needed on the Supabase path. Create three tables:
 
 | Table | Partition key | Purpose |
 |---|---|---|
 | `yoloscribe-user-site` | `user_id` (S) | Maps user UUID → site name |
 | `yoloscribe-api-tokens` | `token_id` (S) | Stores hashed API tokens |
+| `yoloscribe-messaging-configs` | `id` (S) | Messaging bot channel bindings |
 
-`yoloscribe-api-tokens` also needs two GSIs: `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`).
+GSIs: `yoloscribe-api-tokens` needs `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`); `yoloscribe-messaging-configs` needs `api_token_id-index` (PK: `api_token_id`).
 
-Set `DYNAMODB_USER_SITE_TABLE` and `DYNAMODB_API_TOKENS_TABLE` if you use non-default names.
+`infra/scripts/setup_dynamodb.sh` creates all three with the right keys and indexes. Set `DYNAMODB_USER_SITE_TABLE`, `DYNAMODB_API_TOKENS_TABLE`, and `DYNAMODB_MESSAGING_CONFIGS_TABLE` if you use non-default names.
+
+The backend's IAM role needs DynamoDB access to these tables — see the `DynamoDBUserStores` statement in `infra/iam/yoloscribe-backend-policy.json`.
+
+Also note `yoloscribe-messaging-configs` needs a second GSI, `platform_channel-index` (PK: `platform_channel`), used to resolve an inbound chat message to its owning site. `platform_channel` is a derived `"{platform}:{channel_id}"` attribute, because DynamoDB cannot index into the nested `connection` map. The setup script adds it to existing tables in place as well as creating it on new ones.
+
+#### Migrating an existing install from Supabase to DynamoDB
+
+Only `user_site` is migrated. This is a deliberate decision — the three tables move, or don't, as a set:
+
+| Table | Migrated | Why |
+|---|---|---|
+| `user_site` | **yes** | Without it a user cannot resolve their site, and there's no way for them to recreate it |
+| `api_tokens` | no | Users generate a new token after cutover |
+| `messaging_configs` | no | A binding's only link to an owner is `api_token_id`; regenerated tokens get new UUIDs, so migrated rows would reference IDs that don't exist and every channel would resolve to "not linked" |
+
+```bash
+AWS_PROFILE=... AWS_REGION=... SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+  uv run python backend/migrate_supabase_to_dynamodb.py --dry-run   # then without
+```
+
+After cutover, each user generates a new API token in the UI and re-runs `/setup` in every connected chat channel. They must do the second step regardless, since the token they pasted at setup time no longer exists.
+
+> If you'd rather cut over silently, migrate `api_tokens` too, preserving `id` and `token_hash` — then migrating `messaging_configs` becomes meaningful. It must be both or neither: migrating `messaging_configs` alone produces rows that look correct and are all dead.
 
 #### CloudFront + S3 — frontend hosting
 

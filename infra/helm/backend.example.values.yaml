@@ -14,7 +14,34 @@ ingress:
   # controllerType: eks-auto-mode  # uncomment on an EKS Auto Mode cluster (default: aws-load-balancer-controller)
 
 config:
+  # ── Auth provider: supabase (default) | cognito | oidc ──────────────────────
+  authProvider: "supabase"
+
+  # Used when authProvider=supabase. Keep it set even under oidc if inbound MCP
+  # clients (LiteLLM, Claude Code) authorize through Supabase's OAuth 2.1 server —
+  # /oauth/consent is that flow's approval UI.
   supabaseUrl: "https://<supabase-project>.supabase.co"
+
+  # Used when authProvider=oidc. Works with any OIDC-compliant provider — Auth0,
+  # Keycloak, Okta, Entra, Cognito — since endpoints are read from the discovery
+  # document. Register a PUBLIC / SPA client (authorization code + PKCE, no
+  # client secret) with the site origin as its redirect URI.
+  #
+  # Leave `audience` empty unless your IdP issues a separate API audience: it
+  # defaults to clientId, which is what the ID token's `aud` carries. If you do
+  # set it, the frontend must also build with VITE_OIDC_TOKEN=access or every
+  # request 401s.
+  #
+  # oidc:
+  #   configUrl: "https://<idp>/.well-known/openid-configuration"
+  #   clientId: "<spa-client-id>"
+  #   audience: ""
+  #   issuer: ""
+  #
+  # Switching provider is a two-sided change — the frontend must be rebuilt with
+  # matching VITE_AUTH_PROVIDER / VITE_OIDC_* values, or tokens will not validate.
+  # See "Any OIDC provider" in INSTALL.md.
+
   mcpBaseUrl: "https://api.<your-domain>"
   cloudfrontDomain: "app.<your-domain>"
   cloudfrontMediaDomain: "media.<your-domain>"

@@ -2,36 +2,30 @@
 
 Allows site owners to list and revoke their messaging_configs rows
 (connected channels across all platforms) from the frontend UI.
+
+Storage is reached through the provider-agnostic repositories
+(config.api_token_repo / config.messaging_config_repo) rather than a direct
+Supabase dependency. NOTE: the rows themselves are *written* by the separate
+messaging-bot service; on a non-Supabase install its store must be migrated
+before these listings return data.
 """
 from __future__ import annotations
 
-import json
-import urllib.parse
-import urllib.request
-
 from fastapi import APIRouter, Depends, HTTPException
 
+import config
 from auth import get_user_context, require_site_owner
-from config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 router = APIRouter()
 
 
-def _headers() -> dict:
-    return {
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-    }
-
-
-def _get(url: str) -> list:
-    req = urllib.request.Request(url, method="GET", headers=_headers())
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-    except Exception:
-        return []
+def _owned_token_ids_and_names(user_id: str, site: str) -> tuple[set[str], dict[str, str]]:
+    """Return (token_ids, {id: name}) for the site's API tokens owned by this user."""
+    if config.api_token_repo is None:
+        return set(), {}
+    tokens = [t for t in config.api_token_repo.list_tokens(user_id) if t.get("site_name") == site]
+    names = {t["id"]: t["name"] for t in tokens}
+    return set(names.keys()), names
 
 
 @router.get("/messaging-configs", tags=["tools"], summary="List messaging channel connections")
@@ -43,26 +37,14 @@ async def list_messaging_configs(
     user_id, user_site = ctx
     require_site_owner(site, user_site)
 
-    # Get all API token IDs for this site
-    qs = urllib.parse.urlencode({
-        "site_name": f"eq.{site}",
-        "revoked_at": "is.null",
-        "select": "id,name",
-    })
-    token_rows = _get(f"{SUPABASE_URL}/rest/v1/api_tokens?{qs}")
-    if not token_rows:
+    if config.messaging_config_repo is None:
         return {"configs": []}
 
-    token_ids = [r["id"] for r in token_rows]
-    token_names = {r["id"]: r["name"] for r in token_rows}
+    token_ids, token_names = _owned_token_ids_and_names(user_id, site)
+    if not token_ids:
+        return {"configs": []}
 
-    # Get messaging_configs for those tokens
-    qs2 = urllib.parse.urlencode({
-        "api_token_id": f"in.({','.join(token_ids)})",
-        "select": "id,platform,connection,created_at,api_token_id",
-    })
-    config_rows = _get(f"{SUPABASE_URL}/rest/v1/messaging_configs?{qs2}")
-
+    config_rows = config.messaging_config_repo.list_by_token_ids(list(token_ids))
     configs = [
         {
             "id": r["id"],
@@ -89,32 +71,17 @@ async def delete_messaging_config(
 
     if not config_id:
         raise HTTPException(status_code=400, detail="config_id is required")
-
-    # Verify the config belongs to a token owned by this site before deleting
-    qs = urllib.parse.urlencode({
-        "id": f"eq.{config_id}",
-        "select": "id,api_token_id",
-        "limit": "1",
-    })
-    rows = _get(f"{SUPABASE_URL}/rest/v1/messaging_configs?{qs}")
-    if not rows:
+    if config.messaging_config_repo is None:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    token_id = rows[0]["api_token_id"]
-    token_qs = urllib.parse.urlencode({
-        "id": f"eq.{token_id}",
-        "site_name": f"eq.{site}",
-        "select": "id",
-        "limit": "1",
-    })
-    token_rows = _get(f"{SUPABASE_URL}/rest/v1/api_tokens?{token_qs}")
-    if not token_rows:
+    row = config.messaging_config_repo.get(config_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    # Verify the config belongs to a token owned by this site before deleting.
+    owned_token_ids, _ = _owned_token_ids_and_names(user_id, site)
+    if row["api_token_id"] not in owned_token_ids:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/messaging_configs?id=eq.{urllib.parse.quote(config_id)}",
-        method="DELETE",
-        headers=_headers(),
-    )
-    urllib.request.urlopen(req)
+    config.messaging_config_repo.delete(config_id)
     return {"deleted": True}

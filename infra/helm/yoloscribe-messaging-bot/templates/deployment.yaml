@@ -28,20 +28,13 @@ spec:
           env:
             - name: YOLOSCRIBE_API_URL
               value: {{ .Values.config.yoloscribeApiUrl | quote }}
-            - name: SUPABASE_URL
-              value: {{ .Values.config.supabaseUrl | quote }}
             - name: ENABLED_ADAPTERS
               value: {{ .Values.config.enabledAdapters | quote }}
-            - name: MESSAGING_AES_KEY
+            - name: MESSAGING_BOT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "yoloscribe-messaging-bot.fullname" . }}
-                  key: messaging-aes-key
-            - name: SUPABASE_SERVICE_ROLE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "yoloscribe-messaging-bot.fullname" . }}
-                  key: supabase-service-role-key
+                  key: messaging-bot-secret
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:

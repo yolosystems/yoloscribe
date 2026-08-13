@@ -7,6 +7,8 @@ ghcr:
   username: <ghcr-user>
 
 config:
-  yoloscribeApiUrl: "https://api.<your-domain>"
-  supabaseUrl: "https://<supabase-project>.supabase.co"
+  # In-cluster service DNS, NOT the public hostname. The bot calls the backend's
+  # /internal/messaging/* endpoints, which the WAF blocks at the ALB — a public
+  # URL here would return 403 on every request.
+  yoloscribeApiUrl: "http://yoloscribe-backend.<namespace>.svc.cluster.local:8000"
   enabledAdapters: "discord"

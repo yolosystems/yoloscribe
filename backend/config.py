@@ -75,19 +75,34 @@ SQS_ENDPOINT_URL: str = os.environ.get("SQS_ENDPOINT_URL", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+# Generic-OIDC config (AUTH_PROVIDER=oidc). The discovery URL is
+# {issuer}/.well-known/openid-configuration; the issuer, when not given explicitly,
+# is derived from it below.
+OIDC_CONFIG_URL = os.environ.get("OIDC_CONFIG_URL", "")
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "") or (
+    OIDC_CONFIG_URL.split("/.well-known/")[0] if OIDC_CONFIG_URL else ""
+)
 # External OIDC issuer whose JWTs the MCP server validates. Advertised in the RFC
 # 9728 protected-resource metadata so MCP clients / the LiteLLM gateway discover the
-# authorization server — YoloScribe runs no OAuth AS of its own (YOL-505). Defaults
-# to Supabase's issuer; Item 3 (provider-agnostic auth) makes this fully generic.
-MCP_OAUTH_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "") or (
-    f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else ""
+# authorization server — YoloScribe runs no OAuth AS of its own (YOL-505). Prefers
+# an explicit override, then the generic-OIDC issuer, then Supabase's issuer.
+MCP_OAUTH_ISSUER = (
+    os.environ.get("MCP_OAUTH_ISSUER", "")
+    or OIDC_ISSUER
+    or (f"{SUPABASE_URL.rstrip('/')}/auth/v1" if SUPABASE_URL else "")
 )
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 # Shared secret gating POST /internal/runs/mint — wholly internal to one deployment
 # (never handed to a third party), so rotation is just a redeploy. See internal_auth.py.
 # Defaults to "local" in LOCAL_MODE so the endpoint works out of the box, matching
 # LOCAL_MCP_API_KEY's own convention; production must set a real value explicitly.
 INTERNAL_MINT_SECRET = os.environ.get("INTERNAL_MINT_SECRET", "local" if LOCAL_MODE else "")
+
+# Separate from INTERNAL_MINT_SECRET on purpose (YOL-523). The messaging bot is
+# exposed to arbitrary user input from Discord/Slack, and /internal/runs/mint
+# takes site + user_id as parameters — sharing one secret would let a compromised
+# bot mint run tokens for any site. This credential only reaches the messaging
+# endpoints, which are scoped to already-linked channels.
+MESSAGING_BOT_SECRET = os.environ.get("MESSAGING_BOT_SECRET", "local" if LOCAL_MODE else "")
 EKS_OIDC_PROVIDER = os.environ.get("EKS_OIDC_PROVIDER", "")
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -113,7 +128,7 @@ MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", 1024 * 1024))  
 
 from auth_providers import create_providers  # noqa: E402
 
-auth_provider, user_site_repo, api_token_repo = create_providers()
+auth_provider, user_site_repo, api_token_repo, messaging_config_repo = create_providers()
 
 # ── AWS clients ────────────────────────────────────────────────────────────────
 
