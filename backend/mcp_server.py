@@ -25,6 +25,13 @@ from typing import Any
 import jwt
 from fastapi import HTTPException
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import NotFoundError
+from fastmcp.server.dependencies import get_http_request
+# Aliased: starlette.middleware.Middleware (ASGI, imported below) shares the
+# name and would otherwise shadow this one — silently, since the resulting
+# subclass is simply not callable rather than an import error.
+from fastmcp.server.middleware import Middleware as FastMCPMiddleware
+from fastmcp.server.middleware import MiddlewareContext
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -70,6 +77,75 @@ _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # `tests/test_mcp_tool_tiers.py` fails if any registered tool is untagged.
 TIER_INTERNAL = "tier:internal"
 TIER_EXTERNAL = "tier:external"
+
+
+def _caller_tier() -> str:
+    """The tier of the current caller: run tokens are internal, everything else external.
+
+    `_MCPAuthMiddleware` resolves the caller and stores it on request.state before
+    any tool or middleware runs, so this is a read rather than a second auth pass.
+
+    Defaults to TIER_EXTERNAL when the caller cannot be determined — the smaller
+    surface. An unidentified caller is not a reason to hand out internal tooling.
+    """
+    try:
+        user = get_http_request().state.mcp_user
+    except Exception:  # no HTTP request in scope (non-HTTP transport)
+        return TIER_EXTERNAL
+    # A run token carries a path_scope; full-JWT and `as_`-key callers do not.
+    return TIER_INTERNAL if getattr(user, "path_scope", None) is not None else TIER_EXTERNAL
+
+
+def _tags_of(obj) -> set[str]:
+    return set(getattr(obj, "tags", None) or ())
+
+
+class _ToolTierMiddleware(FastMCPMiddleware):
+    """Restrict tools and resources to the callers their tier admits (YOL-525).
+
+    Two hooks doing two different jobs, and neither substitutes for the other:
+
+    * `on_list_*` is about not *showing*. An agent handed a tool it cannot use
+      will attempt it, burn turns and get a confusing error — and the names
+      themselves disclose internal surface area.
+    * `on_call_tool` / `on_read_resource` is what actually *secures* it. Omitting
+      something from a listing does not stop anyone naming it directly.
+
+    Rejections raise NotFoundError with the same message FastMCP produces for a
+    genuinely unregistered tool. A distinct "forbidden" would confirm the tool
+    exists, which is the thing hiding it was meant to avoid.
+    """
+
+    def __init__(self, mcp: FastMCP) -> None:
+        self._mcp = mcp
+
+    async def on_list_tools(self, context: MiddlewareContext, call_next):
+        tier = _caller_tier()
+        return [t for t in await call_next(context) if tier in _tags_of(t)]
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        name = context.message.name
+        tool = await self._mcp.get_tool(name)
+        # An unknown tool falls through to FastMCP, which raises its own
+        # NotFoundError — keeping one source of truth for that message.
+        if tool is not None and _caller_tier() not in _tags_of(tool):
+            log.warning("Blocked out-of-tier tool call: %s", name)
+            raise NotFoundError(f"Unknown tool: {name!r}")
+        return await call_next(context)
+
+    async def on_list_resources(self, context: MiddlewareContext, call_next):
+        tier = _caller_tier()
+        return [r for r in await call_next(context) if tier in _tags_of(r)]
+
+    async def on_read_resource(self, context: MiddlewareContext, call_next):
+        uri = str(context.message.uri)
+        for resource in await self._mcp._list_resources():
+            if str(resource.uri) == uri:
+                if _caller_tier() not in _tags_of(resource):
+                    log.warning("Blocked out-of-tier resource read: %s", uri)
+                    raise NotFoundError(f"Unknown resource: {uri!r}")
+                break
+        return await call_next(context)
 
 
 def _mcp_span(tool_name: str):
@@ -489,7 +565,7 @@ def create_mcp_app(
     local_api_key: str = "local",
 ):
     """Create and return the FastMCP ASGI app, ready to mount at /mcp/v1."""
-    mcp = FastMCP(
+    mcp: FastMCP = FastMCP(
         "YoloScribe",
         instructions=(
             "YoloScribe is an AI-powered wiki. You can read, create, update, and delete "
@@ -2139,7 +2215,9 @@ def create_mcp_app(
     # SDK-native ambient injection. See projects/yolo-brain/implementation-plan
     # "Future: Ambient Memory Context" in the wiki for the full note.
 
-    @mcp.resource("memory://current")
+    # Internal-only, matching read_memory/write_memory. Going away entirely with
+    # the Librarian — YoloBrain is the source of memory (YOL-509).
+    @mcp.resource("memory://current", tags={TIER_INTERNAL})
     @_mcp_span("memory_current")
     async def memory_current(ctx: Context) -> str:
         """The site's current Librarian preference memory, as a resource."""
@@ -2154,7 +2232,10 @@ def create_mcp_app(
             "conclusions": [conclusion_to_dict(c) for c in conclusions],
         })
 
-    @mcp.resource("page-index://current")
+    # Both tiers: a page listing derived from wiki_list, which is itself external.
+    # The real PageIndex retrieval surface arrives with YOL-517 and should be
+    # tiered deliberately then rather than inheriting this stub's choice.
+    @mcp.resource("page-index://current", tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("page_index_current")
     async def page_index_current(ctx: Context) -> str:
         """A stub page index for the site: one node per existing wiki page.
@@ -2273,6 +2354,9 @@ def create_mcp_app(
         return {"written": True}
 
     # ── Return ASGI app ───────────────────────────────────────────────────────
+
+    # Registered after every tool and resource, so it sees the whole registry.
+    mcp.add_middleware(_ToolTierMiddleware(mcp))
 
     app = mcp.http_app(
         path="/",

@@ -18,10 +18,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 
 
-def _tools():
+def _app():
     from mcp_server import create_mcp_app
 
-    app = create_mcp_app(
+    return create_mcp_app(
         s3_client=None,
         bucket="test-bucket",
         s3vectors_client=None,
@@ -35,8 +35,20 @@ def _tools():
         sqs_indexing_queue_url="",
         local_mode=True,
     )
-    mcp = app.state.fastmcp_server
-    return {t.name: set(getattr(t, "tags", None) or ()) for t in asyncio.run(mcp.list_tools())}
+
+
+def _tools():
+    """The raw registry, with tier filtering bypassed.
+
+    `list_tools()` runs the tier middleware, so it would return only what the
+    *current* caller may see — and with no HTTP request in scope that is the
+    external tier. These tests are about how tools are classified, so they read
+    the unfiltered registry; what the middleware does with those tags is
+    covered by test_mcp_tool_tier_filtering.py.
+    """
+    mcp = _app().state.fastmcp_server
+    tools = asyncio.run(mcp.list_tools(run_middleware=False))
+    return {t.name: set(getattr(t, "tags", None) or ()) for t in tools}
 
 
 def _visible_to(tier: str) -> set[str]:
