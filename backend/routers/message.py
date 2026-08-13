@@ -6,6 +6,8 @@ history from the in-memory cache, calls MessagingAgent, and appends the
 completed turn back to the cache.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from opentelemetry import trace as _ot
 from opentelemetry.trace import StatusCode
@@ -22,6 +24,7 @@ from message_history import append_history, get_history
 from models import TokenBudgetInfo
 from rate_limit import limiter
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 _tracer = _ot.get_tracer("yoloscribe.message")
 
@@ -117,6 +120,13 @@ async def handle_message(
             )
         except Exception as exc:
             _span.set_status(StatusCode.ERROR, str(exc))
+            # Log before raising: the detail only reaches the HTTP response body,
+            # and callers (notably the messaging bot) discard it — leaving a bare
+            # "502 Bad Gateway" access-log line as the only trace of the failure.
+            log.exception(
+                "MessagingAgent failed for user=%s site=%s %s:%s — %s",
+                user_id, site, req.platform, req.channel_id, exc,
+            )
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         _span.set_attribute("output.value", reply)

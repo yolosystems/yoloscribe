@@ -85,7 +85,12 @@ export async function sendMessage(
   if (resp.status === 429) {
     throw new RateLimitError(resp.headers.get('Retry-After') ?? 'unknown')
   }
-  if (!resp.ok) throw new Error(`/internal/messaging/message returned ${resp.status}`)
+  if (!resp.ok) {
+    // Include the body: the backend puts the underlying failure in `detail`, and
+    // discarding it leaves only a bare status code to debug from.
+    const body = await resp.text().catch(() => '')
+    throw new Error(`/internal/messaging/message returned ${resp.status}${body ? `: ${body.slice(0, 500)}` : ''}`)
+  }
   const data = (await resp.json()) as { reply?: string }
   return data.reply ?? ''
 }
