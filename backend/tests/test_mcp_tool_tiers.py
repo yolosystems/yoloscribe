@@ -136,13 +136,32 @@ class TestExternalSurface:
 
         assert "empty_archive" not in _visible_to(TIER_INTERNAL)
 
-    def test_authoring_tools_are_external_only(self):
-        """Agents do not author agents or skills — CreatorAgent goes through the
-        backend, not MCP. YOL-526 later retires these from the external surface
-        too, at which point they stop being registered at all."""
-        from mcp_server import TIER_INTERNAL
+    @pytest.mark.parametrize("tool", [
+        "agent_create", "agent_create_page", "agent_create_ingest",
+        "agent_create_notification", "agent_update", "agent_delete",
+        "skill_create", "skill_update", "skill_delete",
+    ])
+    def test_authoring_tools_are_internal_only(self, tool):
+        """YOL-526: definitions are YoloScribe's to author, not a 3P assistant's.
 
-        internal = _visible_to(TIER_INTERNAL)
-        for tool in ("agent_create", "agent_update", "agent_delete",
-                     "skill_create", "skill_update", "skill_delete"):
-            assert tool not in internal
+        These stayed registered rather than being deleted because the platform's
+        own learned-agent path writes through them; what retires is external
+        access. A tag slipping back to external re-opens the surface silently,
+        since nothing else would fail.
+        """
+        from mcp_server import TIER_EXTERNAL
+
+        assert tool not in _visible_to(TIER_EXTERNAL)
+
+    @pytest.mark.parametrize("tool", [
+        "agent_read", "agent_list", "skill_list", "skill_read", "list_skill_tools",
+    ])
+    def test_authoring_introspection_stays_external(self, tool):
+        """Read-only introspection survives YOL-526.
+
+        External assistants still benefit from knowing what exists — and pinning
+        this stops the retirement being over-applied to the read side.
+        """
+        from mcp_server import TIER_EXTERNAL
+
+        assert tool in _visible_to(TIER_EXTERNAL)

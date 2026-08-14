@@ -247,12 +247,21 @@ Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, an
 
 **Auth:** Every request must carry a Supabase JWT as `Authorization: Bearer <token>`. The JWT is validated against the Supabase JWKS endpoint; the user's site is resolved from the `user_site` table (5-minute in-memory cache).
 
-**Tools:**
-- Wiki: `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`
-- Search: `search_wiki`, `search_semantic`
-- Agents: `agent_create`, `agent_read`, `agent_update`, `agent_delete`, `agent_list`
-- Skills: `skill_list`, `skill_create`, `skill_update`
-- Introspection: `list_skill_tools` — returns all tools available to agents on this site, derived from each skill's `tools:` frontmatter declaration; result is a flat list of `{name, skill}` pairs, useful for discovering whether a particular tool (e.g. a Linear or GitHub tool) is already installed before asking the user to create a new skill
+**Caller tiers (YOL-525/526).** The registry is split by caller, and every `@mcp.tool()` declares its tier via `tags`:
+
+- `TIER_INTERNAL` — run-token callers (the first-party agent-runner)
+- `TIER_EXTERNAL` — user JWT or `as_` static key (the SPA, Claude Code, 3P clients)
+
+A tool may carry both. **A tool with no tier tag is treated as internal — fail closed**; `backend/tests/test_mcp_tool_tiers.py` fails if any registered tool is untagged. `_ToolTierMiddleware` both hides out-of-tier tools from `list_tools` and refuses them at call time, raising the same `NotFoundError` FastMCP produces for an unregistered tool (a distinct "forbidden" would confirm the tool exists).
+
+**External surface** (what a 3P assistant sees):
+- Wiki: `wiki_create`, `wiki_read`, `wiki_update`, `wiki_archive`, `wiki_list`, `wiki_versions`, `wiki_diff`, `empty_archive`
+- Search: `search`
+- Read-only introspection: `agent_read`, `agent_list`, `skill_list`, `skill_read`, `list_skill_tools` — the last returns all tools available to agents on this site, derived from each skill's `tools:` frontmatter declaration, as a flat list of `{name, skill}` pairs; useful for discovering whether a particular tool (e.g. a Linear or GitHub tool) is already installed before asking the user to create a new skill
+
+**Internal-only surface:** `ingest_*`, `run_log_append`, `propose_page_change`, `notify`, `annotate_trace`, `emit_signal`, `read_memory` / `write_memory`, `read_archetypes` / `write_archetypes`, `read_signal_log`, plus **all agent and skill authoring** — `agent_create`, `agent_create_page`, `agent_create_ingest`, `agent_create_notification`, `agent_update`, `agent_delete`, `skill_create`, `skill_update`, `skill_delete`.
+
+Authoring went internal-only under YOL-526: those tools existed so a 3P assistant could push definitions into YoloScribe, and that use case ends when YoloScribe authors `agent.md` itself. They stay registered rather than deleted because the platform's own learned-agent path (YOL-518) writes through them — the shrink is to the external surface, not to the capability. `agent.md` remains the portable IR either way. Note the tiers are not nested: `empty_archive` is external-only precisely because no agent should hold it.
 
 All operations are scoped to the authenticated user's site. Agent tools manage `agent.md` definition files on wiki pages (not session state). `agent_list` accepts a `page_path` for page-scoped listing, or `site_wide=True` to list all agents across the site.
 

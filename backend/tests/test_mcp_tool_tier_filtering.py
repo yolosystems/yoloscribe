@@ -168,6 +168,22 @@ class TestCallTimeEnforcement:
         assert str(hidden.value).replace("write_memory", "X") == \
                str(absent.value).replace("no_such_tool_at_all", "X")
 
+    def test_external_caller_cannot_author_an_agent(self):
+        """YOL-526's actual claim, at the layer that enforces it.
+
+        The classification test pins the tag; this pins that a 3P assistant
+        naming the tool directly — the way the retirement would be circumvented
+        — is refused rather than reaching the S3 write.
+        """
+        from fastmcp.exceptions import NotFoundError
+
+        mcp = _build()
+        with _as_caller(run_token=False):
+            for tool in ("agent_create", "agent_update", "agent_delete",
+                         "skill_create", "skill_update", "skill_delete"):
+                with pytest.raises(NotFoundError):
+                    asyncio.run(mcp._call_tool_mcp(tool, {}))
+
     def test_internal_caller_is_not_blocked(self):
         """The block must be tier-based, not a blanket refusal.
 

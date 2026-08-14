@@ -68,8 +68,16 @@ _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 #   TIER_EXTERNAL — user JWT or `as_` static key: the SPA, Claude Code, 3P clients
 #
 # A tool may carry both. These are not nested: some tools are external-only
-# (authoring, and destructive owner actions like empty_archive) precisely
-# because agents should not have them.
+# (destructive owner actions like empty_archive) precisely because agents
+# should not have them.
+#
+# Agent and skill *authoring* is internal-only (YOL-526). Those tools existed so
+# a 3P assistant could push definitions into YoloScribe; that use case ends when
+# YoloScribe authors agent.md itself. They stay registered rather than deleted
+# because the platform's own learned-agent path (YOL-518) writes through them —
+# the shrink is to the external surface, not to the capability. Read-only
+# introspection (agent_read, agent_list, skill_list, skill_read, list_skill_tools)
+# stays external: knowing what exists is useful and discloses nothing.
 #
 # A tool with NO tier tag is treated as INTERNAL — fail closed. A forgotten tag
 # then makes a tool invisible to third parties, which is recoverable and shows
@@ -1236,7 +1244,7 @@ def create_mcp_app(
             "eval_log": defn.eval_log,
         }
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_create")
     async def agent_create(
         agent_name: str,
@@ -1329,7 +1337,7 @@ def create_mcp_app(
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_create_page")
     async def agent_create_page(
         agent_name: str,
@@ -1411,7 +1419,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_create_ingest")
     async def agent_create_ingest(
         agent_name: str,
@@ -1487,7 +1495,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_create_notification")
     async def agent_create_notification(
         agent_name: str,
@@ -1593,7 +1601,7 @@ def create_mcp_app(
             raise ValueError(f"agent.md is invalid: {exc}") from exc
         return _defn_to_dict(defn, page_path)
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_update")
     async def agent_update(
         agent_name: str,
@@ -1663,7 +1671,7 @@ def create_mcp_app(
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("agent_delete")
     async def agent_delete(
         agent_name: str,
@@ -1828,7 +1836,7 @@ def create_mcp_app(
                     skills.append({"name": skill_name, "description": "", "tools": []})
         return {"skills": skills}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("skill_create")
     async def skill_create(
         skill_name: str,
@@ -1855,7 +1863,7 @@ def create_mcp_app(
         make_skill_file(user.site, skill_name).create_raw(content)
         return {"skill_name": skill_name, "created_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("skill_update")
     async def skill_update(
         skill_name: str,
@@ -1883,7 +1891,7 @@ def create_mcp_app(
         make_skill_file(user.site, skill_name).save_raw(content)
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
-    @mcp.tool(tags={TIER_EXTERNAL})
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("skill_delete")
     async def skill_delete(
         skill_name: str,
