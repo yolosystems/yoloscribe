@@ -583,7 +583,7 @@ else:
 
 print("\n── Cleanup ──────────────────────────────────────────────────────────────")
 for p in _CREATED_PAGES:
-    print(f"  note: page '{p}' (no DELETE endpoint — clean up via wiki_delete or manually)")
+    print(f"  note: page '{p}' (no DELETE endpoint — clean up via wiki_archive or manually)")
 for a in _CREATED_AGENTS:
     print(f"  note: agent '{a}' (PUT empty content to .agents/{a}/agent.md to deactivate)")
 
