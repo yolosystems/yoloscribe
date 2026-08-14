@@ -29,7 +29,7 @@ def test_wiki_read_returns_content_and_etag():
 def test_wiki_write_unconditional_succeeds_and_bumps_etag():
     c = FakeMCPClient(pages={"p": "v1"})
     _, etag1 = c.wiki_read("p")
-    assert c.wiki_write("p", "v2") is True
+    assert c.wiki_write("p", "v2", "test write") is True
     content, etag2 = c.wiki_read("p")
     assert content == "v2"
     assert etag2 != etag1
@@ -39,22 +39,22 @@ def test_wiki_write_conditional_conflict_when_etag_stale():
     c = FakeMCPClient(pages={"p": "v1"})
     _, etag = c.wiki_read("p")
     # someone else writes, bumping the etag
-    c.wiki_write("p", "v-other")
+    c.wiki_write("p", "v-other", "test write")
     # our conditional write with the stale etag must lose the race
-    assert c.wiki_write("p", "v2", expected_etag=etag) is False
+    assert c.wiki_write("p", "v2", "test write", expected_etag=etag) is False
     assert c.wiki_read("p")[0] == "v-other"
 
 
 def test_wiki_write_conditional_succeeds_with_fresh_etag():
     c = FakeMCPClient(pages={"p": "v1"})
     _, etag = c.wiki_read("p")
-    assert c.wiki_write("p", "v2", expected_etag=etag) is True
+    assert c.wiki_write("p", "v2", "test write", expected_etag=etag) is True
 
 
 def test_wiki_create_and_list():
     c = FakeMCPClient()
-    c.wiki_create("a", "x")
-    c.wiki_create("b/c", "y")
+    c.wiki_create("a", "x", "test create")
+    c.wiki_create("b/c", "y", "test create")
     assert c.wiki_list_pages() == ["a", "b/c"]
 
 

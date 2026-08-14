@@ -116,18 +116,35 @@ class WikiPageMarkdownFile(MarkdownFile):
     def page_path(self) -> str:
         return self._page_path
 
-    def write(self, raw_content: str, user_id: str = "") -> None:
-        """Persist raw_content and emit page.written with page_path and user_id."""
-        self._storage.write(self.key, raw_content)
-        self._raw_content = raw_content
-        self._emit(EventType.PAGE_WRITTEN, {
+    def _payload(self, user_id: str, reason: str, **extra: str) -> dict[str, str]:
+        """Common mutation-event payload, with `reason` attached only when given.
+
+        `reason` is the caller's one-line statement of *why* this write happened
+        (YOL-527) — the distillate of a conversation the server never saw. It is
+        omitted entirely when empty rather than passed as "", because the
+        notification bus renders every non-internal payload key into the owner's
+        inbox line and a bare `reason:` would be noise.
+        """
+        payload = {
             "key": self.key,
             "site": self._site,
             "page_path": self._page_path,
             "user_id": user_id,
-        })
+            **extra,
+        }
+        if reason:
+            payload["reason"] = reason
+        return payload
 
-    def write_conditional(self, raw_content: str, etag: str | None, user_id: str = "") -> bool:
+    def write(self, raw_content: str, user_id: str = "", reason: str = "") -> None:
+        """Persist raw_content and emit page.written with page_path and user_id."""
+        self._storage.write(self.key, raw_content)
+        self._raw_content = raw_content
+        self._emit(EventType.PAGE_WRITTEN, self._payload(user_id, reason))
+
+    def write_conditional(
+        self, raw_content: str, etag: str | None, user_id: str = "", reason: str = ""
+    ) -> bool:
         """Conditional write with optimistic concurrency (If-Match semantics).
 
         Returns True on success; False if the ETag didn't match (conflict).
@@ -136,15 +153,10 @@ class WikiPageMarkdownFile(MarkdownFile):
         saved = self._storage.write_conditional(self.key, raw_content, etag)
         if saved:
             self._raw_content = raw_content
-            self._emit(EventType.PAGE_WRITTEN, {
-                "key": self.key,
-                "site": self._site,
-                "page_path": self._page_path,
-                "user_id": user_id,
-            })
+            self._emit(EventType.PAGE_WRITTEN, self._payload(user_id, reason))
         return saved
 
-    def create(self, initial_content: str = "", user_id: str = "") -> None:
+    def create(self, initial_content: str = "", user_id: str = "", reason: str = "") -> None:
         """Write initial content and emit page.created.
 
         The event payload carries `content` so the KM-signal subscriber can
@@ -153,24 +165,16 @@ class WikiPageMarkdownFile(MarkdownFile):
         """
         self._storage.write(self.key, initial_content)
         self._raw_content = initial_content
-        self._emit(EventType.PAGE_CREATED, {
-            "key": self.key,
-            "site": self._site,
-            "page_path": self._page_path,
-            "content": initial_content,
-            "user_id": user_id,
-        })
+        self._emit(
+            EventType.PAGE_CREATED,
+            self._payload(user_id, reason, content=initial_content),
+        )
 
-    def delete(self, user_id: str = "") -> None:
+    def delete(self, user_id: str = "", reason: str = "") -> None:
         """Remove from storage and emit page.deleted."""
         self._storage.delete(self.key)
         self._raw_content = None
-        self._emit(EventType.PAGE_DELETED, {
-            "key": self.key,
-            "site": self._site,
-            "page_path": self._page_path,
-            "user_id": user_id,
-        })
+        self._emit(EventType.PAGE_DELETED, self._payload(user_id, reason))
 
 
 # ── OnWriteEventHandler ───────────────────────────────────────────────────────

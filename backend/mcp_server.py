@@ -411,6 +411,31 @@ def _validate_page_path(page_path: str) -> None:
         )
 
 
+_MIN_REASON_LEN = 8
+
+
+def _require_reason(reason: str) -> None:
+    """Reject a write whose stated reason is missing or empty (YOL-527).
+
+    Being a required parameter already stops a caller omitting it; this catches
+    the degenerate `reason=""` / `reason="  "` that satisfies the signature
+    while carrying nothing. The length floor is deliberately low — it screens
+    out "x" and ".", not terse-but-real reasons — because the useful pressure
+    here comes from the parameter description, not from a validator trying to
+    judge whether prose is meaningful.
+    """
+    if not reason or not reason.strip():
+        raise ValueError(
+            "reason is required: state in one line why this write is happening. "
+            "YoloScribe cannot see the conversation that led to it."
+        )
+    if len(reason.strip()) < _MIN_REASON_LEN:
+        raise ValueError(
+            f"reason is too short ({len(reason.strip())} chars): give the intent "
+            "behind the write, not a placeholder."
+        )
+
+
 def _validate_skill_name(skill_name: str) -> None:
     if not _SKILL_NAME_RE.match(skill_name):
         raise ValueError(
@@ -587,18 +612,24 @@ def create_mcp_app(
 
     @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_create")
-    async def wiki_create(page_path: str, content: str, ctx: Context) -> dict:
+    async def wiki_create(page_path: str, content: str, reason: str, ctx: Context) -> dict:
         """Create a new wiki page with markdown content.
 
         Args:
             page_path: Relative path (e.g. "features/auth"). Empty string for root page.
             content: Full markdown content for the page.
+            reason: Why this page is being created, in one line — the user's
+                intent, not a restatement of the content. YoloScribe never sees
+                the conversation that led here, so this is the only record of it.
+                Good: "splitting the auth notes out of the onboarding page".
+                Useless: "creating a page".
         """
         _validate_page_path(page_path)
+        _require_reason(reason)
         user = _user(ctx)
         _check_scope(user, page_path, "write-content")
         wiki = make_wiki_page(user.site, page_path)
-        wiki.create(content, user_id=user.user_id)
+        wiki.create(content, user_id=user.user_id, reason=reason)
         # Write default private settings.json if one doesn't exist yet.
         sk = _settings_key(user.site, page_path)
         try:
@@ -678,43 +709,55 @@ def create_mcp_app(
     async def wiki_update(
         page_path: str,
         content: str,
-        message: str = "",
+        reason: str,
         expected_etag: str = "",
         ctx: Context = None,
     ) -> dict:
         """Update an existing wiki page's content.
 
+        This is a FULL-PAGE REPLACE — read the page first and send the whole
+        edited body, never a fragment.
+
         Args:
             page_path: Path to update. Empty string for root page.
             content: New full markdown content.
-            message: Optional change summary for audit purposes.
+            reason: Why this edit is being made, in one line — the user's intent,
+                not a description of the diff. YoloScribe never sees the
+                conversation that led here, so this is the only record of it, and
+                it is what lets a later corrective edit be read as a labeled
+                example. Good: "user asked to drop the deprecated Okta steps".
+                Useless: "updating the page".
             expected_etag: Optional etag from a prior wiki_read. When supplied,
                 the write only succeeds if the page hasn't changed since that
                 read (optimistic concurrency) — on mismatch, returns
                 {"conflict": true} instead of writing. Omit to write unconditionally.
         """
         _validate_page_path(page_path)
+        _require_reason(reason)
         user = _user(ctx)
         _check_scope(user, page_path, "write-content")
         wiki = make_wiki_page(user.site, page_path)
         if expected_etag:
-            if not wiki.write_conditional(content, expected_etag, user_id=user.user_id):
+            if not wiki.write_conditional(
+                content, expected_etag, user_id=user.user_id, reason=reason
+            ):
                 return {"page_path": page_path, "conflict": True}
         else:
-            wiki.write(content, user_id=user.user_id)
+            wiki.write(content, user_id=user.user_id, reason=reason)
         _maybe_enqueue_index(wiki.key, user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         # KM content_routed + notification-bus fan-out fire via the factory's
         # handlers on the write above (PAGE_WRITTEN event).
         return {
             "page_path": page_path,
             "updated_at": _now_iso(),
-            "message": message,
+            "reason": reason,
         }
 
     @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_archive")
     async def wiki_archive(
         page_path: str,
+        reason: str,
         ctx: Context = None,
     ) -> dict:
         """Archive a page and all its descendants.
@@ -724,10 +767,14 @@ def create_mcp_app(
 
         Args:
             page_path: Page to archive (and all its descendants).
+            reason: Why this page is going away, in one line. Archiving is the
+                strongest correction signal the wiki produces — "superseded by
+                projects/x/design" teaches something; "cleanup" teaches nothing.
         """
         from archive_helpers import archive_page as _archive
 
         _validate_page_path(page_path)
+        _require_reason(reason)
         user = _user(ctx)
         _check_scope(user, page_path, "delete")
         result = _archive(

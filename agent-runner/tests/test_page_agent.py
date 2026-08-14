@@ -50,7 +50,7 @@ def test_page_read_missing_returns_empty():
 def test_page_write_persists_content():
     storage = LocalStorageBackend()
     agent = _make_agent(storage)
-    result = agent.page_write("# Updated\n")
+    result = agent.page_write("# Updated\n", "test edit")
     assert result == "Content written."
     assert storage.read("s/notes/content.md") == "# Updated\n"
 
@@ -58,14 +58,14 @@ def test_page_write_persists_content():
 def test_page_write_overwrites_existing():
     storage = LocalStorageBackend({"s/notes/content.md": "# Old\n"})
     agent = _make_agent(storage)
-    agent.page_write("# New\n")
+    agent.page_write("# New\n", "test edit")
     assert storage.read("s/notes/content.md") == "# New\n"
 
 
 def test_page_write_does_not_touch_other_pages():
     storage = LocalStorageBackend({"s/other/content.md": "# Other\n"})
     agent = _make_agent(storage)
-    agent.page_write("# Notes\n")
+    agent.page_write("# Notes\n", "test edit")
     assert storage.read("s/other/content.md") == "# Other\n"
 
 

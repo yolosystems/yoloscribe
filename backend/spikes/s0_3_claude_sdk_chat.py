@@ -81,10 +81,18 @@ async def seed_memory_and_page() -> None:
             },
         )
         try:
-            await session.call_tool("wiki_create", {"page_path": SCRATCH_PAGE, "content": SEED_CONTENT})
+            await session.call_tool("wiki_create", {
+                "page_path": SCRATCH_PAGE,
+                "content": SEED_CONTENT,
+                "reason": "seeding the S0.3 spike scratch page",
+            })
         except Exception:
             # Already exists from a prior run of this spike -- reset it.
-            await session.call_tool("wiki_update", {"page_path": SCRATCH_PAGE, "content": SEED_CONTENT})
+            await session.call_tool("wiki_update", {
+                "page_path": SCRATCH_PAGE,
+                "content": SEED_CONTENT,
+                "reason": "resetting the S0.3 spike scratch page to its seed state",
+            })
 
     await _mcp_session(_do)
 

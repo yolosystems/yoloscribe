@@ -76,7 +76,7 @@ class IngestAgent(BaseAgent):
     - wiki_search(query): semantic search across the site to find routing targets
     - wiki_list_pages(): list all wiki page paths for structural navigation
     - wiki_read(page_path): read any wiki page for context
-    - wiki_write(page_path, content): write to a wiki page
+    - wiki_write(page_path, content, reason): write to a wiki page
     - notify_owner(message): notify the site owner when content cannot be routed
     - ingest_complete(summary): emit ingest_end event when all files are processed
     - document_index(filename, mode): extract and index an uploaded document
@@ -209,15 +209,25 @@ class IngestAgent(BaseAgent):
         return self._mcp.wiki_read(page_path.strip().strip("/"))[0]
 
     @tool
-    def wiki_write(self, page_path: str, content: str) -> str:
-        """Write content to a wiki page."""
+    def wiki_write(self, page_path: str, content: str, reason: str) -> str:
+        """Write content to a wiki page.
+
+        Args:
+            page_path: The page to write to.
+            content: The full updated markdown for the page.
+            reason: One line on why this content belongs on this page — the
+                routing decision you just made. This is what a later correction
+                gets compared against, so name the source and the judgement,
+                e.g. "filing the Q3 planning PDF under planning/, closest match
+                to its agenda sections".
+        """
         page_path = page_path.strip().strip("/")
         error = self._check_scope(page_path)
         if error:
             return error
         content = self._rewrite_internal_links(content)
         self._ensure_parent_pages(page_path)
-        self._mcp.wiki_write(page_path, content)
+        self._mcp.wiki_write(page_path, content, reason)
         log.info("IngestAgent wrote to %s/%s", self._site, page_path)
         return f"Written to {page_path}."
 
@@ -287,7 +297,11 @@ class IngestAgent(BaseAgent):
             parent_path = "/".join(parts[:i])
             if not self._mcp.wiki_read(parent_path)[0]:
                 title = parts[i - 1].replace("-", " ").title()
-                self._mcp.wiki_create(parent_path, f"# {title}\n")
+                self._mcp.wiki_create(
+                    parent_path,
+                    f"# {title}\n",
+                    f"parent stub created so ingest could route content to {page_path}",
+                )
                 log.info("IngestAgent created parent page stub: %s", parent_path)
 
     def _rewrite_internal_links(self, content: str) -> str:
@@ -368,7 +382,8 @@ class IngestAgent(BaseAgent):
             "one at any level of the hierarchy.\n"
             "   d. Call wiki_read(page_path) to read the destination page's current content.\n"
             "   e. Incorporate the new content appropriately (append, merge, or create "
-            "a new section), then call wiki_write(page_path, updated_content).\n"
+            "a new section), then call wiki_write(page_path, updated_content, reason) "
+            "where reason states in one line why this page was the right destination.\n"
             "   f. If you genuinely cannot determine where the content belongs:\n"
             "      - Call notify_owner(message) describing what you received and why "
             "it could not be routed. Do NOT mark the file as processed.\n"

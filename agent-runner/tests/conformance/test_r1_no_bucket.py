@@ -113,7 +113,7 @@ def test_r1_full_page_cycle_via_mcp():
     # 1. Seed the scratch page through the MCP (a valid token, standing in for the owner).
     seed_token, mcp_url = _mint(cfg)
     with HttpMCPClient(mcp_url, seed_token) as c:
-        c.wiki_write(_SCRATCH_PAGE, _SEED)
+        c.wiki_write(_SCRATCH_PAGE, _SEED, "R1 conformance seed")
 
     # 2. Mint the run token the runner will use.
     run_token, _ = _mint(cfg)
@@ -198,7 +198,7 @@ def test_r1_full_page_cycle_via_mcp():
     #    run token intentionally lacks). Leave the site otherwise untouched.
     try:
         with HttpMCPClient(mcp_url, verify_token) as c:
-            c.wiki_write(_SCRATCH_PAGE, "# R1 Conformance\n\n(cleaned)\n")
+            c.wiki_write(_SCRATCH_PAGE, "# R1 Conformance\n\n(cleaned)\n", "R1 conformance cleanup")
     except Exception:
         pass
 

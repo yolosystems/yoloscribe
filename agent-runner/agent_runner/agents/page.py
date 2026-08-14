@@ -16,6 +16,24 @@ log = logging.getLogger(__name__)
 
 _MAX_WRITE_RETRIES = 3
 
+# Enough of the run prompt to identify the intent, short enough to stay a
+# one-liner in the owner's notification inbox.
+_REASON_PROMPT_CHARS = 120
+
+
+def _run_reason(agent_name: str, prompt: str) -> str:
+    """Build the write reason for a write-mode run (YOL-527).
+
+    Write mode has no LLM-supplied reason — the agent replies with markdown, not
+    a tool call — so the honest intent is the instruction that triggered the run.
+    Its first line is the distillate; the rest is usually context the agent was
+    handed rather than a statement of purpose.
+    """
+    first_line = next((ln.strip() for ln in prompt.splitlines() if ln.strip()), "")
+    if len(first_line) > _REASON_PROMPT_CHARS:
+        first_line = first_line[:_REASON_PROMPT_CHARS].rstrip() + "…"
+    return f"{agent_name} run: {first_line}" if first_line else f"{agent_name} scheduled run"
+
 
 class PageAgent(BaseAgent):
     """Agent scoped to a single wiki page.
@@ -68,9 +86,15 @@ class PageAgent(BaseAgent):
         """Read the current content of this wiki page."""
         return self._mcp.wiki_read(self._page_path)[0]
 
-    def page_write(self, content: str) -> str:
-        """Write updated content to this wiki page."""
-        self._mcp.wiki_write(self._page_path, content)
+    def page_write(self, content: str, reason: str) -> str:
+        """Write updated content to this wiki page.
+
+        Args:
+            content: The full updated markdown for the page.
+            reason: One line on why this edit is being made — the intent behind
+                it, not a description of the diff.
+        """
+        self._mcp.wiki_write(self._page_path, content, reason)
         return "Content written."
 
     def wiki_search(self, query: str) -> str:
@@ -135,7 +159,10 @@ class PageAgent(BaseAgent):
             response = agent(full_prompt)
             updated = _strip_preamble(str(response))
 
-            if self._mcp.wiki_write(self._page_path, updated, expected_etag=etag):
+            if self._mcp.wiki_write(
+                self._page_path, updated, _run_reason(self.agent_def.name, prompt),
+                expected_etag=etag,
+            ):
                 return response.metrics.accumulated_usage.get("totalTokens", 0)
 
             if attempt == _MAX_WRITE_RETRIES - 1:

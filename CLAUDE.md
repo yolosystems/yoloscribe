@@ -254,6 +254,8 @@ Mounted at `/mcp/v1` in the FastAPI app. Provides wiki CRUD, semantic search, an
 
 A tool may carry both. **A tool with no tier tag is treated as internal — fail closed**; `backend/tests/test_mcp_tool_tiers.py` fails if any registered tool is untagged. `_ToolTierMiddleware` both hides out-of-tier tools from `list_tools` and refuses them at call time, raising the same `NotFoundError` FastMCP produces for an unregistered tool (a distinct "forbidden" would confirm the tool exists).
 
+**Write reason (YOL-527).** `wiki_create`, `wiki_update`, and `wiki_archive` take a **required** `reason` — one line on why the write is happening. YoloScribe only ever sees a committed tool call, never the conversation that produced it, so rather than trying to recover the transcript the tool signature demands the distillate. This is the commit-message pattern, and it is what lets a later corrective edit be read as a labeled example (feeds YOL-518). `_require_reason` rejects empty and placeholder values; the real pressure comes from the parameter descriptions. The reason rides `WikiPageMarkdownFile`'s mutation event → `KMSignalHandler` → the `content_routed` / `page_structured` KM signal params, and also surfaces in the owner's notification entry via `NotificationBusHandler`. **Caveat:** YoloBrain's catalog does not declare `reason` on those two params models and pydantic defaults to `extra="ignore"`, so it is dropped on arrival until that repo is updated (YOL-550).
+
 **External surface** (what a 3P assistant sees):
 - Wiki: `wiki_create`, `wiki_read`, `wiki_update`, `wiki_archive`, `wiki_list`, `wiki_versions`, `wiki_diff`, `empty_archive`
 - Search: `search`
