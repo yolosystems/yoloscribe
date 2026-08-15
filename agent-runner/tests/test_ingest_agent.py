@@ -210,7 +210,7 @@ def test_wiki_read_counter_increments():
 def test_wiki_write_any_page():
     storage = LocalStorageBackend()
     agent = _make_agent(storage)
-    result = agent.wiki_write("jazz/miles-davis", "# Miles Davis\n")
+    result = agent.wiki_write("jazz/miles-davis", "# Miles Davis\n", "routing jazz notes")
     assert "Written" in result
     assert storage.read(f"{SITE}/jazz/miles-davis/content.md") == "# Miles Davis\n"
 
@@ -218,14 +218,14 @@ def test_wiki_write_any_page():
 def test_wiki_write_new_topic_no_restriction():
     storage = LocalStorageBackend()
     agent = _make_agent(storage)
-    result = agent.wiki_write("cooking/pasta", "recipe")
+    result = agent.wiki_write("cooking/pasta", "recipe", "routing a pasta recipe")
     assert "Written" in result
 
 
 def test_wiki_write_denied_by_exclude_scope():
     scope = Scope(exclude=["jazz/*"])
     agent = _make_agent(LocalStorageBackend(), scope=scope)
-    result = agent.wiki_write("jazz/miles-davis", "content")
+    result = agent.wiki_write("jazz/miles-davis", "content", "routing jazz notes")
     assert "denied" in result.lower()
 
 
@@ -281,7 +281,7 @@ def test_ensure_parent_pages_creates_multiple_levels():
 def test_wiki_write_creates_parent_stubs():
     storage = LocalStorageBackend({f"{SITE}/cooking/content.md": "# Cooking\n"})
     agent = _make_agent(storage)
-    agent.wiki_write("cooking/recipes/pasta", "# Pasta\n")
+    agent.wiki_write("cooking/recipes/pasta", "# Pasta\n", "routing a pasta recipe")
     assert storage.read(f"{SITE}/cooking/recipes/content.md") == "# Recipes\n"
     assert storage.read(f"{SITE}/cooking/recipes/pasta/content.md") == "# Pasta\n"
 

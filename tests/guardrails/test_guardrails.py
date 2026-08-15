@@ -370,8 +370,8 @@ for p in reversed(_CREATED_PAGES):
         timeout=15,
     ) if False else None  # No DELETE endpoint — just PUT empty content as a no-op marker
     # Backend has no DELETE /content; pages persist but are cheap S3 objects.
-    # Run a cleanup script or use the MCP wiki_delete tool to remove test pages.
-    print(f"  note: {p} (no DELETE endpoint — clean up manually or via wiki_delete)")
+    # Run a cleanup script or use the MCP wiki_archive tool to remove test pages.
+    print(f"  note: {p} (no DELETE endpoint — clean up manually or via wiki_archive)")
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

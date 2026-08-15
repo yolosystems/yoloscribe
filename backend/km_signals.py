@@ -70,28 +70,51 @@ def _target(page_path: str) -> dict[str, str]:
     return {"system": "yoloscribe", "path": page_path}
 
 
-def page_structured_signal(page_path: str, content: str) -> tuple[str, dict]:
+def _with_reason(params: dict, reason: str) -> dict:
+    """Attach the caller's write reason to a mutation signal (YOL-527).
+
+    Omitted when empty so the params stay byte-identical to pre-YOL-527 for
+    callers that supply nothing.
+
+    **Consumer caveat:** YoloBrain's ``ContentRoutedParams`` and
+    ``PageStructuredParams`` do not declare a ``reason`` field, and pydantic's
+    default is ``extra="ignore"`` — so today the value is validated away on
+    arrival rather than rejected. Emitting it is still correct (the field is the
+    learning label the whole change exists to carry, and it reaches every other
+    event subscriber intact), but the loop does not close until the catalog in
+    the yolobrain repo grows the matching optional field. See YOL-550.
+    """
+    if reason:
+        params["reason"] = reason
+    return params
+
+
+def page_structured_signal(page_path: str, content: str, reason: str = "") -> tuple[str, dict]:
     """wiki_create → a new page is given structure (its section skeleton)."""
-    return "page_structured", {
+    params = {
         "page_type": derive_page_type(page_path),
         "format": "markdown",
         "sections": parse_sections(content),
         "target": _target(page_path),
     }
+    return "page_structured", _with_reason(params, reason)
 
 
-def content_routed_signal(page_path: str, integration: str = "replace") -> tuple[str, dict]:
+def content_routed_signal(
+    page_path: str, integration: str = "replace", reason: str = ""
+) -> tuple[str, dict]:
     """wiki_update → content is filed into an existing page.
 
     ``wiki_update`` is a full-page replace (``WikiPageMarkdownFile.write``), so
     the integration mode is ``replace``.
     """
-    return "content_routed", {
+    params = {
         "page_type": derive_page_type(page_path),
         "format": "markdown",
         "integration": integration,
         "target": _target(page_path),
     }
+    return "content_routed", _with_reason(params, reason)
 
 
 def agent_provisioned_signal(

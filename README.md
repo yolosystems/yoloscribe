@@ -58,7 +58,9 @@ claude mcp add --transport http yoloscribe https://your-domain/mcp/v1/
 
 Claude Code discovers the OAuth endpoints automatically and prompts you to sign in with Google. No token copy-pasting required. (Cognito operators can use a YoloScribe API token instead — see [INSTALL.md](INSTALL.md#7-mcp-server-connection).)
 
-**Available tools:** `wiki_create`, `wiki_read`, `wiki_update`, `wiki_delete`, `wiki_list`, `search_wiki`, `search_semantic`, `agent_create`, `agent_get_status`, `agent_update_context`, `agent_get_context`, `agent_list`
+**Available tools:** `wiki_create`, `wiki_read`, `wiki_update`, `wiki_archive`, `wiki_list`, `wiki_versions`, `wiki_diff`, `empty_archive`, `search`, plus read-only introspection: `agent_read`, `agent_list`, `skill_list`, `skill_read`, `list_skill_tools`.
+
+Agent and skill *authoring* is not part of this surface — YoloScribe writes its own `agent.md` definitions. External clients read and write wiki content.
 
 ### Messaging bot (Discord)
 

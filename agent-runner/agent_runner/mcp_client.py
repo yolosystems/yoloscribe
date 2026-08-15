@@ -50,13 +50,20 @@ class AgentRunnerMCPClient(ABC):
         """Return (content, etag). ("", "") if the page does not exist."""
 
     @abstractmethod
-    def wiki_write(self, page_path: str, content: str, expected_etag: str = "") -> bool:
+    def wiki_write(
+        self, page_path: str, content: str, reason: str, expected_etag: str = ""
+    ) -> bool:
         """Update a page. With expected_etag, optimistic-concurrency: returns False on
         conflict (caller re-reads and retries); True on success. Empty etag writes
-        unconditionally."""
+        unconditionally.
+
+        `reason` states why the write is happening (YOL-527). It is required
+        rather than defaulted because the MCP `wiki_update` tool rejects an empty
+        one — a default here would only move the failure to runtime, on the
+        HttpMCPClient path, inside an agent run."""
 
     @abstractmethod
-    def wiki_create(self, page_path: str, content: str) -> None:
+    def wiki_create(self, page_path: str, content: str, reason: str) -> None:
         """Create a new page (used for parent-path stubs / brand-new pages)."""
 
     @abstractmethod
@@ -155,15 +162,20 @@ class HttpMCPClient(AgentRunnerMCPClient):
             return "", ""
         return str(r.get("content", "")), str(r.get("etag", ""))
 
-    def wiki_write(self, page_path: str, content: str, expected_etag: str = "") -> bool:
-        args = {"page_path": page_path, "content": content}
+    def wiki_write(
+        self, page_path: str, content: str, reason: str, expected_etag: str = ""
+    ) -> bool:
+        args = {"page_path": page_path, "content": content, "reason": reason}
         if expected_etag:
             args["expected_etag"] = expected_etag
         r = self._call("wiki_update", args)
         return not (isinstance(r, dict) and r.get("conflict"))
 
-    def wiki_create(self, page_path: str, content: str) -> None:
-        self._call("wiki_create", {"page_path": page_path, "content": content})
+    def wiki_create(self, page_path: str, content: str, reason: str) -> None:
+        self._call(
+            "wiki_create",
+            {"page_path": page_path, "content": content, "reason": reason},
+        )
 
     def wiki_list_pages(self) -> list[str]:
         r = self._call("wiki_list", {})
@@ -298,6 +310,10 @@ class FakeMCPClient(AgentRunnerMCPClient):
         self.notifications: list[tuple[str, dict]] = []
         self.proposals: dict[str, tuple[str, str]] = {}  # page_path -> (content, agent_name)
         self.run_logs: list[dict] = []
+        # (page_path, reason) per write, in order — lets tests assert the
+        # YOL-527 distillate actually reaches the client, not just that a
+        # write happened.
+        self.reasons: list[tuple[str, str]] = []
 
     def _next_etag(self) -> str:
         self._etag_seq += 1
@@ -307,16 +323,20 @@ class FakeMCPClient(AgentRunnerMCPClient):
     def wiki_read(self, page_path: str) -> tuple[str, str]:
         return self._pages.get(page_path, ("", ""))
 
-    def wiki_write(self, page_path: str, content: str, expected_etag: str = "") -> bool:
+    def wiki_write(
+        self, page_path: str, content: str, reason: str, expected_etag: str = ""
+    ) -> bool:
         if expected_etag:
             current = self._pages.get(page_path, ("", ""))[1]
             if current != expected_etag:
                 return False
         self._pages[page_path] = (content, self._next_etag())
+        self.reasons.append((page_path, reason))
         return True
 
-    def wiki_create(self, page_path: str, content: str) -> None:
+    def wiki_create(self, page_path: str, content: str, reason: str) -> None:
         self._pages[page_path] = (content, self._next_etag())
+        self.reasons.append((page_path, reason))
 
     def wiki_list_pages(self) -> list[str]:
         return sorted(self._pages)
@@ -397,15 +417,19 @@ class StorageMCPClient(AgentRunnerMCPClient):
         content, etag = self._wiki(page_path).read_with_etag()
         return (content or "", etag or "")
 
-    def wiki_write(self, page_path: str, content: str, expected_etag: str = "") -> bool:
+    def wiki_write(
+        self, page_path: str, content: str, reason: str, expected_etag: str = ""
+    ) -> bool:
         wiki = self._wiki(page_path)
         if expected_etag:
-            return wiki.write_conditional(content, expected_etag, user_id=self._user_id)
-        wiki.write(content, user_id=self._user_id)
+            return wiki.write_conditional(
+                content, expected_etag, user_id=self._user_id, reason=reason
+            )
+        wiki.write(content, user_id=self._user_id, reason=reason)
         return True
 
-    def wiki_create(self, page_path: str, content: str) -> None:
-        self._wiki(page_path).write(content, user_id=self._user_id)
+    def wiki_create(self, page_path: str, content: str, reason: str) -> None:
+        self._wiki(page_path).write(content, user_id=self._user_id, reason=reason)
 
     def wiki_list_pages(self) -> list[str]:
         prefix = f"{self._site}/"

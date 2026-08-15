@@ -49,10 +49,13 @@ class KMSignalHandler(EventHandler):
     @staticmethod
     def _build_signal(event_type: str, payload: dict) -> tuple[str, dict] | None:
         page_path = str(payload.get("page_path", ""))
+        reason = str(payload.get("reason", ""))
         if event_type == EventType.PAGE_CREATED:
-            return km_signals.page_structured_signal(page_path, str(payload.get("content", "")))
+            return km_signals.page_structured_signal(
+                page_path, str(payload.get("content", "")), reason
+            )
         if event_type == EventType.PAGE_WRITTEN:
-            return km_signals.content_routed_signal(page_path)
+            return km_signals.content_routed_signal(page_path, reason=reason)
         if event_type == EventType.AGENT_CREATED:
             return km_signals.agent_provisioned_signal(
                 page_path,
