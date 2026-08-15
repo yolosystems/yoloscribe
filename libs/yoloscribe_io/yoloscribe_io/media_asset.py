@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from .events import EventEmitter, EventType
+from .provenance import Provenance
 from .storage import StorageBackend
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class MediaAsset(EventEmitter):
         mime_type: str = "",
         size_bytes: int = 0,
         cdn_url: str = "",
+        provenance: "Provenance | None" = None,
     ) -> None:
         super().__init__()
         self._site = site
@@ -41,6 +43,7 @@ class MediaAsset(EventEmitter):
         self._mime_type = mime_type
         self._size_bytes = size_bytes
         self._cdn_url = cdn_url
+        self._provenance = provenance
 
     # ── properties ────────────────────────────────────────────────────────────
 
@@ -55,6 +58,15 @@ class MediaAsset(EventEmitter):
     @property
     def filename(self) -> str:
         return self._filename
+
+    @property
+    def provenance(self) -> Provenance | None:
+        """Where this asset came from, when it arrived through ingest (YOL-552).
+
+        None for assets uploaded straight onto a page — those have no source
+        beyond the person who attached them.
+        """
+        return self._provenance
 
     @property
     def mime_type(self) -> str:
@@ -78,16 +90,18 @@ class MediaAsset(EventEmitter):
 
     def register(self) -> None:
         """Persist metadata and emit page.media_added."""
-        self._storage.write(
-            self.key,
-            json.dumps({
-                "filename": self._filename,
-                "mime_type": self._mime_type,
-                "size_bytes": self._size_bytes,
-                "cdn_url": self._cdn_url,
-            }),
-            content_type="application/json",
-        )
+        record: dict = {
+            "filename": self._filename,
+            "mime_type": self._mime_type,
+            "size_bytes": self._size_bytes,
+            "cdn_url": self._cdn_url,
+        }
+        # Nested rather than flattened so a provenance field can never collide
+        # with a media field, and so `"provenance" in record` is the test for
+        # "did this arrive through ingest" (YOL-552).
+        if self._provenance is not None:
+            record["provenance"] = self._provenance.to_dict()
+        self._storage.write(self.key, json.dumps(record), content_type="application/json")
         self._emit(EventType.PAGE_MEDIA_ADDED, {
             "site": self._site,
             "page_path": self._page_path,
@@ -129,6 +143,7 @@ def load_media_asset(
     except json.JSONDecodeError as exc:
         log.warning("load_media_asset: malformed JSON at %s: %s", key, exc)
         return None
+    raw_prov = d.get("provenance")
     return MediaAsset(
         site=site,
         page_path=page_path,
@@ -137,6 +152,7 @@ def load_media_asset(
         mime_type=str(d.get("mime_type", "")),
         size_bytes=int(d.get("size_bytes", 0)),
         cdn_url=str(d.get("cdn_url", "")),
+        provenance=Provenance.from_dict(raw_prov) if isinstance(raw_prov, dict) else None,
     )
 
 

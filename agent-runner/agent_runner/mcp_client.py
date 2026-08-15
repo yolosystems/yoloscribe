@@ -103,6 +103,19 @@ class AgentRunnerMCPClient(ABC):
     def ingest_read_owner_instructions(self) -> str:
         """The owner-editable routing instructions at .user/ingest/content.md."""
 
+    @abstractmethod
+    def ingest_read_provenance(self, filename: str) -> dict:
+        """Why a queued document is being ingested and where it came from (YOL-552).
+
+        Returns at least `{"intent": str, "source_url": str, "found": bool}`.
+        Empty strings when the document has no staged record."""
+
+    @abstractmethod
+    def ingest_record_provenance(
+        self, filename: str, page_path: str, extractor: str = "", retention: str = ""
+    ) -> None:
+        """Land the document's provenance on the page it was routed to."""
+
     # ── notifications ─────────────────────────────────────────────────────────
     @abstractmethod
     def notify(self, event_type: str, payload: dict) -> None:
@@ -224,6 +237,20 @@ class HttpMCPClient(AgentRunnerMCPClient):
         r = self._call("ingest_read_owner_instructions", {})
         return str(r.get("content", "")) if isinstance(r, dict) else ""
 
+    def ingest_read_provenance(self, filename: str) -> dict:
+        r = self._call("ingest_read_provenance", {"filename": filename})
+        return r if isinstance(r, dict) else {"found": False, "intent": "", "source_url": ""}
+
+    def ingest_record_provenance(
+        self, filename: str, page_path: str, extractor: str = "", retention: str = ""
+    ) -> None:
+        self._call("ingest_record_provenance", {
+            "filename": filename,
+            "page_path": page_path,
+            "extractor": extractor,
+            "retention": retention,
+        })
+
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:
         self._call("notify", {"event_type": event_type, "payload": payload})
@@ -297,6 +324,7 @@ class FakeMCPClient(AgentRunnerMCPClient):
         ingest_files: dict[str, bytes] | None = None,
         owner_instructions: str = "",
         search_results: list[SearchHit] | None = None,
+        provenance: dict[str, dict] | None = None,
     ) -> None:
         self._pages: dict[str, tuple[str, str]] = {}
         self._etag_seq = 0
@@ -314,6 +342,10 @@ class FakeMCPClient(AgentRunnerMCPClient):
         # YOL-527 distillate actually reaches the client, not just that a
         # write happened.
         self.reasons: list[tuple[str, str]] = []
+        # Staged provenance keyed by ingest filename, and the records the agent
+        # landed on pages (YOL-552).
+        self.provenance: dict[str, dict] = dict(provenance or {})
+        self.landed_provenance: list[dict] = []
 
     def _next_etag(self) -> str:
         self._etag_seq += 1
@@ -368,6 +400,22 @@ class FakeMCPClient(AgentRunnerMCPClient):
 
     def ingest_read_owner_instructions(self) -> str:
         return self._owner_instructions
+
+    def ingest_read_provenance(self, filename: str) -> dict:
+        prov = self.provenance.get(filename)
+        if prov is None:
+            return {"filename": filename, "found": False, "intent": "", "source_url": ""}
+        return {"filename": filename, "found": True, **prov}
+
+    def ingest_record_provenance(
+        self, filename: str, page_path: str, extractor: str = "", retention: str = ""
+    ) -> None:
+        self.landed_provenance.append({
+            "filename": filename,
+            "page_path": page_path,
+            "extractor": extractor,
+            "retention": retention,
+        })
 
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:
@@ -494,6 +542,32 @@ class StorageMCPClient(AgentRunnerMCPClient):
 
     def ingest_read_owner_instructions(self) -> str:
         return (self._storage.read(f"{self._site}/{_INGEST_PREFIX}content.md") or "").strip()
+
+    def ingest_read_provenance(self, filename: str) -> dict:
+        from yoloscribe_io import read_staged
+
+        prov = read_staged(self._site, filename, self._storage)
+        if prov is None:
+            return {"filename": filename, "found": False, "intent": "", "source_url": ""}
+        return {"filename": filename, "found": True, **prov.to_dict()}
+
+    def ingest_record_provenance(
+        self, filename: str, page_path: str, extractor: str = "", retention: str = ""
+    ) -> None:
+        from yoloscribe_io import MediaAsset, Provenance, delete_staged, read_staged
+
+        staged = read_staged(self._site, filename, self._storage) or Provenance(
+            filename=filename, ingested_by=self._user_id
+        )
+        landed = staged.land(page_path=page_path, extractor=extractor, retention=retention)
+        MediaAsset(
+            site=self._site,
+            page_path=page_path,
+            filename=filename,
+            storage=self._storage,
+            provenance=landed,
+        ).register()
+        delete_staged(self._site, filename, self._storage)
 
     # notifications
     def notify(self, event_type: str, payload: dict) -> None:

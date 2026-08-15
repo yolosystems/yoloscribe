@@ -42,8 +42,11 @@ from yoloscribe_io import (
     AgentDefinition,
     AgentDefinitionError,
     NotificationsMarkdownFile,
+    Provenance,
     build_agent_md,
+    delete_staged,
     parse_agent_md,
+    read_staged,
 )
 from yoloscribe_io.agent_page import AGENT_NAME_RE
 from yoloscribe_io.markdown_file import _parse_frontmatter
@@ -53,7 +56,7 @@ from queue_helpers import enqueue_notify_agent
 from auth_providers.base import AuthProvider, UserSiteRepository
 from auth import resolve_api_token
 import km_signals
-from mcp_file_factory import make_agent_file, make_skill_file, make_wiki_page
+from mcp_file_factory import make_agent_file, make_media_asset, make_skill_file, make_wiki_page
 
 log = logging.getLogger(__name__)
 
@@ -1050,6 +1053,10 @@ def create_mcp_app(
                     continue
                 if "/.agents/" in rel or rel.startswith(".agents/"):
                     continue
+                # Staged provenance sidecars live under .provenance/ — they are
+                # metadata about queued documents, not documents to route.
+                if rel.startswith(".provenance/"):
+                    continue
                 pending.append(rel)
         return {"pending": pending}
 
@@ -1107,6 +1114,76 @@ def create_mcp_app(
         except Exception as exc:
             raise ValueError(f"Error moving {filename}: {exc}") from exc
         return {"filename": filename, "processed": True}
+
+    @mcp.tool(tags={TIER_INTERNAL})
+    @_mcp_span("ingest_read_provenance")
+    async def ingest_read_provenance(filename: str, ctx: Context = None) -> dict:
+        """Read why a queued document is being ingested and where it came from.
+
+        The `intent` here is the owner's own statement of purpose, captured at
+        upload. It outranks the agent's inference about where content belongs,
+        and it should become the `reason` on the resulting wiki write so a later
+        correction can be read against it.
+
+        Returns empty fields when the document has no staged record — normal for
+        files queued before provenance existed, or dropped in by other paths.
+
+        Args:
+            filename: The queued file to look up.
+        """
+        user = _user(ctx)
+        _check_scope(user, ".user/ingest", "read")
+        prov = read_staged(user.site, filename.strip().lstrip("/"), _storage)
+        if prov is None:
+            return {"filename": filename, "found": False, "intent": "", "source_url": ""}
+        return {"filename": filename, "found": True, **prov.to_dict()}
+
+    @mcp.tool(tags={TIER_INTERNAL})
+    @_mcp_span("ingest_record_provenance")
+    async def ingest_record_provenance(
+        filename: str,
+        page_path: str,
+        extractor: str = "",
+        retention: str = "",
+        ctx: Context = None,
+    ) -> dict:
+        """Record where a routed document came from, on the page it landed on.
+
+        Call this after writing the document's content to a wiki page and before
+        marking it processed. It moves the staged record onto the destination
+        page as a media-asset sidecar, preserving the owner's original intent and
+        source alongside the routing outcome.
+
+        Args:
+            filename: The ingest file that was routed.
+            page_path: The wiki page its content was written to.
+            extractor: What produced the text (e.g. "pypdf", "native-markdown").
+            retention: What should happen to the original bytes — "delete" or
+                "yoloscribe". Omit to use the record's existing choice.
+        """
+        user = _user(ctx)
+        filename = filename.strip().lstrip("/")
+        _validate_page_path(page_path)
+        _check_scope(user, page_path, "write-content")
+
+        staged = read_staged(user.site, filename, _storage) or Provenance(
+            filename=filename, ingested_by=user.user_id
+        )
+        try:
+            landed = staged.land(
+                page_path=page_path, extractor=extractor, retention=retention
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+        make_media_asset(user.site, page_path, filename, provenance=landed).register()
+        delete_staged(user.site, filename, _storage)
+        return {
+            "filename": filename,
+            "page_path": page_path,
+            "retention": landed.retention,
+            "source_status": landed.source_status,
+        }
 
     @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_read_owner_instructions")

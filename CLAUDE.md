@@ -45,6 +45,10 @@ Every "site" is an S3 prefix. The bucket layout is:
   .skills/{name}/SKILL.md             # skill instructions (site-scoped)
   .skills/{name}/mcp.json             # MCP server config for that skill
   .user/notifications.md              # owner notification inbox (platform-controlled; read-only in UI)
+  .user/ingest/{filename}             # queued document awaiting routing
+  .user/ingest/.provenance/{f}.json   # staged provenance for a queued document (YOL-552)
+  .user/ingest/processed/{filename}   # routed documents
+  {page}/.media/{filename}.json       # page asset metadata; carries landed provenance
   .archive/{page}/content.md          # soft-deleted page archive
 
 .tools/{name}/mcp.json                # tool MCP server config (bucket root, shared across all sites)
@@ -173,6 +177,19 @@ The `type:` field drives explicit dispatch in the agent-runner. When absent, the
 3. Saving the annotation log triggers the platform-provisioned `phoenix-annotator` (`type: eval_annotator`) agent via SQS.
 4. `EvalAnnotatorAgent` reads the log, calls the `annotate_trace` MCP tool on the backend which validates site ownership and writes span labels to Phoenix `/v1/span_annotations`.
 
+### Ingest provenance (YOL-552)
+
+Where a document came from and what became of it, in two lifecycle stages (`libs/yoloscribe_io/provenance.py`):
+
+- **Staged** — written by `POST /ingest/upload` (optional `intent` and `source_url` params) to `{site}/.user/ingest/.provenance/{filename}.json`, *before* the bytes land. This is the only moment the caller's purpose and the document's origin are knowable; neither can be recovered afterwards. `ingest_list_pending` filters the `.provenance/` prefix so records never look like documents awaiting routing.
+- **Landed** — the IngestAgent calls `ingest_mark_processed(filename, page_path)`, which lands the record on the destination page as the media-asset sidecar at `{site}/{page}/.media/{filename}.json`, nested under a `provenance` key, adding the routing outcome, the extractor that produced the text, and the retention choice.
+
+`Retention` is `delete` | `yoloscribe` | `external`; **default is `yoloscribe`** because deleting the original bytes forfeits re-extraction, which is the "appreciates rather than depreciates" property PageIndex is built on. `external` (copy to Drive/SharePoint) needs tool OAuth and is not implemented.
+
+`SourceStatus` is `none` | `unverified` | `verified` | `mismatch`. **`source_url` is an assertion by whoever ingested the document** — nothing stops a caller naming a public URL while uploading a restricted file — so only `verified` may act as an access-control anchor (`Provenance.gates_access`). Verification means fetching the claimed source through the ingesting user's enrolled tool and fingerprinting it against the bytes; that is **not built yet**, so everything currently records as `unverified`. YOL-553 depends on it.
+
+The agent reads staged intent via the `ingest_read_intent` tool and is instructed to reuse it as the `reason` on the resulting `wiki_write`, tying provenance to YOL-527's write-reason discipline.
+
 **Notification system** (`backend/notifications.py`):
 
 `write_notification(site, event_type, payload, *, user_id="")` is the sole entry point for writing to `.user/notifications.md`. Entry format:
@@ -261,7 +278,7 @@ A tool may carry both. **A tool with no tier tag is treated as internal — fail
 - Search: `search`
 - Read-only introspection: `agent_read`, `agent_list`, `skill_list`, `skill_read`, `list_skill_tools` — the last returns all tools available to agents on this site, derived from each skill's `tools:` frontmatter declaration, as a flat list of `{name, skill}` pairs; useful for discovering whether a particular tool (e.g. a Linear or GitHub tool) is already installed before asking the user to create a new skill
 
-**Internal-only surface:** `ingest_*`, `run_log_append`, `propose_page_change`, `notify`, `annotate_trace`, `emit_signal`, `read_memory` / `write_memory`, `read_archetypes` / `write_archetypes`, `read_signal_log`, plus **all agent and skill authoring** — `agent_create`, `agent_create_page`, `agent_create_ingest`, `agent_create_notification`, `agent_update`, `agent_delete`, `skill_create`, `skill_update`, `skill_delete`.
+**Internal-only surface:** `ingest_*` (including `ingest_read_provenance` / `ingest_record_provenance`), `run_log_append`, `propose_page_change`, `notify`, `annotate_trace`, `emit_signal`, `read_memory` / `write_memory`, `read_archetypes` / `write_archetypes`, `read_signal_log`, plus **all agent and skill authoring** — `agent_create`, `agent_create_page`, `agent_create_ingest`, `agent_create_notification`, `agent_update`, `agent_delete`, `skill_create`, `skill_update`, `skill_delete`.
 
 Authoring went internal-only under YOL-526: those tools existed so a 3P assistant could push definitions into YoloScribe, and that use case ends when YoloScribe authors `agent.md` itself. They stay registered rather than deleted because the platform's own learned-agent path (YOL-518) writes through them — the shrink is to the external surface, not to the capability. `agent.md` remains the portable IR either way. Note the tiers are not nested: `empty_archive` is external-only precisely because no agent should hold it.
 

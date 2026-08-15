@@ -62,8 +62,22 @@ from .media_asset import (
     list_page_media,
     load_media_asset,
 )
+from .provenance import (
+    Provenance,
+    Retention,
+    SourceStatus,
+    delete_staged,
+    read_staged,
+    write_staged,
+)
 
 __all__ = [
+    "Provenance",
+    "Retention",
+    "SourceStatus",
+    "delete_staged",
+    "read_staged",
+    "write_staged",
     "ArchetypeFile",
     "Conclusion",
     "EvidenceEntry",

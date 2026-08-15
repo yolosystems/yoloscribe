@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from auth import get_user_context
 from config import S3_BUCKET, s3
 from queue_helpers import enqueue_ingest_agents
+from s3_storage import storage
+from yoloscribe_io import Provenance, SourceStatus, write_staged
 
 log = logging.getLogger(__name__)
 
@@ -36,18 +38,23 @@ _SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 ._-]*\.[a-zA-Z0-9]{1,10}
         "S3 PUT URL targeting the site's `.user/ingest/` queue. "
         "The browser uploads directly to S3 — the backend never handles file bytes. "
         "Accepts any file type (PDF, DOCX, PPTX, XLSX, plain text, etc.). "
-        "Accepts both Supabase JWTs and `as_`-prefixed API tokens."
+        "Accepts both Supabase JWTs and `as_`-prefixed API tokens. "
+        "Optionally records `intent` (why this document is being ingested) and "
+        "`source_url` (where it came from) as a staged provenance record — both "
+        "are unrecoverable after the upload, so capture them here or not at all."
     ),
 )
 async def upload_ingest(
     filename: str,
     ctx: tuple[str, str | None] = Depends(get_user_context),
     site: str | None = None,
+    intent: str = "",
+    source_url: str = "",
 ) -> dict:
     if not _SAFE_FILENAME_RE.match(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    _user_id, token_site = ctx
+    user_id, token_site = ctx
     if not token_site:
         raise HTTPException(status_code=401, detail="Token is not associated with a site")
     if site and site != token_site:
@@ -68,6 +75,26 @@ async def upload_ingest(
         ExpiresIn=_PRESIGN_EXPIRY,
         HttpMethod="PUT",
     )
+
+    # Stage provenance now, while the caller still knows why this file is being
+    # ingested and where it came from (YOL-552). Written before the bytes land:
+    # the upload happens directly to S3 and may never complete, and a staged
+    # record for a file that never arrives is harmless — it is only ever read by
+    # filename, and the ingest agent only ever asks about files it can see.
+    prov = Provenance(
+        filename=filename,
+        intent=intent.strip(),
+        source_url=source_url.strip(),
+        source_status=SourceStatus.UNVERIFIED if source_url.strip() else SourceStatus.NONE,
+        ingested_by=user_id,
+    )
+    try:
+        write_staged(resolved_site, prov, storage)
+    except Exception:
+        # Provenance is valuable, not load-bearing for the upload itself.
+        # Failing the upload because the sidecar could not be written would
+        # trade a complete loss for a partial one.
+        log.exception("Failed to stage provenance for %s/%s", resolved_site, filename)
 
     log.info("Issued ingest upload URL for %s/%s", resolved_site, filename)
 

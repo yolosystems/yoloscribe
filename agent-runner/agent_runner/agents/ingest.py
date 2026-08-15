@@ -72,7 +72,9 @@ class IngestAgent(BaseAgent):
     Tool surface:
     - ingest_list_pending(): list unprocessed files in .user/ingest/
     - ingest_read(filename): read a specific pending file
-    - ingest_mark_processed(filename): move a file to .user/ingest/processed/
+    - ingest_read_intent(filename): why the owner queued this file, and its source
+    - ingest_mark_processed(filename, page_path): move a file to .user/ingest/processed/
+      and record its provenance on the page it was routed to
     - wiki_search(query): semantic search across the site to find routing targets
     - wiki_list_pages(): list all wiki page paths for structural navigation
     - wiki_read(page_path): read any wiki page for context
@@ -114,6 +116,11 @@ class IngestAgent(BaseAgent):
         self._read_counter: list[int] = [0]
         self._owner_instructions: str = ""
         self._enqueue_fn = enqueue_fn or (lambda key: None)
+        # filename → which extractor produced its text. Recorded per file rather
+        # than per run because one run handles many documents, and extraction
+        # fidelity is what decides whether a given document can be usefully
+        # re-extracted when the extractor improves (YOL-552).
+        self._extractors: dict[str, str] = {}
 
     # ── Tool surface ──────────────────────────────────────────────────────────
 
@@ -134,9 +141,53 @@ class IngestAgent(BaseAgent):
         return content
 
     @tool
-    def ingest_mark_processed(self, filename: str) -> str:
-        """Move a processed ingest file to the processed archive."""
+    def ingest_read_intent(self, filename: str) -> str:
+        """Read why the owner queued this document, and where it came from.
+
+        Call this before deciding where a document belongs. The owner's stated
+        intent outranks your own inference about the right destination, and you
+        should reuse it as the `reason` when you call wiki_write, so that a later
+        correction can be read against what was actually asked for.
+
+        Args:
+            filename: The queued file to look up.
+        """
         filename = filename.strip().lstrip("/")
+        prov = self._mcp.ingest_read_provenance(filename)
+        if not prov.get("found"):
+            return f"No stated intent for {filename} — route on your own judgement."
+        lines = [f"Intent: {prov.get('intent') or '(none given)'}"]
+        if prov.get("source_url"):
+            lines.append(f"Source: {prov['source_url']}")
+        return "\n".join(lines)
+
+    @tool
+    def ingest_mark_processed(self, filename: str, page_path: str = "") -> str:
+        """Move a processed ingest file to the processed archive.
+
+        Args:
+            filename: The ingest file that has been handled.
+            page_path: The wiki page its content was routed to. Pass this
+                whenever the document was written somewhere — it records the
+                document's origin on that page, which is what lets the original
+                be linked, re-extracted, or access-checked later. Omit only when
+                nothing was written.
+        """
+        filename = filename.strip().lstrip("/")
+        if page_path:
+            # Land provenance before the file moves: the staged record is keyed
+            # on the queue filename, and mark_processed is what invalidates it.
+            try:
+                self._mcp.ingest_record_provenance(
+                    filename,
+                    page_path.strip().strip("/"),
+                    # Text files never pass through document_index, so they have
+                    # no recorded extractor — they were read as-is.
+                    extractor=self._extractors.get(filename, "native-text"),
+                )
+            except Exception:
+                # Losing provenance is bad; losing the ingest run is worse.
+                log.exception("Failed to record provenance for %s", filename)
         try:
             self._mcp.ingest_mark_processed(filename)
         except Exception as e:
@@ -273,15 +324,17 @@ class IngestAgent(BaseAgent):
     def _extract_document(self, file_bytes: bytes, filename: str) -> str:
         """Extract text from document bytes, dispatching by file extension."""
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if ext == "pdf":
-            return _extract_pdf(file_bytes)
-        if ext == "docx":
-            return _extract_docx(file_bytes)
-        if ext == "pptx":
-            return _extract_pptx(file_bytes)
-        if ext in ("xlsx", "xls"):
-            return _extract_xlsx(file_bytes)
-        return file_bytes.decode("utf-8", errors="replace")
+        extractor, text = {
+            "pdf": ("pypdf", _extract_pdf),
+            "docx": ("python-docx", _extract_docx),
+            "pptx": ("python-pptx", _extract_pptx),
+            "xlsx": ("openpyxl", _extract_xlsx),
+            "xls": ("openpyxl", _extract_xlsx),
+        }.get(ext, ("utf-8-decode", None))
+        self._extractors[filename] = extractor
+        if text is None:
+            return file_bytes.decode("utf-8", errors="replace")
+        return text(file_bytes)
 
     # ── Content helpers ───────────────────────────────────────────────────────
 
@@ -364,6 +417,9 @@ class IngestAgent(BaseAgent):
             "topics already exist and prevents creating duplicate or redundant pages.\n"
             "2. Call ingest_list_pending() to find files to process.\n"
             "3. For each pending file:\n"
+            "   a0. Call ingest_read_intent(filename) first. If the owner stated why "
+            "they queued this document, that intent outranks your own inference about "
+            "where it belongs, and you must reuse it as the `reason` on wiki_write.\n"
             "   a. Read the content:\n"
             "      - Binary files (.pdf, .docx, .pptx, .xlsx): call "
             "document_index(filename) to extract text and index it. Use the returned "
@@ -387,7 +443,10 @@ class IngestAgent(BaseAgent):
             "   f. If you genuinely cannot determine where the content belongs:\n"
             "      - Call notify_owner(message) describing what you received and why "
             "it could not be routed. Do NOT mark the file as processed.\n"
-            "   g. After successfully writing, call ingest_mark_processed(filename).\n"
+            "   g. After successfully writing, call ingest_mark_processed(filename, "
+            "page_path) with the page you routed it to. Passing page_path records "
+            "where the document came from on that page; omitting it loses that link "
+            "permanently.\n"
             "4. When all files have been processed, call ingest_complete(summary) with "
             "a plain-text description of what happened — how many files were processed, "
             "which pages were created or updated, and any files left unprocessed. "
@@ -413,6 +472,7 @@ class IngestAgent(BaseAgent):
         tools = [
             self.ingest_list_pending,
             self.ingest_read,
+            self.ingest_read_intent,
             self.ingest_mark_processed,
             self.wiki_search,
             self.wiki_list_pages,
