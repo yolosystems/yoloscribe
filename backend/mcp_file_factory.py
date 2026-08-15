@@ -23,6 +23,7 @@ from queue_helpers import enqueue_agent_job, enqueue_notify_agent
 from s3_storage import storage as _storage
 from yoloscribe_io import (
     AgentMarkdownFile,
+    MediaAsset,
     NotificationBusHandler,
     OnWriteEventHandler,
     PageSettings,
@@ -69,6 +70,37 @@ def make_skill_file(site: str, skill_name: str) -> SkillMarkdownFile:
     skill = SkillMarkdownFile(site=site, skill_name=skill_name, storage=_storage)
     skill.add_handler(_bus_handler(site))
     return skill
+
+
+def make_media_asset(
+    site: str,
+    page_path: str,
+    filename: str,
+    *,
+    provenance=None,
+    mime_type: str = "",
+    size_bytes: int = 0,
+    cdn_url: str = "",
+) -> MediaAsset:
+    """A page asset with the notification bus wired.
+
+    No KM signal type maps to a media mutation today, so only the bus handler is
+    attached (page.media_added/removed → on_notify). Built here rather than
+    inline so an ingest-landed provenance record fans out the same way every
+    other mutation does (YOL-552).
+    """
+    asset = MediaAsset(
+        site=site,
+        page_path=page_path,
+        filename=filename,
+        storage=_storage,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        cdn_url=cdn_url,
+        provenance=provenance,
+    )
+    asset.add_handler(_bus_handler(site))
+    return asset
 
 
 def make_page_settings(site: str, page_path: str) -> PageSettings:
