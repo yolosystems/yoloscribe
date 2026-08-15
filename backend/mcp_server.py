@@ -25,6 +25,13 @@ from typing import Any
 import jwt
 from fastapi import HTTPException
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import NotFoundError
+from fastmcp.server.dependencies import get_http_request
+# Aliased: starlette.middleware.Middleware (ASGI, imported below) shares the
+# name and would otherwise shadow this one — silently, since the resulting
+# subclass is simply not callable rather than an import error.
+from fastmcp.server.middleware import Middleware as FastMCPMiddleware
+from fastmcp.server.middleware import MiddlewareContext
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -52,6 +59,93 @@ log = logging.getLogger(__name__)
 
 _PAGE_PATH_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+# ── Caller tiers (YOL-525) ────────────────────────────────────────────────────
+#
+# Every @mcp.tool() declares which callers may see and invoke it, via `tags`:
+#
+#   TIER_INTERNAL — run-token callers: the first-party agent-runner
+#   TIER_EXTERNAL — user JWT or `as_` static key: the SPA, Claude Code, 3P clients
+#
+# A tool may carry both. These are not nested: some tools are external-only
+# (authoring, and destructive owner actions like empty_archive) precisely
+# because agents should not have them.
+#
+# A tool with NO tier tag is treated as INTERNAL — fail closed. A forgotten tag
+# then makes a tool invisible to third parties, which is recoverable and shows
+# up in testing; the opposite default would silently publish internal tooling.
+# `tests/test_mcp_tool_tiers.py` fails if any registered tool is untagged.
+TIER_INTERNAL = "tier:internal"
+TIER_EXTERNAL = "tier:external"
+
+
+def _caller_tier() -> str:
+    """The tier of the current caller: run tokens are internal, everything else external.
+
+    `_MCPAuthMiddleware` resolves the caller and stores it on request.state before
+    any tool or middleware runs, so this is a read rather than a second auth pass.
+
+    Defaults to TIER_EXTERNAL when the caller cannot be determined — the smaller
+    surface. An unidentified caller is not a reason to hand out internal tooling.
+    """
+    try:
+        user = get_http_request().state.mcp_user
+    except Exception:  # no HTTP request in scope (non-HTTP transport)
+        return TIER_EXTERNAL
+    # A run token carries a path_scope; full-JWT and `as_`-key callers do not.
+    return TIER_INTERNAL if getattr(user, "path_scope", None) is not None else TIER_EXTERNAL
+
+
+def _tags_of(obj) -> set[str]:
+    return set(getattr(obj, "tags", None) or ())
+
+
+class _ToolTierMiddleware(FastMCPMiddleware):
+    """Restrict tools and resources to the callers their tier admits (YOL-525).
+
+    Two hooks doing two different jobs, and neither substitutes for the other:
+
+    * `on_list_*` is about not *showing*. An agent handed a tool it cannot use
+      will attempt it, burn turns and get a confusing error — and the names
+      themselves disclose internal surface area.
+    * `on_call_tool` / `on_read_resource` is what actually *secures* it. Omitting
+      something from a listing does not stop anyone naming it directly.
+
+    Rejections raise NotFoundError with the same message FastMCP produces for a
+    genuinely unregistered tool. A distinct "forbidden" would confirm the tool
+    exists, which is the thing hiding it was meant to avoid.
+    """
+
+    def __init__(self, mcp: FastMCP) -> None:
+        self._mcp = mcp
+
+    async def on_list_tools(self, context: MiddlewareContext, call_next):
+        tier = _caller_tier()
+        return [t for t in await call_next(context) if tier in _tags_of(t)]
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        name = context.message.name
+        tool = await self._mcp.get_tool(name)
+        # An unknown tool falls through to FastMCP, which raises its own
+        # NotFoundError — keeping one source of truth for that message.
+        if tool is not None and _caller_tier() not in _tags_of(tool):
+            log.warning("Blocked out-of-tier tool call: %s", name)
+            raise NotFoundError(f"Unknown tool: {name!r}")
+        return await call_next(context)
+
+    async def on_list_resources(self, context: MiddlewareContext, call_next):
+        tier = _caller_tier()
+        return [r for r in await call_next(context) if tier in _tags_of(r)]
+
+    async def on_read_resource(self, context: MiddlewareContext, call_next):
+        uri = str(context.message.uri)
+        for resource in await self._mcp._list_resources():
+            if str(resource.uri) == uri:
+                if _caller_tier() not in _tags_of(resource):
+                    log.warning("Blocked out-of-tier resource read: %s", uri)
+                    raise NotFoundError(f"Unknown resource: {uri!r}")
+                break
+        return await call_next(context)
 
 
 def _mcp_span(tool_name: str):
@@ -471,7 +565,7 @@ def create_mcp_app(
     local_api_key: str = "local",
 ):
     """Create and return the FastMCP ASGI app, ready to mount at /mcp/v1."""
-    mcp = FastMCP(
+    mcp: FastMCP = FastMCP(
         "YoloScribe",
         instructions=(
             "YoloScribe is an AI-powered wiki. You can read, create, update, and delete "
@@ -483,7 +577,7 @@ def create_mcp_app(
 
     # ── Wiki CRUD ─────────────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_create")
     async def wiki_create(page_path: str, content: str, ctx: Context) -> dict:
         """Create a new wiki page with markdown content.
@@ -517,7 +611,7 @@ def create_mcp_app(
             "created_at": _now_iso(),
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_read")
     async def wiki_read(
         page_path: str,
@@ -571,7 +665,7 @@ def create_mcp_app(
 
         return result
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_update")
     async def wiki_update(
         page_path: str,
@@ -609,7 +703,7 @@ def create_mcp_app(
             "message": message,
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_archive")
     async def wiki_archive(
         page_path: str,
@@ -639,7 +733,7 @@ def create_mcp_app(
         )
         return {"page_path": page_path, **result}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("empty_archive")
     async def empty_archive(
         ctx: Context = None,
@@ -654,7 +748,7 @@ def create_mcp_app(
         _check_scope(user, "", "delete")
         return _empty(s3=s3_client, bucket=bucket, site=user.site)
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_list")
     async def wiki_list(
         page_path: str = "",
@@ -714,7 +808,7 @@ def create_mcp_app(
 
         return {"pages": pages}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_versions")
     async def wiki_versions(
         page_path: str,
@@ -755,7 +849,7 @@ def create_mcp_app(
 
         return {"page_path": page_path, "versions": versions}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("wiki_diff")
     async def wiki_diff(
         page_path: str,
@@ -819,7 +913,7 @@ def create_mcp_app(
 
     # ── Search ────────────────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("search")
     async def search(
         query: str,
@@ -883,7 +977,7 @@ def create_mcp_app(
     _INGEST_PREFIX = ".user/ingest/"
     _PROCESSED_PREFIX = ".user/ingest/processed/"
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_list_pending")
     async def ingest_list_pending(ctx: Context = None) -> dict:
         """List unprocessed files waiting in the ingest queue (.user/ingest/)."""
@@ -904,7 +998,7 @@ def create_mcp_app(
                 pending.append(rel)
         return {"pending": pending}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_read_pending")
     async def ingest_read_pending(filename: str, ctx: Context = None) -> dict:
         """Read the text content of a pending ingest file by its filename."""
@@ -918,7 +1012,7 @@ def create_mcp_app(
             raise ValueError(f"File not found: {filename}")
         return {"filename": filename, "content": resp["Body"].read().decode("utf-8")}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_read_pending_bytes")
     async def ingest_read_pending_bytes(filename: str, ctx: Context = None) -> dict:
         """Read a binary pending ingest file (PDF, DOCX, etc.), base64-encoded.
@@ -943,7 +1037,7 @@ def create_mcp_app(
             "content_type": resp.get("ContentType", "application/octet-stream"),
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_mark_processed")
     async def ingest_mark_processed(filename: str, ctx: Context = None) -> dict:
         """Move a processed ingest file to the processed archive (.user/ingest/processed/)."""
@@ -959,7 +1053,7 @@ def create_mcp_app(
             raise ValueError(f"Error moving {filename}: {exc}") from exc
         return {"filename": filename, "processed": True}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_read_owner_instructions")
     async def ingest_read_owner_instructions(ctx: Context = None) -> dict:
         """Read the owner's routing instructions from .user/ingest/content.md.
@@ -977,7 +1071,7 @@ def create_mcp_app(
             content = ""
         return {"content": content.strip()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("ingest_write_extracted")
     async def ingest_write_extracted(filename: str, extracted_markdown: str, ctx: Context = None) -> dict:
         """Save extracted text for a binary ingest file as {filename}.extracted.md and enqueue indexing."""
@@ -996,7 +1090,7 @@ def create_mcp_app(
 
     # ── Run log ────────────────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("run_log_append")
     async def run_log_append(
         agent_name: str,
@@ -1044,7 +1138,7 @@ def create_mcp_app(
 
     # ── Proposal staging ──────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("propose_page_change")
     async def propose_page_change(page_path: str, content: str, agent_name: str, ctx: Context = None) -> dict:
         """Stage a proposed content change for owner review (confirm_before_write mode).
@@ -1076,7 +1170,7 @@ def create_mcp_app(
 
     # ── Notifications ─────────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("notify")
     async def notify(event_type: str, payload: dict, ctx: Context = None) -> dict:
         """Append a notification entry to .user/notifications.md and dispatch matching on_notify agents.
@@ -1142,7 +1236,7 @@ def create_mcp_app(
             "eval_log": defn.eval_log,
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_create")
     async def agent_create(
         agent_name: str,
@@ -1235,7 +1329,7 @@ def create_mcp_app(
         # handlers on .create() above (AGENT_CREATED event).
         return {"agent_name": agent_name, "page_path": page_path, "created_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_create_page")
     async def agent_create_page(
         agent_name: str,
@@ -1317,7 +1411,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "type": "page",
                 "created_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_create_ingest")
     async def agent_create_ingest(
         agent_name: str,
@@ -1393,7 +1487,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "type": "ingest",
                 "created_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_create_notification")
     async def agent_create_notification(
         agent_name: str,
@@ -1470,7 +1564,7 @@ def create_mcp_app(
         return {"agent_name": agent_name, "page_path": page_path, "type": "notification",
                 "events": list(events), "created_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_read")
     async def agent_read(
         agent_name: str,
@@ -1499,7 +1593,7 @@ def create_mcp_app(
             raise ValueError(f"agent.md is invalid: {exc}") from exc
         return _defn_to_dict(defn, page_path)
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_update")
     async def agent_update(
         agent_name: str,
@@ -1569,7 +1663,7 @@ def create_mcp_app(
         _maybe_enqueue_index(_agent_page_content_key(user.site, page_path), user.user_id, bucket, sqs_indexing_client, sqs_indexing_queue_url)
         return {"agent_name": agent_name, "page_path": page_path, "updated_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_delete")
     async def agent_delete(
         agent_name: str,
@@ -1637,7 +1731,7 @@ def create_mcp_app(
         # .delete() above (AGENT_DELETED event).
         return {"agent_name": agent_name, "page_path": page_path, "deleted": True}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("agent_list")
     async def agent_list(
         page_path: str = "",
@@ -1699,7 +1793,7 @@ def create_mcp_app(
     # Skills are stored at {site}/.skills/{skill_name}/SKILL.md.
     # The file format is a YAML frontmatter block followed by markdown instructions.
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("skill_list")
     async def skill_list(ctx: Context = None) -> dict:
         """List all skills defined for the user's site.
@@ -1734,7 +1828,7 @@ def create_mcp_app(
                     skills.append({"name": skill_name, "description": "", "tools": []})
         return {"skills": skills}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("skill_create")
     async def skill_create(
         skill_name: str,
@@ -1761,7 +1855,7 @@ def create_mcp_app(
         make_skill_file(user.site, skill_name).create_raw(content)
         return {"skill_name": skill_name, "created_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("skill_update")
     async def skill_update(
         skill_name: str,
@@ -1789,7 +1883,7 @@ def create_mcp_app(
         make_skill_file(user.site, skill_name).save_raw(content)
         return {"skill_name": skill_name, "updated_at": _now_iso()}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("skill_delete")
     async def skill_delete(
         skill_name: str,
@@ -1817,7 +1911,7 @@ def create_mcp_app(
         s3_client.delete_objects(Bucket=bucket, Delete={"Objects": to_delete, "Quiet": True})
         return {"skill_name": skill_name, "deleted": True}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("skill_read")
     async def skill_read(skill_name: str, ctx: Context = None) -> dict:
         """Read a skill's full SKILL.md content.
@@ -1837,7 +1931,7 @@ def create_mcp_app(
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_EXTERNAL})
     @_mcp_span("list_skill_tools")
     async def list_skill_tools(ctx: Context = None) -> dict:
         """List all tools available to agents running on this site.
@@ -1872,7 +1966,7 @@ def create_mcp_app(
 
     # ── Eval annotation tool ──────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("annotate_trace")
     async def annotate_trace(
         session_id: str,
@@ -1999,7 +2093,7 @@ def create_mcp_app(
 
     # ── Librarian memory tools ────────────────────────────────────────────────
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("read_memory")
     async def read_memory(
         domain: str = "",
@@ -2030,7 +2124,7 @@ def create_mcp_app(
             "conclusions": items,
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("write_memory")
     async def write_memory(
         conclusions: list[dict],
@@ -2121,7 +2215,9 @@ def create_mcp_app(
     # SDK-native ambient injection. See projects/yolo-brain/implementation-plan
     # "Future: Ambient Memory Context" in the wiki for the full note.
 
-    @mcp.resource("memory://current")
+    # Internal-only, matching read_memory/write_memory. Going away entirely with
+    # the Librarian — YoloBrain is the source of memory (YOL-509).
+    @mcp.resource("memory://current", tags={TIER_INTERNAL})
     @_mcp_span("memory_current")
     async def memory_current(ctx: Context) -> str:
         """The site's current Librarian preference memory, as a resource."""
@@ -2136,7 +2232,10 @@ def create_mcp_app(
             "conclusions": [conclusion_to_dict(c) for c in conclusions],
         })
 
-    @mcp.resource("page-index://current")
+    # Both tiers: a page listing derived from wiki_list, which is itself external.
+    # The real PageIndex retrieval surface arrives with YOL-517 and should be
+    # tiered deliberately then rather than inheriting this stub's choice.
+    @mcp.resource("page-index://current", tags={TIER_INTERNAL, TIER_EXTERNAL})
     @_mcp_span("page_index_current")
     async def page_index_current(ctx: Context) -> str:
         """A stub page index for the site: one node per existing wiki page.
@@ -2168,7 +2267,7 @@ def create_mcp_app(
                 })
         return json.dumps({"nodes": nodes})
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("read_signal_log")
     async def read_signal_log(
         limit: int = 50,
@@ -2197,7 +2296,7 @@ def create_mcp_app(
             "entry_count": entry_count,
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("emit_signal")
     async def emit_signal(signal_type: str, payload: dict, ctx: Context = None) -> dict:
         """Append an entry to the Librarian's preference signal log.
@@ -2216,7 +2315,7 @@ def create_mcp_app(
         _emit_signal(user.site, signal_type, payload)
         return {"emitted": True}
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("read_archetypes")
     async def read_archetypes(ctx: Context = None) -> dict:
         """Read the Librarian's archetype index for this site.
@@ -2234,7 +2333,7 @@ def create_mcp_app(
             "exists": bool(content),
         }
 
-    @mcp.tool()
+    @mcp.tool(tags={TIER_INTERNAL})
     @_mcp_span("write_archetypes")
     async def write_archetypes(content: str, ctx: Context = None) -> dict:
         """Write the Librarian's archetype index for this site.
@@ -2256,7 +2355,10 @@ def create_mcp_app(
 
     # ── Return ASGI app ───────────────────────────────────────────────────────
 
-    return mcp.http_app(
+    # Registered after every tool and resource, so it sees the whole registry.
+    mcp.add_middleware(_ToolTierMiddleware(mcp))
+
+    app = mcp.http_app(
         path="/",
         middleware=[
             Middleware(
@@ -2271,6 +2373,12 @@ def create_mcp_app(
             )
         ],
     )
+    # Expose the server so the tool registry can be introspected — the tier
+    # tests enumerate every registered tool and fail on an untagged one, and
+    # reaching the instance through the closure or gc would be far more fragile
+    # than the thing it is checking.
+    app.state.fastmcp_server = mcp
+    return app
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
