@@ -9,14 +9,26 @@ handshake** (`{LITELLM_MCP_URL}/mcp/{tool}`, `backend/routers/oauth.py`).
 
 ## ⚠️ Shared ALB — host-based scoping
 
-The **same ALB** also serves the YoloScribe backend at `api-dev.yoloscribe.com`.
-Because a WebACL is attached to the *load balancer* (not a hostname), it evaluates
-**every** request to **both** hosts. The default-deny is meant only for the
-LiteLLM host, so `allow-api-dev-host` matches the `Host` header
-`api-dev.yoloscribe.com` and allows it — the backend has its own JWT auth and
-path safety and must not be filtered here. Every allow/block rule *below* it
-therefore applies only to `litellm-dev` (and any other host). If the backend ever
-moves to a different hostname, update that rule.
+The **same ALB** also serves the YoloScribe backend at `api-dev.yoloscribe.com`
+and YoloBrain at `brain-dev.yoloscribe.com`. Because a WebACL is attached to the
+*load balancer* (not a hostname), it evaluates **every** request to **every**
+host on it. The default-deny is meant only for the LiteLLM host, so
+`allow-api-dev-host` and `allow-brain-dev-host` match the `Host` header and allow
+those two — each service has its own auth and must not be filtered here. If
+either moves hostname, update the matching rule.
+
+> **A host joining this ALB is default-DENIED until it has an allow rule.** The
+> WebACL's `DefaultAction` is `Block`, so adding an ingress to this group without
+> a corresponding host allow makes that host return 403 for *everything*, not
+> just for restricted paths. This is the failure mode to check first when a newly
+> added service is unreachable.
+
+**Why `allow-brain-dev-host` sits at priority 5, not 3.** `Allow` is terminating,
+so a host allow placed ahead of `rate-limit-mcp` (priority 3) would exempt that
+host from the MCP rate limit entirely. YoloBrain exposes its own MCP surface —
+including pre-auth OAuth endpoints (`register`/`authorize`/`token`) — so it wants
+that limit. Sitting at 5 keeps `/internal` blocked (priority 0), path traversal
+blocked (1), and `/mcp/*` rate-limited (3), while allowing everything else.
 
 > **Allow is terminating, so rule order is load-bearing.** Anything placed after
 > `allow-api-dev-host` is dead for the backend host — evaluation stops the moment
@@ -34,6 +46,8 @@ moves to a different hostname, update that rule.
 | `/callback` | ✅ allow | Upstream IdP redirects back to the gateway's callback in delegated PKCE |
 | `/{server}/authorize`, `/{server}/token`, `/{server}/register` | ✅ allow | Per-MCP-server OAuth endpoints (authorize / token / DCR) that LiteLLM's AS metadata advertises at the domain root, e.g. `/yoloscribe/authorize`. Matched by `^/[^/]+/(authorize\|token\|register)` — the suffix constraint means no inference/admin/management path qualifies, and deeper paths like `/v1/mcp/oauth/authorize` stay blocked. |
 | everything else | ⛔ block (403) | Reached over internal DNS, never from the internet |
+
+Host-level allows (evaluated after the all-host blocks): `api-dev.yoloscribe.com` (priority 2) and `brain-dev.yoloscribe.com` (priority 5).
 
 > **Why the discovery docs already worked but authorize didn't:** LiteLLM's protected-resource metadata (`/.well-known/oauth-protected-resource/mcp/{server}`) points at a per-server authorization server `https://{host}/{server}`, whose metadata (`/.well-known/oauth-authorization-server/{server}`) advertises `authorize`/`token`/`register` at the **domain root** (`/{server}/…`), not under `/mcp`. The `.well-known` prefixes were allowed; the root OAuth endpoints were not — hence the 403 at `/yoloscribe/authorize`.
 
