@@ -1,5 +1,5 @@
 {{- if .Values.ingress.enabled }}
-{{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
+{{- if and (eq .Values.ingress.controllerType "eks-auto-mode") (not .Values.ingress.existingIngressClass) }}
 apiVersion: eks.amazonaws.com/v1
 kind: IngressClassParams
 metadata:
@@ -53,7 +53,7 @@ metadata:
     {{- end }}
 spec:
   {{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
-  ingressClassName: {{ include "yoloscribe-backend.fullname" . }}
+  ingressClassName: {{ .Values.ingress.existingIngressClass | default (include "yoloscribe-backend.fullname" .) }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}

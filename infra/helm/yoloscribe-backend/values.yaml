@@ -41,6 +41,12 @@ ingress:
   # aws-load-balancer-controller mode, or IngressClassParams.spec.scheme in
   # eks-auto-mode.
   scheme: internet-facing
+  # Share an ALB that another release already owns: set existingIngressClass to
+  # that release's IngressClass name. This skips creating an
+  # IngressClassParams/IngressClass here and references the existing one, so the
+  # ALB's scheme, group and certificates come from whoever owns that class.
+  # eks-auto-mode only. Example: existingIngressClass: "yolo-shared"
+  existingIngressClass: ""
   # ALB Ingress Group — set group.name to share an ALB with mcp-helm.
   # Both charts must use the same group.name. YoloScribe owns the catch-all
   # path (/) so it should have the highest group.order number (lowest priority).
