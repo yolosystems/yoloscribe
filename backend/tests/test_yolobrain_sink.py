@@ -94,8 +94,8 @@ class TestActorRouting:
     def test_no_actor_skips_delivery(self, http: _Captured) -> None:
         """Sending an empty sub would file the signal under a workspace keyed on
         the empty string — quietly polluting a real user's memory with activity
-        that is not theirs. Some write paths genuinely have no actor, so this is
-        expected rather than exceptional."""
+        that is not theirs. No emitting path produces this today; it guards the
+        empty default on S3Tools and any future caller that omits the actor."""
         _sink().emit("acme", "content_routed", {"page_type": "project"}, "")
         assert http.calls == []
 
@@ -205,8 +205,9 @@ class TestActorReachesTheSinkFromAMutation:
         assert params["reason"] == "trimming the intro"
 
     def test_unattributed_write_yields_no_actor(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """MessagingAgent writes without a user_id. The signal still reaches
-        site-keyed sinks; only the user-routed one skips it."""
+        """A write with no author still reaches site-keyed sinks; only the
+        user-routed one skips it. Not reachable from production code paths
+        today — this pins the degradation, not a live case."""
         import km_signal_handler
         from km_signal_handler import KMSignalHandler
         from yoloscribe_io import WikiPageMarkdownFile

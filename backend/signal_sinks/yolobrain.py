@@ -56,12 +56,16 @@ class YoloBrainSignalSink(SignalSink):
 
     def emit(self, site: str, signal_type: str, payload: dict, user_id: str = "") -> None:
         if not user_id:
-            # No subject means no workspace to route to. Skipping is the honest
-            # outcome — sending an empty sub would file the signal under a
-            # workspace keyed on the empty string, quietly polluting a real
-            # user's memory with someone else's activity. Some write paths
-            # genuinely have no actor (e.g. MessagingAgent's unattributed
-            # wiki.write), so this is expected rather than exceptional.
+            # No subject means no workspace to route to. Skipping is the
+            # honest outcome — sending an empty sub would file the signal under
+            # a workspace keyed on the empty string, quietly polluting a real
+            # user's memory with someone else's activity.
+            #
+            # No emitting path produces this today: MCP, REST, and the runner
+            # all carry a resolved user. It guards the `user_id: str = ""`
+            # default on S3Tools in agents/base.py, and any future
+            # make_wiki_page caller that omits the actor. Debug rather than
+            # warning because if it ever does fire it will fire constantly.
             log.debug(
                 "YoloBrainSignalSink: skipping %s for site %s — no actor on the event",
                 signal_type,
