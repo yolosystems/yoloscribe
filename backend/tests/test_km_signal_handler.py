@@ -23,7 +23,7 @@ class TestKMSignalHandler:
             monkeypatch,
         )
         assert len(calls) == 1
-        site, signal_type, params = calls[0]
+        site, signal_type, params, _actor = calls[0]
         assert site == "s"
         assert signal_type == "page_structured"
         assert params["page_type"] == "project"

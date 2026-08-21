@@ -21,12 +21,23 @@ class SignalSink(ABC):
     """Forwards a knowledge-management signal for a site to an external destination."""
 
     @abstractmethod
-    def emit(self, site: str, signal_type: str, payload: dict) -> None:
-        """Forward a signal. Best-effort: must not raise on failure."""
+    def emit(self, site: str, signal_type: str, payload: dict, user_id: str = "") -> None:
+        """Forward a signal. Best-effort: must not raise on failure.
+
+        `user_id` is the *actor* — whoever performed the mutation, which for a
+        shared-write user editing someone else's page is the editor rather than
+        the site owner (YOL-558). Sinks that route by site can ignore it; sinks
+        that route by user require it and should skip when it is empty rather
+        than inventing a subject.
+
+        Keyword-defaulted rather than required so existing site-keyed sinks are
+        unaffected, and so a caller with no actor in hand degrades to "no
+        user-routed delivery" instead of a TypeError on a best-effort path.
+        """
 
 
 class NullSignalSink(SignalSink):
     """No-op sink — the degenerate case for a site with nothing configured."""
 
-    def emit(self, site: str, signal_type: str, payload: dict) -> None:
+    def emit(self, site: str, signal_type: str, payload: dict, user_id: str = "") -> None:
         return None

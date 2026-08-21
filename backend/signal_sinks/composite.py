@@ -15,9 +15,9 @@ class CompositeSignalSink(SignalSink):
     def __init__(self, sinks: list[SignalSink]) -> None:
         self._sinks = sinks
 
-    def emit(self, site: str, signal_type: str, payload: dict) -> None:
+    def emit(self, site: str, signal_type: str, payload: dict, user_id: str = "") -> None:
         for sink in self._sinks:
             try:
-                sink.emit(site, signal_type, payload)
+                sink.emit(site, signal_type, payload, user_id)
             except Exception as exc:
                 log.warning("SignalSink %s failed for site %s: %s", type(sink).__name__, site, exc)

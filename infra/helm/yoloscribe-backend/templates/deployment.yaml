@@ -156,6 +156,17 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}
             {{- end }}
+            {{- if .Values.yolobrain.apiUrl }}
+            # YoloBrain signal delivery (YOL-558). apiUrl must be the in-cluster
+            # service address — /internal/* is blocked at YoloBrain's edge.
+            - name: YOLOBRAIN_API_URL
+              value: {{ .Values.yolobrain.apiUrl | quote }}
+            - name: YOLOBRAIN_INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yoloscribe-backend.secretName" . }}
+                  key: yolobrain-internal-secret
+            {{- end }}
             {{- if .Values.otel.headers }}
             - name: OTEL_EXPORTER_OTLP_HEADERS
               valueFrom:
