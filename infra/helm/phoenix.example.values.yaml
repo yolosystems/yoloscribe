@@ -26,6 +26,16 @@ image:
   repository: arizephoenix/phoenix
   tag: version-19.9.0-nonroot   # pin to a known-good release
 
+# ── Storage ──────────────────────────────────────────────────────────────────
+# This cluster has NO default StorageClass, so any PVC this chart creates that
+# omits storageClassName stays Pending indefinitely — with nothing reported on
+# the pod, which makes it look like a scheduling problem rather than a storage
+# one. If you enable anything stateful here, set its storage class explicitly to
+# ebs-gp3 (check the key against the chart version you pin — it is commonly
+# persistence.storageClass or <component>.persistence.storageClassName).
+# Marking ebs-gp3 the cluster default is the more durable fix; see
+# yoloscribe-ops/CLUSTER.md.
+
 # ── External Postgres (RDS) — do NOT deploy the bundled subchart ──────────────
 postgresql:
   enabled: false
