@@ -105,7 +105,7 @@ Backend-to-backend routes in `backend/routers/internal.py`, authenticated by a s
 
 **Two separate secrets, deliberately.** `/internal/runs/mint` takes an arbitrary `site` + `user_id`, so anything holding that secret can act as any user. The messaging bot processes untrusted input from chat platforms and must never reach it. `install_messaging_bot.sh` refuses to deploy if the two values match.
 
-**These are blocked at the ALB.** The `block-internal-paths` WAF rule denies `^/internal(/|$)` on every host, and sits at priority 0 because `allow-api-dev-host` is a *terminating* Allow that would otherwise shadow it (see `infra/waf/README.md`). Callers reach these routes over cluster DNS — pod → ClusterIP → pod never traverses the load balancer — so in-cluster clients must be configured with the **internal service address**, not the public hostname.
+**These must not be publicly reachable** — `infra/waf/README.md` states the requirement and why the shared secret alone is not enough. In the runyolo deployment it is enforced by a WAF rule that denies `^/internal(/|$)` on every host, provisioned from the private `yoloscribe-ops` repo (`waf/`), where the rule ordering that makes it effective is documented. Callers reach these routes over cluster DNS — pod → ClusterIP → pod never traverses the load balancer — so in-cluster clients must be configured with the **internal service address**, not the public hostname.
 
 The WAF is not the auth boundary: any pod in the cluster can reach a ClusterIP, which is why these routes still check a secret. The pairing is what matters — a leaked secret isn't remotely exploitable, and in-cluster reachability alone doesn't authorize anything.
 
