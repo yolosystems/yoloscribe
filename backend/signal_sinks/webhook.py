@@ -34,7 +34,11 @@ class WebhookSignalSink(SignalSink):
     def __init__(self, secrets_store) -> None:
         self._secrets_store = secrets_store
 
-    def emit(self, site: str, signal_type: str, payload: dict) -> None:
+    def emit(self, site: str, signal_type: str, payload: dict, user_id: str = "") -> None:
+        # Routes by site; the actor is accepted for interface parity and
+        # deliberately not forwarded — these targets are customer-configured
+        # endpoints and the user id is not theirs to receive.
+        del user_id
         targets = self._load_targets(site)
         if not targets:
             return

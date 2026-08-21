@@ -127,7 +127,7 @@ class TestCompositeSignalSink:
             def __init__(self, name):
                 self.name = name
 
-            def emit(self, site, signal_type, payload):
+            def emit(self, site, signal_type, payload, user_id=""):
                 calls.append((self.name, site, signal_type, payload))
 
         sink = CompositeSignalSink([_RecordingSink("a"), _RecordingSink("b")])
@@ -141,11 +141,11 @@ class TestCompositeSignalSink:
         calls = []
 
         class _RaisingSink:
-            def emit(self, site, signal_type, payload):
+            def emit(self, site, signal_type, payload, user_id=""):
                 raise RuntimeError("boom")
 
         class _RecordingSink:
-            def emit(self, site, signal_type, payload):
+            def emit(self, site, signal_type, payload, user_id=""):
                 calls.append((site, signal_type, payload))
 
         sink = CompositeSignalSink([_RaisingSink(), _RecordingSink()])

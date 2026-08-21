@@ -190,6 +190,16 @@ Where a document came from and what became of it, in two lifecycle stages (`libs
 
 The agent reads staged intent via the `ingest_read_intent` tool and is instructed to reuse it as the `reason` on the resulting `wiki_write`, tying provenance to YOL-527's write-reason discipline.
 
+### KM signal delivery to YoloBrain (YOL-558)
+
+Knowledge-management signals fan out through `signal_sinks.dispatch(site, signal_type, params, user_id)` to a process-wide `CompositeSignalSink`. `WebhookSignalSink` (site-keyed, no-op without configured targets) is always present; `YoloBrainSignalSink` is added only when **both** `YOLOBRAIN_API_URL` and `YOLOBRAIN_INTERNAL_SECRET` are set — half-configured logs a warning and delivers nothing, rather than POSTing unauthenticated or authenticating against a default URL.
+
+**Routing is by user, not by site.** YoloBrain's workspace is a user (`engine.submit_signal(user_sub, ...)`), but `SignalSink.emit` is site-keyed. The subject is the **actor** taken from the mutation event payload — `WikiPageMarkdownFile._payload()` already carries `user_id` and `KMSignalHandler` forwards it. Deliberately *not* a site→owner lookup: `UserSiteRepository` has no reverse index (the DynamoDB table is keyed on `user_id`, so it would need a new GSI), and it would attribute a shared-write user's edit to the site owner instead of the person who made it.
+
+A signal with no actor is **skipped** by this sink rather than sent with an empty subject, which would file it under a workspace keyed on `""`. Some write paths genuinely have no actor (e.g. `MessagingAgent`'s unattributed `wiki.write`); site-keyed sinks still receive those.
+
+Delivery is best-effort and off the write path — `dispatch` offloads to a background thread and never raises, so a YoloBrain outage costs signals, never wiki writes.
+
 **Notification system** (`backend/notifications.py`):
 
 `write_notification(site, event_type, payload, *, user_id="")` is the sole entry point for writing to `.user/notifications.md`. Entry format:
@@ -312,6 +322,8 @@ claude mcp add --transport http yoloscribe https://<your-domain>/mcp/v1/ \
 | `LITELLM_MCP_URL` | backend | Public base URL of the LiteLLM MCP gateway; tool OAuth enrollment runs against `{LITELLM_MCP_URL}/mcp/{tool}` (delegated PKCE). Must be publicly reachable for the browser authorize redirect (YOL-505) |
 | `SQS_QUEUE_URL` | backend | SQS queue URL for async agent execution (RunnerAgent) |
 | `PHOENIX_API_ENDPOINT` | backend + agent-runner | Base URL for the Arize Phoenix REST API (e.g. `http://phoenix:6006`); enables `annotate_trace` MCP tool and eval annotation log post-processing |
+| `YOLOBRAIN_API_URL` | backend | In-cluster base URL of YoloBrain's API (e.g. `http://yolobrain-api.yolo.svc.cluster.local:8080`); enables `YoloBrainSignalSink`. **Never the public hostname** — `/internal/*` is blocked at YoloBrain's edge (YOL-558) |
+| `YOLOBRAIN_INTERNAL_SECRET` | backend | Shared secret for YoloBrain's `POST /internal/signals`; must match its `INTERNAL_SIGNAL_SECRET`. **Can act as any user** — never share with anything processing untrusted input |
 | `CLOUDFRONT_SIGNING_KEY_ID` | backend | CloudFront key pair ID for signed-cookie media auth (e.g. `K2JCJMDEHXQW5F`) |
 | `CLOUDFRONT_MEDIA_DOMAIN` | backend | CloudFront domain for video/audio assets; falls back to `CLOUDFRONT_DOMAIN` |
 | `CLOUDFRONT_MEDIA_DISTRIBUTION_ID` | backend | CloudFront distribution ID for the media distribution; enables cache invalidation on asset delete |

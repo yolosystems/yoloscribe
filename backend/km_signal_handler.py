@@ -44,7 +44,11 @@ class KMSignalHandler(EventHandler):
         if built is None:
             return
         signal_type, params = built
-        dispatch(site, signal_type, params)
+        # The actor is already on the payload — no lookup needed, and it is the
+        # correct subject: for a shared-write user editing someone else's page
+        # this is the editor, where a site-owner lookup would misattribute it
+        # (YOL-558).
+        dispatch(site, signal_type, params, str(payload.get("user_id", "")))
 
     @staticmethod
     def _build_signal(event_type: str, payload: dict) -> tuple[str, dict] | None:

@@ -350,7 +350,7 @@ async def accept_proposed_route(
         site, wiki.key, claims.user_id, exclude_agent_md_key=originating_agent
     )
     sse_broadcaster.broadcast(site, "page_changed", {"path": page_path, "updated_by": "agent"})
-    emit_km_signal(site, *km_signals.proposal_accepted_signal(page_path))
+    emit_km_signal(site, *km_signals.proposal_accepted_signal(page_path), user_id=claims.user_id)
 
     return Response(content='{"status":"accepted"}', status_code=200, media_type="application/json")
 
@@ -377,7 +377,7 @@ async def reject_proposed_route(
         raise HTTPException(status_code=404, detail="No pending proposal for this page")
 
     _delete_proposed(site, page_path)
-    emit_km_signal(site, *km_signals.proposal_rejected_signal(page_path))
+    emit_km_signal(site, *km_signals.proposal_rejected_signal(page_path), user_id=claims.user_id)
     return Response(content='{"status":"rejected"}', status_code=200, media_type="application/json")
 
 

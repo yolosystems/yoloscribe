@@ -490,14 +490,15 @@ def _emit_signal(site: str, signal_type: str, payload: dict) -> None:
         log.warning("Failed to emit signal %s for site %s: %s", signal_type, site, exc)
 
 
-def _emit_km_signal(site: str, signal_type: str, params: dict) -> None:
+def _emit_km_signal(site: str, signal_type: str, params: dict, user_id: str = "") -> None:
     """Fan out a typed KM signal to any configured SignalSink(s) — sink-only.
 
     Thin wrapper over ``signal_sinks.dispatch`` (the shared off-write-path,
-    best-effort fan-out). Never raises.
+    best-effort fan-out). Never raises. ``user_id`` is the actor; user-routed
+    sinks need it, site-keyed sinks ignore it (YOL-558).
     """
     from signal_sinks import dispatch
-    dispatch(site, signal_type, params)
+    dispatch(site, signal_type, params, user_id)
 
 
 def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: str) -> None:
@@ -521,14 +522,14 @@ def _do_notify(bucket: str, site: str, event_type: str, payload: dict, user_id: 
             event=str(payload.get("event", "")),
             reason=str(payload.get("reason", "")),
             page_path=page_path,
-        ))
+        ), user_id=user_id)
     elif event_type == "user_instruction":
         _emit_km_signal(site, *km_signals.user_instruction_signal(
             instruction=str(payload.get("instruction", "")),
             domain=str(payload.get("domain", "general")),
-        ))
+        ), user_id=user_id)
     else:
-        _emit_km_signal(site, *km_signals.notification_sent_signal(event_type, page_path))
+        _emit_km_signal(site, *km_signals.notification_sent_signal(event_type, page_path), user_id=user_id)
 
 
 def _skill_key(site: str, skill_name: str) -> str:

@@ -158,6 +158,28 @@ otel:
   endpoint: ""   # e.g. http://phoenix-svc.arize.svc.cluster.local:6006
   headers: ""    # e.g. "Authorization=Bearer <token>" — pass via --set
 
+# ── YoloBrain signal delivery (YOL-558) ───────────────────────────────────────
+# Forwards knowledge-management signals to YoloBrain so it can learn from what
+# users do in the wiki. Leave apiUrl empty to disable — an install without
+# YoloBrain pays nothing.
+#
+# apiUrl MUST be the in-cluster service address, never the public hostname.
+# YoloBrain blocks /internal/* at its edge, and pod → ClusterIP → pod never
+# traverses the load balancer.
+#
+# Both apiUrl and the secret are required together. A half-configured
+# deployment logs a warning and delivers nothing, rather than POSTing
+# unauthenticated or authenticating against a default URL.
+#
+# THE SECRET CAN ACT AS ANY USER on the YoloBrain side. Do not reuse it for
+# anything that processes untrusted input — ingest handles untrusted content by
+# definition. Pass via --set; never commit a real value here.
+yolobrain:
+  apiUrl: ""   # e.g. http://yolobrain-api.yolo.svc.cluster.local:8080
+  # Reads key `yolobrain-internal-secret` from the backend secret. Must match
+  # INTERNAL_SIGNAL_SECRET on the YoloBrain side.
+  internalSecret: ""
+
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)
 #   existingSecret: yoloscribe-secrets
