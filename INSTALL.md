@@ -238,18 +238,36 @@ Issue certificates for your backend domain and CloudFront distribution. CloudFro
 
 ### Deployment
 
-Each service has a Dockerfile. Build and push images to GHCR or ECR, then deploy with the Helm charts in `infra/helm/`:
+Each service has a Dockerfile. Build and push images to GHCR or ECR, then deploy with the `install_*.sh` scripts in `infra/helm/`. Every script takes the same inputs and runs `helm upgrade --install`, so the same command creates a release and updates it:
 
 ```bash
-helm upgrade --install yoloscribe-backend infra/helm/yoloscribe-backend \
-  -f backend.prod.values.yaml --namespace yoloscribe --create-namespace
+export STAGE=prod REGION=us-west-2 K8S_NAMESPACE=yoloscribe
 
-helm upgrade --install yoloscribe-agent-runner infra/helm/yoloscribe-agent-runner \
-  -f agent-runner.prod.values.yaml --namespace yoloscribe
-
-helm upgrade --install yoloscribe-indexer infra/helm/yoloscribe-indexer \
-  -f indexer.prod.values.yaml --namespace yoloscribe
+infra/helm/install_backend.sh
+infra/helm/install_runner.sh
+infra/helm/install_indexer.sh
+infra/helm/install_messaging_bot.sh   # optional; see the messaging bot section
 ```
+
+| Input | Required | Purpose |
+|---|---|---|
+| `STAGE` | yes | Names the values file — `dev`, `staging`, `prod` |
+| `REGION` | yes | Names the values file — e.g. `us-west-2` |
+| `K8S_NAMESPACE` | yes | Target namespace. **No default**, deliberately: combined with `--create-namespace`, a default would turn a forgotten variable into a second copy of the stack in a namespace nobody meant to create. `NAMESPACE` is accepted as an alias. |
+| `--values-dir <path>` | no | Where to look for the values file; defaults to `infra/helm/` |
+| `--dry-run` | no | Render templates without touching the cluster |
+
+Anything else you pass is forwarded to `helm` unchanged (`--timeout 10m`, `--atomic`, and so on).
+
+Each script resolves `<component>.<STAGE>.<REGION>.values.yaml` — `backend`, `agent-runner`, `indexer`, `messaging-bot`, `litellm`. Copy the matching `*.example.values.yaml` and fill it in. These files carry account-specific detail and are gitignored; if you keep them in a separate ops repo, point at it rather than copying:
+
+```bash
+infra/helm/install_backend.sh --values-dir ~/ops/helm
+```
+
+Resolution is strict — with `--values-dir` there is no fallback to `infra/helm/`, so it is always unambiguous which file a deploy used. Both `--values-dir <path>` and `--values-dir=<path>` work, including a leading `~`.
+
+Values come from the file; secrets come from the environment or the repo-root `.env`. For the four variables that decide *where* a deploy lands — `STAGE`, `REGION`, `K8S_NAMESPACE`, `NAMESPACE` — an explicit environment variable overrides `.env`, so `STAGE=prod infra/helm/install_backend.sh` means prod even when `.env` says otherwise.
 
 Build and deploy the frontend:
 
