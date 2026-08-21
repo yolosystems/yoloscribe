@@ -57,3 +57,11 @@ Prefers existingSecret; falls back to the release-managed secret.
 {{- include "yoloscribe-backend.fullname" . }}
 {{- end }}
 {{- end }}
+
+{{/*
+The IngressClass this release references. Defaults to the release fullname, so
+a chart installed on its own owns a class named after itself.
+*/}}
+{{- define "yoloscribe-backend.ingressClassName" -}}
+{{- .Values.ingressClass.name | default (include "yoloscribe-backend.fullname" .) -}}
+{{- end }}

@@ -1,36 +1,4 @@
 {{- if .Values.ingress.enabled }}
-{{- if and (eq .Values.ingress.controllerType "eks-auto-mode") (not .Values.ingress.existingIngressClass) }}
-apiVersion: eks.amazonaws.com/v1
-kind: IngressClassParams
-metadata:
-  name: {{ include "yoloscribe-backend.fullname" . }}
-  labels:
-    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
-spec:
-  scheme: {{ .Values.ingress.scheme | default "internet-facing" | quote }}
-  {{- if .Values.ingress.group.name }}
-  group:
-    name: {{ .Values.ingress.group.name | quote }}
-  {{- end }}
-  {{- if .Values.ingress.certificateArn }}
-  certificateARNs:
-    - {{ .Values.ingress.certificateArn | quote }}
-  {{- end }}
----
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: {{ include "yoloscribe-backend.fullname" . }}
-  labels:
-    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
-spec:
-  controller: eks.amazonaws.com/alb
-  parameters:
-    apiGroup: eks.amazonaws.com
-    kind: IngressClassParams
-    name: {{ include "yoloscribe-backend.fullname" . }}
----
-{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -53,7 +21,7 @@ metadata:
     {{- end }}
 spec:
   {{- if eq .Values.ingress.controllerType "eks-auto-mode" }}
-  ingressClassName: {{ .Values.ingress.existingIngressClass | default (include "yoloscribe-backend.fullname" .) }}
+  ingressClassName: {{ include "yoloscribe-backend.ingressClassName" . }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
