@@ -9,6 +9,10 @@ image:
 ghcr:
   username: ""          # set in environment-specific values file
   pat: ""               # pass via --set; never commit a real value
+  # Name of a dockerconfigjson Secret that already exists — normally one synced
+  # from Secrets Manager by the yoloscribe-external-secrets chart. When set, the
+  # chart renders no pull secret of its own and username/pat are unused.
+  existingSecret: ""
 
 # ── Service account (IRSA for SQS receive/delete + S3 read) ──────────────────
 serviceAccount:
@@ -49,6 +53,11 @@ config:
 otel:
   endpoint: ""   # e.g. http://phoenix-svc.arize.svc.cluster.local:6006
   headers: ""    # e.g. "Authorization=Bearer <token>" — pass via --set
+  # Name of a Secret that already holds the OTLP headers — normally synced
+  # from Secrets Manager. When set, the headers env var is wired from it and
+  # the chart renders no Secret of its own, so no header value need be passed.
+  existingSecret: ""
+  existingSecretKey: otlp-headers
 
 # ── Anthropic API key secret ──────────────────────────────────────────────────
 # Option A: reference an existing Kubernetes secret (recommended for production)

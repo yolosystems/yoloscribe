@@ -68,3 +68,19 @@ Effective agent-runner image (config.agentRunnerImage or image.repository:tag).
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag }}
 {{- end }}
 {{- end }}
+
+{{/*
+Secret holding the OTLP headers. External Secrets manages it in a real
+deployment; the chart only renders one when the value is passed inline.
+*/}}
+{{- define "yoloscribe-agent-runner.otelSecretName" -}}
+{{- .Values.otel.existingSecret | default (printf "%s-otel" (include "yoloscribe-agent-runner.fullname" .)) -}}
+{{- end }}
+
+{{/*
+Registry pull secret. Same split: ESO-managed by name, or rendered from an
+inline PAT.
+*/}}
+{{- define "yoloscribe-agent-runner.ghcrSecretName" -}}
+{{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-agent-runner.fullname" .)) -}}
+{{- end }}

@@ -16,9 +16,9 @@ spec:
         {{- include "yoloscribe-agent-runner.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "yoloscribe-agent-runner.serviceAccountName" . }}
-      {{- if .Values.ghcr.pat }}
+      {{- if or .Values.ghcr.pat .Values.ghcr.existingSecret }}
       imagePullSecrets:
-        - name: {{ include "yoloscribe-agent-runner.fullname" . }}-ghcr
+        - name: {{ include "yoloscribe-agent-runner.ghcrSecretName" . }}
       {{- end }}
       containers:
         - name: polling-worker
@@ -79,12 +79,12 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}
             {{- end }}
-            {{- if .Values.otel.headers }}
+            {{- if or .Values.otel.headers .Values.otel.existingSecret }}
             - name: OTEL_EXPORTER_OTLP_HEADERS
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "yoloscribe-agent-runner.fullname" . }}-otel
-                  key: otlp-headers
+                  name: {{ include "yoloscribe-agent-runner.otelSecretName" . }}
+                  key: {{ .Values.otel.existingSecretKey | default "otlp-headers" }}
             {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

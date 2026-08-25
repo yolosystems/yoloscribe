@@ -18,9 +18,9 @@ spec:
         {{- include "yoloscribe-backend.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "yoloscribe-backend.serviceAccountName" . }}
-      {{- if .Values.ghcr.pat }}
+      {{- if or .Values.ghcr.pat .Values.ghcr.existingSecret }}
       imagePullSecrets:
-        - name: {{ include "yoloscribe-backend.fullname" . }}-ghcr
+        - name: {{ include "yoloscribe-backend.ghcrSecretName" . }}
       {{- end }}
       containers:
         - name: backend
@@ -167,12 +167,12 @@ spec:
                   name: {{ include "yoloscribe-backend.secretName" . }}
                   key: yolobrain-internal-secret
             {{- end }}
-            {{- if .Values.otel.headers }}
+            {{- if or .Values.otel.headers .Values.otel.existingSecret }}
             - name: OTEL_EXPORTER_OTLP_HEADERS
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "yoloscribe-backend.fullname" . }}-otel
-                  key: otlp-headers
+                  name: {{ include "yoloscribe-backend.otelSecretName" . }}
+                  key: {{ .Values.otel.existingSecretKey | default "otlp-headers" }}
             {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
