@@ -17,9 +17,9 @@ spec:
       labels:
         {{- include "yoloscribe-messaging-bot.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if .Values.ghcr.pat }}
+      {{- if or .Values.ghcr.pat .Values.ghcr.existingSecret }}
       imagePullSecrets:
-        - name: {{ include "yoloscribe-messaging-bot.fullname" . }}-ghcr
+        - name: {{ include "yoloscribe-messaging-bot.ghcrSecretName" . }}
       {{- end }}
       containers:
         - name: messaging-bot

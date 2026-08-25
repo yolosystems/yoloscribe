@@ -55,6 +55,13 @@ externalSecrets:
     enabled: true
     remoteKey: otel
     targetSecret: yoloscribe-agent-runner-otel
+  # Optional component: leave disabled unless the messaging bot is deployed. An
+  # ExternalSecret whose Secrets Manager object does not exist reports
+  # SecretSyncedError forever rather than failing quietly.
+  messagingBot:
+    enabled: false
+    remoteKey: messaging-bot
+    targetSecret: yoloscribe-messaging-bot
 
 # ── Image pull secrets ────────────────────────────────────────────────────────
 # GHCR credentials need a kubernetes.io/dockerconfigjson Secret rather than a
@@ -68,3 +75,4 @@ imagePullSecrets:
   targets:
     - yoloscribe-backend-ghcr
     - yoloscribe-agent-runner-ghcr
+    # - yoloscribe-messaging-bot-ghcr   # uncomment with externalSecrets.messagingBot

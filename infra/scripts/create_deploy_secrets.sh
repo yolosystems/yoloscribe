@@ -26,11 +26,26 @@ DRY_RUN=false
 AWS_PROFILE="${AWS_PROFILE:-runyolo_admin}"
 PREFIX="${SECRETS_PREFIX:-yoloscribe/deploy}"
 
+# An explicit environment beats .env, which is the opposite of what plain
+# sourcing does. It matters here more than anywhere: rotating a value with
+# `MESSAGING_BOT_SECRET=new create_deploy_secrets.sh` would otherwise silently
+# write the OLD value from .env and report success.
+SOURCED_VARS=(ANTHROPIC_API_KEY SUPABASE_SERVICE_ROLE_KEY LITELLM_MASTER_KEY
+              MESSAGING_BOT_SECRET YOLOBRAIN_INTERNAL_SECRET DISCORD_BOT_TOKEN
+              OTEL_EXPORTER_OTLP_HEADERS GHCR_USERNAME GHCR_PAT
+              INTERNAL_MINT_SECRET)
+_pre=()
+for _v in "${SOURCED_VARS[@]}"; do _pre+=("${!_v:-}"); done
+
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck source=/dev/null
   source "$ENV_FILE"
   set +a
+  for _i in "${!SOURCED_VARS[@]}"; do
+    [[ -n "${_pre[$_i]}" ]] && printf -v "${SOURCED_VARS[$_i]}" '%s' "${_pre[$_i]}"
+  done
+  unset _pre _i _v
 else
   echo "Error: $ENV_FILE not found — this script reads its values from there." >&2
   exit 1
@@ -79,12 +94,32 @@ add_object "$PREFIX/agent-runner" \
   anthropic-api-key=ANTHROPIC_API_KEY \
   litellm-api-key=LITELLM_MASTER_KEY
 
+# Optional: only written when the bot's variables are set. Its ExternalSecret is
+# disabled by default for the same reason.
+add_object "$PREFIX/messaging-bot" \
+  messaging-bot-secret=MESSAGING_BOT_SECRET \
+  discord-bot-token=DISCORD_BOT_TOKEN
+
 add_object "$PREFIX/otel" \
   otlp-headers=OTEL_EXPORTER_OTLP_HEADERS
 
 add_object "$PREFIX/ghcr" \
   username=GHCR_USERNAME \
   pat=GHCR_PAT
+
+# ── Invariants ────────────────────────────────────────────────────────────────
+# The bot must not be able to mint run tokens: /internal/runs/mint accepts an
+# arbitrary site + user_id, and the bot processes untrusted chat input (YOL-523).
+# install_messaging_bot.sh used to enforce this by comparing environment
+# variables, which stops working once both values arrive from Secrets Manager —
+# so the check belongs here, at the point the values are written.
+if [[ -n "${MESSAGING_BOT_SECRET:-}" && -n "${INTERNAL_MINT_SECRET:-}" \
+      && "$MESSAGING_BOT_SECRET" == "$INTERNAL_MINT_SECRET" ]]; then
+  echo "Error: MESSAGING_BOT_SECRET must not equal INTERNAL_MINT_SECRET." >&2
+  echo "       A compromised bot could then mint run tokens for any site." >&2
+  echo "       Generate a separate value: openssl rand -hex 32" >&2
+  exit 1
+fi
 
 # ── Report, then apply ────────────────────────────────────────────────────────
 
