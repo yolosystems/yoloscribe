@@ -1,0 +1,57 @@
+{{/*
+Cluster-scoped ALB plumbing for EKS Auto Mode.
+
+Kept in its own file, and behind its own values section, so that the class can
+be owned by whichever release you choose — or by none of them, if you would
+rather manage IngressClass out of band.
+
+**Exactly one release may create a given class name.** Helm stamps ownership on
+everything it creates and refuses to adopt another release's object, so a second
+release rendering the same name fails with an "invalid ownership metadata" error
+on install *and* on every subsequent upgrade. Set `create: false` on the others
+and point them at the same `name`.
+
+Note the ALB itself is shared via `ingressClass.group`, not by sharing a class:
+distinct classes that declare the same group land on the same load balancer. A
+shared class name is therefore optional — it buys one place to configure scheme
+and certificates, and costs the ownership constraint above.
+*/}}
+{{- if and .Values.ingressClass.create (eq .Values.ingress.controllerType "eks-auto-mode") }}
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ include "yoloscribe-backend.ingressClassName" . }}
+  labels:
+    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
+  {{- if .Values.ingressClass.keepOnUninstall }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  scheme: {{ .Values.ingressClass.scheme | default "internet-facing" | quote }}
+  {{- with .Values.ingressClass.group }}
+  group:
+    name: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingressClass.certificateArns }}
+  certificateARNs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ include "yoloscribe-backend.ingressClassName" . }}
+  labels:
+    {{- include "yoloscribe-backend.labels" . | nindent 4 }}
+  {{- if .Values.ingressClass.keepOnUninstall }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  controller: {{ .Values.ingressClass.controller | default "eks.amazonaws.com/alb" | quote }}
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: {{ include "yoloscribe-backend.ingressClassName" . }}
+{{- end }}

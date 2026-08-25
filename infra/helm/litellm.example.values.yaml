@@ -121,6 +121,10 @@ db:
   #   usernameKey: username
   #   passwordKey: password
 postgresql:
+  # Left disabled — LiteLLM points at the shared RDS instance. If you ever enable
+  # the bundled subchart (or db.deployStandalone), give it an explicit
+  # storageClass: a cluster with no default StorageClass leaves the resulting PVC
+  # Pending forever, reporting nothing on the pod.
   enabled: false
 
 service:

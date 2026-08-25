@@ -28,6 +28,35 @@ service:
   type: ClusterIP
   port: 8000
 
+# ── IngressClass (EKS Auto Mode) ─────────────────────────────────────────────
+# Cluster-scoped ALB plumbing, kept separate from the Ingress itself so it can be
+# owned by whichever release you choose — or managed out of band entirely.
+#
+# EXACTLY ONE release may create a given class name. Helm refuses to adopt a
+# resource another release created, so a second release rendering the same name
+# fails with "invalid ownership metadata" on install and on every upgrade after.
+# Give the extra releases create: false and the same name.
+#
+# The ALB is shared via `group`, NOT by sharing a class — distinct classes that
+# declare the same group land on the same load balancer. Sharing the name is
+# optional: it buys one place to configure scheme and certificates.
+ingressClass:
+  create: true
+  # Defaults to the release fullname, so an isolated install owns its own class.
+  name: ""
+  controller: eks.amazonaws.com/alb
+  scheme: internet-facing
+  # ALB Ingress Group. Every service that should land on the same load balancer
+  # must declare the same value here.
+  group: ""
+  certificateArns: []
+  # Leave the class standing when this release is uninstalled. Worth setting on
+  # the owning release when other releases reference the same class, so removing
+  # it does not pull the class out from under them. Note the kept object retains
+  # its Helm ownership annotations, so a *different* release cannot adopt it
+  # later without those annotations being cleared first.
+  keepOnUninstall: false
+
 # ── Ingress (ALB via the self-managed AWS Load Balancer Controller, or
 #    EKS Auto Mode's built-in ALB support) ─────────────────────────────────────
 ingress:
@@ -41,18 +70,17 @@ ingress:
   #   the legacy ingress-class/group.name annotations, which Auto Mode doesn't
   #   support. See https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html
   controllerType: aws-load-balancer-controller
-  # ALB scheme. Used as the alb.ingress.kubernetes.io/scheme annotation in
-  # aws-load-balancer-controller mode, or IngressClassParams.spec.scheme in
-  # eks-auto-mode.
+  # ALB scheme, as the alb.ingress.kubernetes.io/scheme annotation.
+  # aws-load-balancer-controller mode only — in eks-auto-mode this comes from
+  # ingressClass.scheme above.
   scheme: internet-facing
-  # ALB Ingress Group — set group.name to share an ALB with mcp-helm.
-  # Both charts must use the same group.name. YoloScribe owns the catch-all
-  # path (/) so it should have the highest group.order number (lowest priority).
-  # In eks-auto-mode, group.order is not supported (Auto Mode doesn't expose an
-  # equivalent) — only group.name is used, via IngressClassParams.
+  # ALB Ingress Group, as annotations. aws-load-balancer-controller mode only —
+  # in eks-auto-mode the group comes from ingressClass.group above, and order has
+  # no equivalent. YoloScribe owns the catch-all path (/) so it takes the highest
+  # order number, i.e. the lowest priority.
   group:
     name: ""    # e.g. yolo-prod; leave empty for a dedicated ALB
-    order: 20   # lowest priority — catch-all route (aws-load-balancer-controller only)
+    order: 20   # lowest priority — catch-all route
   # Annotations applied in aws-load-balancer-controller mode. In eks-auto-mode,
   # kubernetes.io/ingress.class is dropped (replaced by spec.ingressClassName)
   # but the rest still apply as documented ALB behavior annotations.
