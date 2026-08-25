@@ -1,30 +1,154 @@
-# YoloScribe → LiteLLM proxy — values for the OFFICIAL LiteLLM Helm chart
-# (berriai/litellm-helm), deployed via infra/helm/install_litellm.sh.
+# LiteLLM — example values for the OFFICIAL chart:
+#   oci://ghcr.io/berriai/litellm-helm
 #
-# YoloScribe does NOT bundle LiteLLM into its own app charts (unlike YoloBrain,
-# which bundles it for Honcho). This stands up a standalone LiteLLM proxy that
-# carries YoloScribe's model routing. LiteLLM's *infrastructure* — its Postgres
-# database and provider-credential secrets — is assumed to ALREADY EXIST (the
-# operator's responsibility); this only deploys the proxy pointed at that infra.
-# See YOL-505 for the full deployment rationale.
+# Ported from the bundled fork (yolobrain/helm/litellm) and VERIFIED by rendering
+# both and diffing against the live Deployment: image, resources, serviceAccount
+# and both probes match exactly. The only intentional difference is the added
+# startupProbe (see below).
 #
-# NOTE: the value keys below follow the berriai/litellm-helm chart. Verify them
-# against the chart version you pin in install_litellm.sh — the chart's schema
-# evolves. Copy this to litellm.{STAGE}.{REGION}.values.yaml in yoloscribe-ops
-# and fill in the placeholders.
+# Four things that are NOT key renames, and cost the most to discover:
+#   1. Probes are hardcoded in the fork's deployment.yaml, absent from its
+#      values.yaml. There is nothing to map from — you only find them by reading
+#      the template or the live pod.
+#   2. The probe schema here is FLAT (`path:`), not nested (`httpGet.path:`).
+#      Nesting it half-applies: initialDelaySeconds takes, path silently does not.
+#   3. existingSecret (one name, chart wires each key) becomes environmentSecrets
+#      (a list whose every key is exported as an env var). It works only because
+#      the keys in litellm-secrets already equal the env var names LiteLLM reads.
+#   4. db.deployStandalone, postgresql.enabled and migrationJob.enabled all
+#      default ON and are absent from the fork, so nothing prompts you to look.
+#
+# Copy to litellm.{STAGE}.{REGION}.values.yaml in yoloscribe-ops.
 
-replicaCount: 1
-
+# ── Image ────────────────────────────────────────────────────────────────────
+# Fork had a single string: image: "ghcr.io/berriai/litellm:main-latest"
 image:
   repository: ghcr.io/berriai/litellm
-  tag: main-stable
+  tag: main-latest
 
-# ── Proxy config (becomes LiteLLM's config.yaml) ──────────────────────────────
-# model_name == the YoloScribe model key passed through as the OpenAI `model`.
-# Keep this list in sync with infra/litellm/config.example.yaml (the
-# docker-compose local-dev copy of the same routing).
+# ── Naming ───────────────────────────────────────────────────────────────────
+# The live release is `litellm` and its Service is `litellm:4000`. Honcho and the
+# YoloScribe backend address it by that name over cluster DNS, so the rendered
+# name must not change.
+fullnameOverride: litellm
+
+serviceAccount:
+  create: true
+  name: litellm
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::<aws-account-id>:role/<litellm-irsa-role>"
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Fork used existingSecret + per-key secretKeyRef. The official chart exports
+# EVERY key of the named Secrets as env vars, which works only because the key
+# names in litellm-secrets already equal the env var names LiteLLM reads:
+# ANTHROPIC_API_KEY, OPENAI_API_KEY, LITELLM_MASTER_KEY, DATABASE_URL.
+environmentSecrets:
+  - litellm-secrets
+
+# The two plain values the fork set directly on the container.
+envVars:
+  AWS_REGION_NAME: <region>
+  PROXY_BASE_URL: https://<litellm-hostname>
+
+# ── Database ─────────────────────────────────────────────────────────────────
+# DATABASE_URL arrives whole from litellm-secrets, so the chart composes nothing.
+# Both of these default ON and would deploy a bundled Postgres.
+db:
+  useExisting: false
+  deployStandalone: false
+postgresql:
+  enabled: false
+
+# ── Schema migrations ────────────────────────────────────────────────────────
+# OFF, deliberately. The chart defaults it ON, but the Job it renders gets
+# envFrom: [] — environmentSecrets reaches the Deployment and NOT the Job — so it
+# would run prisma_migration.py with no DATABASE_URL and fail every install.
+#
+# Getting the Job to work means db.useExisting: true with db.secret split into
+# username/password/host/database keys, i.e. restructuring the Secrets Manager
+# object away from a single DATABASE_URL string. Not worth it for the cutover:
+# LiteLLM runs its own Prisma migrations on boot, which is what the live
+# deployment already does. Revisit if migrations should become an explicit
+# pre-upgrade gate rather than a startup side effect.
+migrationJob:
+  enabled: false
+
+# The chart adds a startupProbe the fork has no equivalent for. Kept: 30 x 10s
+# is more forgiving than the fixed 120s liveness delay it supersedes, so this is
+# the one intentional difference from the live Deployment.
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+# NOT a key mapping: the fork hardcodes these in its deployment.yaml and they
+# appear nowhere in its values.yaml. The official defaults are initialDelay 0,
+# which kills the proxy mid-boot. Carried from the live Deployment.
+# The chart's probe schema is FLAT — `path:`, not `httpGet.path:`. Nesting it
+# silently half-applies: initialDelaySeconds takes and the path does not.
+livenessProbe:
+  path: /health/liveliness
+  initialDelaySeconds: 120
+  periodSeconds: 15
+  failureThreshold: 5
+readinessProbe:
+  # Matching live. The chart defaults to /health/readiness, which additionally
+  # checks the database — better, but a behaviour change, so adopt it
+  # deliberately rather than as a side effect of the port.
+  path: /health/liveliness
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  failureThreshold: 5
+
+# The master key the proxy authenticates with. Without these the chart generates
+# its own Secret (litellm-masterkey) holding a value nothing else knows.
+masterkeySecretName: litellm-secrets
+masterkeySecretKey: LITELLM_MASTER_KEY
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 3Gi
+  requests:
+    cpu: 250m
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 4000
+
+ingress:
+  enabled: true
+  className: yolo-shared
+  hosts:
+    - host: <litellm-hostname>
+      paths:
+        - path: /
+          pathType: Prefix
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: <litellm-hostname>
+    alb.ingress.kubernetes.io/certificate-arn: <acm-cert-arn>
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+
+# ── Proxy config ─────────────────────────────────────────────────────────────
+# Fork: `config: |` a raw YAML STRING. Official: a structured map. Same content,
+# re-nested rather than copied.
 proxy_config:
   model_list:
+    - model_name: glm-flash
+      litellm_params:
+        model: openai/zai.glm-4.7-flash
+        api_key: os.environ/OPENAI_API_KEY
+        api_base: https://bedrock-mantle.<region>.api.aws/v1
+    - model_name: glm-5
+      litellm_params:
+        model: openai/zai.glm-5
+        api_key: os.environ/OPENAI_API_KEY
+        api_base: https://bedrock-mantle.<region>.api.aws/v1
+    - model_name: text-embedding-3-small
+      litellm_params:
+        model: bedrock/amazon.titan-embed-text-v1
+        aws_region_name: os.environ/AWS_REGION_NAME
+        drop_params: true
     - model_name: haiku
       litellm_params:
         model: anthropic/claude-haiku-4-5-20251001
@@ -37,121 +161,23 @@ proxy_config:
         max_tokens: 16384
     - model_name: opus
       litellm_params:
-        model: anthropic/claude-opus-4-6
+        model: anthropic/claude-opus-4-8
         api_key: os.environ/ANTHROPIC_API_KEY
         max_tokens: 16384
     - model_name: bedrock-haiku
       litellm_params:
         model: bedrock/anthropic.claude-haiku-4-5-20251001-v1:0
-        aws_region_name: os.environ/AWS_REGION
+        aws_region_name: os.environ/AWS_REGION_NAME
         max_tokens: 16384
     - model_name: bedrock-sonnet
       litellm_params:
         model: bedrock/anthropic.claude-sonnet-4-6-20250514-v1:0
-        aws_region_name: os.environ/AWS_REGION
+        aws_region_name: os.environ/AWS_REGION_NAME
         max_tokens: 16384
     - model_name: bedrock-opus
       litellm_params:
         model: bedrock/anthropic.claude-opus-4-6-20250514-v1:0
-        aws_region_name: os.environ/AWS_REGION
+        aws_region_name: os.environ/AWS_REGION_NAME
         max_tokens: 16384
-    # GLM via Bedrock Mantle — validate against the Mantle endpoint before relying
-    # on it (see infra/litellm/config.example.yaml for the OpenAI-shape fallback).
-    - model_name: glm
-      litellm_params:
-        model: bedrock/zai.glm-5
-        aws_region_name: os.environ/AWS_REGION
-        aws_bedrock_runtime_endpoint: https://bedrock-mantle.us-west-2.api.aws
-  litellm_settings:
-    drop_params: true
-
-  # ── Third-party tool MCP servers (YOL-505) — OPTIONAL, admin-managed ────────
-  # MCP tool servers are optional and NOT shipped as active config. Configure them
-  # in the LiteLLM admin UI (stored in LiteLLM's Postgres) — that keeps OAuth
-  # client credentials inside LiteLLM and avoids a config-vs-DB duplicate. The
-  # active proxy_config carries only the models YoloScribe needs; the commented
-  # block below is a REFERENCE for the delegated-PKCE shape. Leave it commented.
-  #
-  # Delegated PKCE: LiteLLM delegates the OAuth handshake to the upstream; the
-  # client (YoloScribe) drives PKCE THROUGH the gateway (connecting at /mcp/{server})
-  # and vaults the returned tokens per-user in Secrets Manager. Every call carries
-  # x-litellm-api-key (→ budget/attribution) + Authorization: Bearer <upstream
-  # token>, which LiteLLM forwards as-is. auth_type / oauth2_flow /
-  # delegate_auth_to_upstream are all required; allow_all_keys lets any valid
-  # virtual key use the server (else per-key object_permission grants).
-  #
-  # mcp_servers:
-  #   linear:                        # DCR/PKCE — no client credentials
-  #     url: "https://mcp.linear.app/mcp"
-  #     transport: "http"
-  #     auth_type: "oauth2"
-  #     oauth2_flow: "authorization_code"
-  #     delegate_auth_to_upstream: true
-  #     allow_all_keys: true
-  #   github:                        # confidential client — client_id/secret in the UI
-  #     url: "https://api.githubcopilot.com/mcp/"
-  #     transport: "http"
-  #     auth_type: "oauth2"
-  #     oauth2_flow: "authorization_code"
-  #     delegate_auth_to_upstream: true
-  #     allow_all_keys: true
-
-# ── Master key (the proxy's admin / front-door key) ───────────────────────────
-# install_litellm.sh injects this from $LITELLM_MASTER_KEY via --set; do NOT
-# commit a real key. YoloScribe presents it (or, under YOL-513, a per-user
-# virtual key) as LITELLM_API_KEY.
-# masterkey: "sk-..."   # supplied by install_litellm.sh
-
-# ── Provider credentials (needed by the proxy pod) ────────────────────────────
-# ANTHROPIC_API_KEY for the Anthropic groups; AWS creds/region for bedrock-*/glm
-# (or grant the pod an IRSA role instead). Reference an existing secret you
-# manage — part of the "assume the infra exists" contract.
-environmentSecrets:
-  - yoloscribe-litellm-provider-creds   # must supply ANTHROPIC_API_KEY, AWS_REGION, AWS_* (unless using IRSA)
-
-# ── Database — ASSUMED TO ALREADY EXIST ───────────────────────────────────────
-# Point LiteLLM at your existing Postgres; do NOT deploy the bundled subchart.
-# (Required for LiteLLM virtual keys / budgets — the substrate YOL-513 builds on.)
-db:
-  useExisting: true
-  # endpoint: litellm-postgres.yolo.svc.cluster.local
-  # database: litellm
-  # secret:
-  #   name: yoloscribe-litellm-db
-  #   usernameKey: username
-  #   passwordKey: password
-postgresql:
-  # Left disabled — LiteLLM points at the shared RDS instance. If you ever enable
-  # the bundled subchart (or db.deployStandalone), give it an explicit
-  # storageClass: a cluster with no default StorageClass leaves the resulting PVC
-  # Pending forever, reporting nothing on the pod.
-  enabled: false
-
-service:
-  type: ClusterIP
-  port: 4000
-
-# ── Ingress (OPTIONAL) ────────────────────────────────────────────────────────
-# ClusterIP is enough if only in-cluster workloads reach the proxy. Expose it via
-# ingress only when an external client needs the MCP gateway / OAuth handshake
-# reachable (e.g. a browser driving delegated PKCE at https://{host}/mcp/{server}).
-# The official berriai/litellm-helm chart ships a standard ingress block — enable
-# it here. TLS/DNS/cert wiring is your responsibility (annotations depend on your
-# ingress controller: AWS ALB, nginx, etc.). Example:
-#
-# ingress:
-#   enabled: true
-#   className: alb            # or "nginx", etc.
-#   annotations:
-#     alb.ingress.kubernetes.io/scheme: internet-facing
-#     alb.ingress.kubernetes.io/target-type: ip
-#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
-#     alb.ingress.kubernetes.io/certificate-arn: <your-acm-cert-arn>
-#   hosts:
-#     - host: litellm.example.com
-#       paths:
-#         - path: /
-#           pathType: Prefix
-#   tls: []                   # or your TLS secret refs for non-ACM setups
-
-resources: {}
+  general_settings:
+    master_key: os.environ/LITELLM_MASTER_KEY
