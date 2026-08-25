@@ -72,6 +72,9 @@ inline PAT.
 */}}
 {{- define "yoloscribe-backend.ghcrSecretName" -}}
 {{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-backend.fullname" .)) -}}
+{{- end }}
+
+{{/*
 The IngressClass this release references. Defaults to the release fullname, so
 a chart installed on its own owns a class named after itself.
 */}}
