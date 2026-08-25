@@ -22,3 +22,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "yoloscribe-messaging-bot.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Application secret. External Secrets manages it in a real deployment; the chart
+renders one only when the values are passed inline.
+*/}}
+{{- define "yoloscribe-messaging-bot.secretName" -}}
+{{- .Values.existingSecret | default (include "yoloscribe-messaging-bot.fullname" .) -}}
+{{- end }}
+
+{{- define "yoloscribe-messaging-bot.ghcrSecretName" -}}
+{{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-messaging-bot.fullname" .)) -}}
+{{- end }}

@@ -1,0 +1,78 @@
+# ExternalSecrets that sync YoloScribe's deployment secrets out of AWS Secrets
+# Manager, so no secret value is ever passed on a `helm --set` command line.
+#
+# Install after the External Secrets Operator, and before any YoloScribe chart:
+# a `secretKeyRef` is a hard requirement, so a pod whose Secret has not synced
+# yet fails CreateContainerConfigError rather than waiting.
+
+# ── SecretStore ───────────────────────────────────────────────────────────────
+# The store is cluster scaffolding shared with YoloBrain, so exactly one release
+# creates it and the others reference it by name — the same ownership rule as
+# the shared IngressClass. Helm refuses to adopt another release's object, so a
+# second `create: true` on this name fails on install and on every upgrade after.
+#
+# YoloBrain's external-secrets chart owns it today. Leave create: false unless
+# you are deploying YoloScribe standalone.
+secretStore:
+  create: false
+  name: yolo-aws
+  kind: SecretStore
+  # Only used when create is true. ClusterSecretStore omits the namespace.
+  region: ""
+  serviceAccountName: ""
+
+# ── Where the secrets come from ───────────────────────────────────────────────
+# NOT `yoloscribe/` — that prefix is the runtime per-user namespace, holding
+# every user's OAuth tokens and LiteLLM virtual keys under
+# yoloscribe/{user-uuid}/. Deployment secrets live under their own prefix so the
+# operator's IAM role can be granted exactly that and nothing else. See
+# infra/iam/yoloscribe-eso-policy.json.
+secretsPrefix: "yoloscribe/deploy"
+
+# How often ESO re-reads Secrets Manager. Changing a value in Secrets Manager
+# does NOT restart pods — roll the deployment, or wait for the next release.
+refreshInterval: "1h"
+
+# ── What to sync ──────────────────────────────────────────────────────────────
+# Each entry becomes one ExternalSecret pulling every key of one Secrets Manager
+# JSON object into one Kubernetes Secret. Keys are copied verbatim, so the JSON
+# object's keys must match what the consuming chart expects — e.g. the backend
+# reads `anthropic-api-key`, per its existingSecretKey value.
+externalSecrets:
+  backend:
+    enabled: true
+    remoteKey: backend            # SM: {secretsPrefix}/backend
+    targetSecret: yoloscribe-backend
+  backendOtel:
+    enabled: true
+    remoteKey: otel
+    targetSecret: yoloscribe-backend-otel
+  agentRunner:
+    enabled: true
+    remoteKey: agent-runner
+    targetSecret: yoloscribe-agent-runner
+  agentRunnerOtel:
+    enabled: true
+    remoteKey: otel
+    targetSecret: yoloscribe-agent-runner-otel
+  # Optional component: leave disabled unless the messaging bot is deployed. An
+  # ExternalSecret whose Secrets Manager object does not exist reports
+  # SecretSyncedError forever rather than failing quietly.
+  messagingBot:
+    enabled: false
+    remoteKey: messaging-bot
+    targetSecret: yoloscribe-messaging-bot
+
+# ── Image pull secrets ────────────────────────────────────────────────────────
+# GHCR credentials need a kubernetes.io/dockerconfigjson Secret rather than a
+# plain key copy, so these are templated from a Secrets Manager object holding
+# `username` and `pat`. One object, several target Secrets, because each chart
+# references a pull secret named after itself.
+imagePullSecrets:
+  enabled: true
+  remoteKey: ghcr                 # SM: {secretsPrefix}/ghcr — {"username","pat"}
+  registry: ghcr.io
+  targets:
+    - yoloscribe-backend-ghcr
+    - yoloscribe-agent-runner-ghcr
+    # - yoloscribe-messaging-bot-ghcr   # uncomment with externalSecrets.messagingBot

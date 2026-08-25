@@ -59,6 +59,22 @@ Prefers existingSecret; falls back to the release-managed secret.
 {{- end }}
 
 {{/*
+Secret holding the OTLP headers. External Secrets manages it in a real
+deployment; the chart only renders one when the value is passed inline.
+*/}}
+{{- define "yoloscribe-backend.otelSecretName" -}}
+{{- .Values.otel.existingSecret | default (printf "%s-otel" (include "yoloscribe-backend.fullname" .)) -}}
+{{- end }}
+
+{{/*
+Registry pull secret. Same split: ESO-managed by name, or rendered from an
+inline PAT.
+*/}}
+{{- define "yoloscribe-backend.ghcrSecretName" -}}
+{{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-backend.fullname" .)) -}}
+{{- end }}
+
+{{/*
 The IngressClass this release references. Defaults to the release fullname, so
 a chart installed on its own owns a class named after itself.
 */}}

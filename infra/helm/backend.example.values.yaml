@@ -67,3 +67,14 @@ config:
   # Hide inbound/self MCP servers from the Tools panel (comma-separated names) —
   # e.g. the "yoloscribe" server that fronts YoloScribe's own MCP for external clients.
   toolsHiddenMcpServers: "yoloscribe"
+
+# ── YoloBrain signal delivery (optional) ─────────────────────────────────────
+# Forwards knowledge-management signals to a YoloBrain deployment. Plain config,
+# not a secret. Setting apiUrl is what wires YOLOBRAIN_INTERNAL_SECRET in from
+# the backend's Secret, so leaving it empty disables delivery silently rather
+# than failing — which is the intended behaviour when you have no YoloBrain.
+#
+# Must be the IN-CLUSTER service address. /internal/* is blocked at the load
+# balancer, so a public hostname returns 403 on every request.
+yolobrain:
+  apiUrl: ""   # e.g. http://yolobrain-api.<namespace>.svc.cluster.local:8080

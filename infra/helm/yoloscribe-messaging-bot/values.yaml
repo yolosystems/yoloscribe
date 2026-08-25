@@ -8,6 +8,8 @@ image:
 ghcr:
   username: ""
   pat: ""               # pass via --set; never commit a real value
+  # dockerconfigjson Secret synced by yoloscribe-external-secrets.
+  existingSecret: ""
 
 # ── Application config ────────────────────────────────────────────────────────
 config:
@@ -46,3 +48,9 @@ resources:
   limits:
     cpu: 250m
     memory: 256Mi
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Name Secrets that already exist — normally synced from AWS Secrets Manager by
+# the yoloscribe-external-secrets release. When set, the chart renders none of
+# its own and the inline values below are unused.
+existingSecret: ""

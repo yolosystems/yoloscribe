@@ -1,0 +1,5 @@
+apiVersion: v2
+name: yoloscribe-external-secrets
+description: ExternalSecrets that sync YoloScribe's deployment secrets from AWS Secrets Manager
+type: application
+version: 0.1.0
