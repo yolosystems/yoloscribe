@@ -39,10 +39,12 @@ Each is a JSON object; every key is copied verbatim into the target Kubernetes
 Secret, so the key names must match what the consuming chart reads.
 
 **A key the deployment reads but the object omits is a hard failure**, not a
-default: the pod stops at `CreateContainerConfigError`. Which keys the backend
-reads depends on how it is configured, so the parenthetical conditions below are
-load-bearing — an OIDC deployment must *not* carry `supabase-service-role-key`,
-and a deployment with no messaging bot must not carry `messaging-bot-secret`.
+default: the pod stops at `CreateContainerConfigError`. The asymmetry matters —
+an *extra* key is harmless, since ESO copies it into the Secret and nothing
+reads it, but a missing one stops the pod. So the parenthetical conditions below
+describe when a key becomes *required*, not when it is permitted. Under
+`authProvider: oidc`, for instance, `supabase-service-role-key` is unused rather
+than forbidden; carrying it costs nothing and saves a step if you flip back.
 
 | Secrets Manager key | Kubernetes Secret | Keys |
 |---|---|---|
