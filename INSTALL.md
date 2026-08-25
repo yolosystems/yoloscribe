@@ -178,10 +178,14 @@ YoloScribe assumes a few standard EKS cluster add-ons are already installed. The
 |---|---|
 | [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) | Provisions the ALB for each `Ingress` (backend, and the LiteLLM proxy). Required for the `className: alb` ingresses, and for the `wafv2-acl-arn` annotation if you front them with a WAF (see `infra/waf/README.md` for what must be blocked). |
 | [ExternalDNS](https://kubernetes-sigs.github.io/external-dns/) | Creates the Route 53 records for ingress hostnames. EKS gives you no DNS automation out of the box. |
-| [EBS CSI driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) | Dynamic `PersistentVolume` provisioning for any stateful dependency you self-host in-cluster (e.g. Postgres, Phoenix). |
+| [EBS CSI driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) | Dynamic `PersistentVolume` provisioning for any stateful dependency you self-host in-cluster (e.g. Postgres, Phoenix). Auto Mode ships its own (`ebs.csi.eks.amazonaws.com`) and does not need this addon. |
+| A gp3 `StorageClass` | Nothing YoloScribe runs is stateful, but its in-cluster dependencies are. **Check whether one is marked default** — a PVC that omits `storageClassName` on a cluster with no default stays `Pending` indefinitely, and nothing is reported on the pod. |
+| An external **Postgres** (RDS or equivalent) | Required by LiteLLM and Phoenix. Both vendor charts default to deploying their *own* Postgres; both must be configured against an external one instead — see the storage note in `phoenix.example.values.yaml`. Neither product's own data lives there; YoloScribe's own state is S3 and DynamoDB. |
 | [External Secrets Operator (ESO)](https://external-secrets.io/) | Syncs AWS Secrets Manager → Kubernetes `Secret`s. Point a chart's `existingSecret` value at an ESO-materialized secret to keep plaintext out of Helm `--set` / release values (recommended over injecting secrets at install time). |
 
-> **EKS Auto Mode note:** Auto Mode ships its own load-balancing and requires `IngressClass` + `IngressClassParams` rather than the legacy ALB controller annotations, and still has no built-in Route 53 integration — install ExternalDNS separately.
+> **On EKS Auto Mode, do not install the AWS Load Balancer Controller.** Auto Mode provides its own (`eks.amazonaws.com/alb`) and is driven by `IngressClass` + `IngressClassParams` instead of the legacy `alb.ingress.kubernetes.io/*` annotations, which it ignores. Set `ingress.controllerType: eks-auto-mode` and configure the class under `ingressClass:`. Auto Mode still has no Route 53 integration, so ExternalDNS is installed separately either way.
+
+> **Sharing one ALB across services** is done with `ingressClass.group` — every service naming the same group lands on the same load balancer, whether or not they share an `IngressClass`. If you do point several releases at one class, exactly one may set `ingressClass.create: true`: Helm refuses to adopt a resource another release created, so a second creator fails on install and on every upgrade after. Give that release `keepOnUninstall: true` so removing it does not delete the class out from under the others.
 
 #### Secrets Manager
 
