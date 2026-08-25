@@ -63,7 +63,7 @@ spec:
             {{- if eq (.Values.config.authProvider | default "supabase") "supabase" }}
             - name: SUPABASE_URL
               value: {{ .Values.config.supabaseUrl | quote }}
-            {{- if .Values.supabaseServiceRoleKey }}
+            {{- if or .Values.supabaseServiceRoleKey (and .Values.existingSecret (eq .Values.config.authProvider "supabase")) }}
             - name: SUPABASE_SERVICE_ROLE_KEY
               valueFrom:
                 secretKeyRef:

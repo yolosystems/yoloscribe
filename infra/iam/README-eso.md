@@ -38,9 +38,15 @@ which nothing at runtime reads or writes.
 Each is a JSON object; every key is copied verbatim into the target Kubernetes
 Secret, so the key names must match what the consuming chart reads.
 
+**A key the deployment reads but the object omits is a hard failure**, not a
+default: the pod stops at `CreateContainerConfigError`. Which keys the backend
+reads depends on how it is configured, so the parenthetical conditions below are
+load-bearing — an OIDC deployment must *not* carry `supabase-service-role-key`,
+and a deployment with no messaging bot must not carry `messaging-bot-secret`.
+
 | Secrets Manager key | Kubernetes Secret | Keys |
 |---|---|---|
-| `yoloscribe/deploy/backend` | `yoloscribe-backend` | `anthropic-api-key`, `litellm-api-key`, `supabase-service-role-key`, `messaging-bot-secret`, `yolobrain-internal-secret` |
+| `yoloscribe/deploy/backend` | `yoloscribe-backend` | `anthropic-api-key` (always), `supabase-service-role-key` (when `authProvider: supabase`), `litellm-api-key` (when `config.litellmBaseUrl` set), `messaging-bot-secret` (when `messagingBotEnabled`), `yolobrain-internal-secret` (when `yolobrain.apiUrl` set) |
 | `yoloscribe/deploy/agent-runner` | `yoloscribe-agent-runner` | `anthropic-api-key`, `litellm-api-key` |
 | `yoloscribe/deploy/otel` | `yoloscribe-backend-otel`, `yoloscribe-agent-runner-otel` | `otlp-headers` |
 | `yoloscribe/deploy/ghcr` | `yoloscribe-backend-ghcr`, `yoloscribe-agent-runner-ghcr` | `username`, `pat` |
