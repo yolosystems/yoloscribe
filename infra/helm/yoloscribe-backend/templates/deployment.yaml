@@ -48,8 +48,6 @@ spec:
               value: {{ .Values.config.s3VectorsBucket | quote }}
             - name: S3_VECTORS_INDEX_NAME
               value: {{ .Values.config.s3VectorsIndexName | quote }}
-            - name: BEDROCK_EMBEDDING_MODEL
-              value: {{ .Values.config.bedrockEmbeddingModel | quote }}
             - name: EKS_OIDC_PROVIDER
               value: {{ .Values.config.eksOidcProvider | quote }}
             - name: AWS_ACCOUNT_ID

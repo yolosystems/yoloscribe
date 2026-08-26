@@ -18,7 +18,6 @@
 #   S3_BUCKET=my-yoloscribe-bucket \
 #   S3_VECTORS_BUCKET=my-yoloscribe-vectors \
 #   S3_VECTORS_INDEX_NAME=yoloscribe \
-#   BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0 \
 #   bash create_indexer_role.sh
 
 set -euo pipefail
@@ -42,7 +41,6 @@ fi
 : "${S3_BUCKET:?S3_BUCKET must be set}"
 : "${S3_VECTORS_BUCKET:?S3_VECTORS_BUCKET must be set}"
 : "${S3_VECTORS_INDEX_NAME:=${S3_VECTORS_INDEX_NAME:-yoloscribe}}"
-: "${BEDROCK_EMBEDDING_MODEL:=${BEDROCK_EMBEDDING_MODEL:-amazon.titan-embed-text-v2:0}}"
 
 ROLE_NAME="yoloscribe-indexer"
 SA_NAME="yoloscribe-indexer"
@@ -67,7 +65,6 @@ POLICY_DOCUMENT=$(sed \
   -e "s|__SQS_INDEXING_QUEUE_ARN__|${SQS_QUEUE_ARN}|g" \
   -e "s|__S3_BUCKET__|${S3_BUCKET}|g" \
   -e "s|__AWS_REGION__|${AWS_REGION}|g" \
-  -e "s|__BEDROCK_EMBEDDING_MODEL__|${BEDROCK_EMBEDDING_MODEL}|g" \
   -e "s|__S3_VECTORS_BUCKET__|${S3_VECTORS_BUCKET}|g" \
   -e "s|__S3_VECTORS_INDEX_NAME__|${S3_VECTORS_INDEX_NAME}|g" \
   -e "s|__AWS_ACCOUNT_ID__|${AWS_ACCOUNT_ID}|g" \

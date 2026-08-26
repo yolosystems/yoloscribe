@@ -114,7 +114,9 @@ The bucket does not need to be public. The backend accesses it via IAM role; the
 
 #### S3 Vectors — semantic search
 
-Create an **S3 Vectors bucket** and an index within it (1024 dimensions, cosine similarity, for use with `amazon.titan-embed-text-v2`). Set as `S3_VECTORS_BUCKET` and `S3_VECTORS_INDEX_NAME`.
+Create an **S3 Vectors bucket** and an index within it: **1024 dimensions, `float32`, cosine similarity**. Set as `S3_VECTORS_BUCKET` and `S3_VECTORS_INDEX_NAME`.
+
+Those numbers are not adjustable. The embedding model is fixed at `amazon.titan-embed-text-v2:0`, whose default output width is 1024, and an S3 Vectors index fixes its dimension and metric at creation. An index built with different values cannot accept the vectors YoloScribe produces, and nothing detects the mismatch until the first indexing job fails.
 
 This is only required for semantic search. If you skip it, keyword search still works.
 
@@ -131,7 +133,7 @@ Create two **standard SQS queues**:
 
 Enable model access in the Bedrock console for your region:
 
-- **`amazon.titan-embed-text-v2:0`** — required for semantic search
+- **`amazon.titan-embed-text-v2:0`** — required for semantic search, and not substitutable (see above)
 - **`anthropic.claude-*`** — only needed if you want to route agents through Bedrock instead of the Anthropic API directly (set `YOLOSCRIBE_MODEL=bedrock-sonnet` etc.)
 
 `us-west-2` has the broadest model availability.
@@ -149,7 +151,7 @@ Create three IAM roles with IRSA trust policies (trust the EKS OIDC provider for
 **Bedrock: inference vs. embeddings.** These two paths have different requirements, and conflating them is the usual source of IAM surprises here.
 
 - **Inference** (all agent and chat model calls) goes through the **LiteLLM proxy** since YOL-512. Only the LiteLLM pod's role needs model-invocation permissions — see `infra/helm/litellm.<env>.values.yaml`. The YoloScribe roles do **not** need a Bedrock inference policy attached, including `AmazonBedrockMantleInferenceAccess`.
-- **Embeddings** deliberately bypass LiteLLM. The backend, agent-runner, and indexer each call `bedrock-runtime:InvokeModel` directly against `amazon.titan-embed-text-v2:0` for semantic search. These roles need a `bedrock:InvokeModel` grant scoped to the embedding model — see the `BedrockEmbed` statement in each policy file.
+- **Embeddings** deliberately bypass LiteLLM. The backend, agent-runner, and indexer each call `bedrock-runtime:InvokeModel` directly against `amazon.titan-embed-text-v2:0` for semantic search — the model is a compile-time constant (`yoloscribe_io.embedding`), not a setting, which is precisely why routing it through a proxy would buy nothing. Each role's `BedrockEmbed` statement grants `bedrock:InvokeModel` on that one model and nothing else.
 
 > **If you are removing a previously attached Bedrock managed policy from these roles, check the inline policy first.** A role whose inline policy has no `BedrockEmbed` statement may be relying on the broader managed policy for its embedding calls, and detaching it will cause semantic search to start returning 403s with no other symptom.
 

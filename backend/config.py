@@ -55,7 +55,10 @@ FRONTEND_URL = (
     if CLOUDFRONT_DOMAIN
     else os.environ.get("FRONTEND_URL", "http://localhost:5173")
 )
-BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+
+# Semantic search engine -- fixed, not configurable. See
+# yoloscribe_io.embedding for why the model cannot be a setting.
+from yoloscribe_io.embedding import MODEL_ID as BEDROCK_EMBEDDING_MODEL  # noqa: E402
 
 # ── Local dev mode ─────────────────────────────────────────────────────────────
 # Set LOCAL_MODE=true to bypass Supabase auth, IAM/K8s provisioning, and SM.

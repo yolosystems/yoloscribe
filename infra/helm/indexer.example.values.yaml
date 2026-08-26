@@ -14,7 +14,6 @@ config:
   s3VectorsBucket: "<s3-vectors-bucket>"
   s3VectorsIndexName: "<vectors-index-name>"
   awsRegion: "<region>"
-  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
   k8sNamespace: "<k8s-namespace>"
   indexerServiceAccount: "yoloscribe-indexer"
   supabaseUrl: "https://<supabase-project>.supabase.co"

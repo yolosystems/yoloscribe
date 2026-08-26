@@ -65,7 +65,7 @@
       "Sid": "BedrockEmbed",
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:*::foundation-model/*"
+      "Resource": "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0"
     },
     {
       "Sid": "S3VectorsQuery",

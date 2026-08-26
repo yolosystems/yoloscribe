@@ -7,7 +7,6 @@ Environment variables:
     K8S_NAMESPACE               Kubernetes namespace for Jobs
     S3_VECTORS_BUCKET           S3 Vectors bucket name
     S3_VECTORS_INDEX_NAME       S3 Vectors index name (default: yoloscribe)
-    BEDROCK_EMBEDDING_MODEL     Bedrock embedding model ID
     AWS_PROFILE                 (optional) named AWS profile for local development
     LOCAL_RUNNER                Set to "true" to run index-runner in subprocess
 """
@@ -34,7 +33,6 @@ K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "yoloscribe")
 INDEXER_SERVICE_ACCOUNT = os.environ.get("INDEXER_SERVICE_ACCOUNT", "yoloscribe-indexer")
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
-BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 LOCAL_RUNNER = os.environ.get("LOCAL_RUNNER", "").lower() in ("1", "true", "yes")
 
@@ -60,7 +58,6 @@ def _run_local(payload: dict) -> None:
             "S3_VECTORS_BUCKET": S3_VECTORS_BUCKET,
             "S3_VECTORS_INDEX_NAME": S3_VECTORS_INDEX_NAME,
             "AWS_REGION": AWS_REGION,
-            "BEDROCK_EMBEDDING_MODEL": BEDROCK_EMBEDDING_MODEL,
         }
     )
     if AWS_PROFILE:
@@ -86,7 +83,6 @@ def _build_container(payload: dict):  # type: ignore[return]
         k8s_client.V1EnvVar(name="S3_VECTORS_BUCKET", value=S3_VECTORS_BUCKET),
         k8s_client.V1EnvVar(name="S3_VECTORS_INDEX_NAME", value=S3_VECTORS_INDEX_NAME),
         k8s_client.V1EnvVar(name="AWS_REGION", value=AWS_REGION),
-        k8s_client.V1EnvVar(name="BEDROCK_EMBEDDING_MODEL", value=BEDROCK_EMBEDDING_MODEL),
     ]
     return k8s_client.V1Container(
         name="index-runner",

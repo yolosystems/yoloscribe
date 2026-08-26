@@ -7,7 +7,6 @@ Environment variables:
     S3_VECTORS_BUCKET           S3 Vectors bucket name
     S3_VECTORS_INDEX_NAME       S3 Vectors index name
     AWS_REGION                  AWS region
-    BEDROCK_EMBEDDING_MODEL     Bedrock embedding model ID
     AWS_PROFILE                 (optional) named AWS profile for local development
 """
 
@@ -32,7 +31,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 S3_VECTORS_BUCKET = os.environ.get("S3_VECTORS_BUCKET", "")
 S3_VECTORS_INDEX_NAME = os.environ.get("S3_VECTORS_INDEX_NAME", "yoloscribe")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+# The semantic indexing engine is fixed: Titan v2 embeddings into S3
+# Vectors. Not configurable, because an S3 Vectors index fixes its
+# dimension at creation -- a different model produces vectors the index
+# cannot accept, and the failure only shows up on the first write.
+#
+# Duplicated from yoloscribe_io.embedding rather than imported: the
+# indexer is a separate package that does not depend on the shared lib.
+# Same arrangement as agent_md.py / parse.py -- keep them in sync.
+BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "")
 
 _MAX_BACKOFF_ATTEMPTS = 5

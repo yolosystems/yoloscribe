@@ -21,7 +21,6 @@ config:
   s3VectorsBucket: ""
   s3VectorsIndexName: "yoloscribe"
   awsRegion: "us-east-1"
-  bedrockEmbeddingModel: "amazon.titan-embed-text-v2:0"
   k8sNamespace: "yoloscribe"
   indexerImage: ""      # defaults to image.repository:image.tag if empty
   indexerServiceAccount: "yoloscribe-indexer"  # SA used by spawned indexer Jobs
