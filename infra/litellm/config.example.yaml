@@ -56,7 +56,7 @@ model_list:
   # Primary form — LiteLLM's Bedrock provider does SigV4 with the proxy's AWS
   # creds against a custom Bedrock runtime endpoint, dropping the
   # aws_bedrock_token_generator dependency entirely (the ideal outcome):
-  - model_name: glm
+  - model_name: glm-5
     litellm_params:
       model: bedrock/zai.glm-5
       aws_region_name: os.environ/AWS_REGION
@@ -65,11 +65,27 @@ model_list:
   # native Bedrock Converse/Invoke API): treat it as an OpenAI endpoint. Note the
   # api_key must be a valid Mantle bearer — a static key will expire, so this form
   # only works if LiteLLM can mint/refresh it (verify):
-  #   - model_name: glm
+  #   - model_name: glm-5
   #     litellm_params:
   #       model: openai/zai.glm-5
   #       api_base: https://bedrock-mantle.us-west-2.api.aws/v1
   #       api_key: os.environ/MANTLE_API_KEY
+
+# ── Model keys must match the deployed proxy ─────────────────────────────────
+# The KEY NAMES here are the contract: YOLOSCRIBE_*_MODEL and an agent's `model:`
+# frontmatter resolve against them, so a name that exists in one environment and
+# not the other breaks that agent when it moves. The litellm_params underneath
+# may legitimately differ — this file reaches Mantle through the Bedrock runtime
+# endpoint, while the deployed proxy uses its OpenAI-compatible /v1 shape.
+#
+# Deployed (yoloscribe-ops/helm/litellm.dev.us-west-2.values.yaml) also serves
+# `glm-flash` and `text-embedding-3-small`, which are absent here: local dev has
+# no Bedrock embedding path, and one GLM tier is enough to exercise the routing.
+# Everything an agent is likely to pin — haiku, sonnet, opus, bedrock-*, glm-5 —
+# exists in both.
+#
+# NOTE: bare `glm` was renamed to `glm-5` to match the deployed proxy, which has
+# never served a key called `glm`.
 
 # ── Third-party tool MCP servers (YOL-505) — OPTIONAL, admin-managed ──────────
 # MCP tool servers are optional and NOT shipped as active config. Configure them
