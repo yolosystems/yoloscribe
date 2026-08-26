@@ -33,6 +33,7 @@ PREFIX="${SECRETS_PREFIX:-yoloscribe/deploy}"
 SOURCED_VARS=(ANTHROPIC_API_KEY SUPABASE_SERVICE_ROLE_KEY LITELLM_MASTER_KEY
               MESSAGING_BOT_SECRET YOLOBRAIN_INTERNAL_SECRET DISCORD_BOT_TOKEN
               OTEL_EXPORTER_OTLP_HEADERS GHCR_USERNAME GHCR_PAT
+              PHOENIX_SECRET PHOENIX_PG_PASSWORD
               INTERNAL_MINT_SECRET)
 _pre=()
 for _v in "${SOURCED_VARS[@]}"; do _pre+=("${!_v:-}"); done
@@ -102,6 +103,13 @@ add_object "$PREFIX/messaging-bot" \
 
 add_object "$PREFIX/otel" \
   otlp-headers=OTEL_EXPORTER_OTLP_HEADERS
+
+# Phoenix's vendor chart reads exactly these two keys from `phoenix-secret`.
+# PHOENIX_ADMIN_PASSWORD is deliberately absent: with auth.createSecret false the
+# chart renders it nowhere, so storing it would be storing a value nothing reads.
+add_object "$PREFIX/phoenix" \
+  PHOENIX_SECRET=PHOENIX_SECRET \
+  PHOENIX_POSTGRES_PASSWORD=PHOENIX_PG_PASSWORD
 
 add_object "$PREFIX/ghcr" \
   username=GHCR_USERNAME \

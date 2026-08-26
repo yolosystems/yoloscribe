@@ -20,15 +20,10 @@ CHART="$PHOENIX_CHART"
 # shellcheck source=infra/helm/_common.sh
 source "$SCRIPT_DIR/_common.sh"
 
-require_env PHOENIX_SECRET PHOENIX_PG_PASSWORD PHOENIX_ADMIN_PASSWORD
-
-# The Postgres password is set in two places that must agree: the connection
-# settings Phoenix dials out with, and the Secret it reads at runtime. The chart
-# does not derive one from the other, so a mismatch surfaces as an auth failure
-# against RDS rather than as a config error.
-helm_upgrade_install \
-  --set database.postgres.password="$PHOENIX_PG_PASSWORD" \
-  --set auth.secret[0].value="$PHOENIX_SECRET" \
-  --set auth.secret[1].value="$PHOENIX_PG_PASSWORD" \
-  --set auth.defaultAdminPassword="$PHOENIX_ADMIN_PASSWORD" \
-  ${PHOENIX_CHART_VERSION:+--version "$PHOENIX_CHART_VERSION"}
+# No secrets pass through this script. The vendor chart reads PHOENIX_SECRET and
+# PHOENIX_POSTGRES_PASSWORD from the `phoenix-secret` Secret, which it does not
+# create (auth.createSecret: false) — External Secrets syncs it instead.
+#
+# auth.defaultAdminPassword used to be passed here too. With createSecret false
+# it renders nowhere, so it was a no-op.
+helm_upgrade_install ${PHOENIX_CHART_VERSION:+--version "$PHOENIX_CHART_VERSION"}
