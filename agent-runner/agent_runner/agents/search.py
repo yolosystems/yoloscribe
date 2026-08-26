@@ -12,10 +12,11 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from yoloscribe_io.embedding import MODEL_ID as _EMBEDDING_MODEL
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_TOP_K = 20
-_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 
 
 @dataclass

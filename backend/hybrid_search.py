@@ -14,11 +14,11 @@ from typing import Any
 import boto3
 
 from fts_cache import fts_query, get_db_path
+from yoloscribe_io.embedding import MODEL_ID as BEDROCK_EMBEDDING_MODEL
 
 log = logging.getLogger(__name__)
 
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-BEDROCK_EMBEDDING_MODEL = os.environ.get("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 _RRF_K = 60

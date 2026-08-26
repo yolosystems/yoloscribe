@@ -353,7 +353,9 @@ Provider / model / credential resolution lives in the **LiteLLM config**, not in
 
 **Policy that stays in YoloScribe:** the per-agent-type defaults (`YOLOSCRIBE_CHAT_MODEL`, `YOLOSCRIBE_WRITER_MODEL`, `YOLOSCRIBE_CREATOR_MODEL`, `YOLOSCRIBE_RUNNER_MODEL` → `YOLOSCRIBE_MODEL` fallback) — which agent prefers which tier — via `resolve_model_key(...)`.
 
-**Embeddings deliberately bypass LiteLLM.** The indexer and the search backend call **Bedrock directly** for embeddings (`amazon.titan-embed-*` → S3 Vectors) — this is intentional, not an oversight. The embedding model is effectively fixed (switching it forces a full re-index), so the provider-flexibility LiteLLM buys has no value here; the tradeoff is that embedding spend isn't metered against a user's virtual key (fine — indexing is background platform work, not user chat). Route it through LiteLLM only if you later want unified spend/observability.
+**Embeddings deliberately bypass LiteLLM.** The indexer and the search backend call **Bedrock directly** for embeddings (`amazon.titan-embed-text-v2:0` → S3 Vectors) — intentional, not an oversight. The model is a **constant, not a setting**: `libs/yoloscribe_io/yoloscribe_io/embedding.py` declares the model id, the 1024 dimension and the cosine metric together, because an S3 Vectors index fixes dimension and metric at creation and cannot be altered afterwards. Since there is no choice to make, the provider flexibility a proxy buys has no value here. The tradeoff is that embedding spend isn't metered against a user's virtual key — fine, indexing is background platform work, not user chat.
+
+The indexer is a separate package and cannot import the shared lib, so `indexer/indexer/index_runner.py` carries its own copy of the constant; the two must stay in sync, same as `agent_md.py` / `parse.py`. Changing the model means recreating the S3 Vectors index and re-embedding every page — it is not a config edit, which is why no env var exposes it.
 
 Deployment: LiteLLM is a separate service (its official `berriai/litellm-helm` chart, or the `litellm` service in `docker-compose.yml` for local dev). See YOL-505 for the full deployment approach.
 
