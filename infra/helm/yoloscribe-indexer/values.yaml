@@ -9,6 +9,8 @@ image:
 ghcr:
   username: ""          # set in environment-specific values file
   pat: ""               # pass via --set; never commit a real value
+  # dockerconfigjson Secret synced by yoloscribe-external-secrets.
+  existingSecret: ""
 
 # ── Service account (IRSA for SQS receive/delete + S3 read/write + Bedrock) ──
 serviceAccount:

@@ -62,6 +62,13 @@ externalSecrets:
     enabled: false
     remoteKey: messaging-bot
     targetSecret: yoloscribe-messaging-bot
+  # Phoenix's vendor chart reads PHOENIX_SECRET and PHOENIX_POSTGRES_PASSWORD
+  # from a Secret it does not create when auth.createSecret is false. Optional:
+  # enable alongside install_phoenix.sh.
+  phoenix:
+    enabled: false
+    remoteKey: phoenix
+    targetSecret: phoenix-secret
 
 # ── Image pull secrets ────────────────────────────────────────────────────────
 # GHCR credentials need a kubernetes.io/dockerconfigjson Secret rather than a
@@ -75,4 +82,5 @@ imagePullSecrets:
   targets:
     - yoloscribe-backend-ghcr
     - yoloscribe-agent-runner-ghcr
+    - yoloscribe-indexer-ghcr
     # - yoloscribe-messaging-bot-ghcr   # uncomment with externalSecrets.messagingBot

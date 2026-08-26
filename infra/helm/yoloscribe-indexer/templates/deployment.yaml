@@ -16,9 +16,9 @@ spec:
         {{- include "yoloscribe-indexer.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "yoloscribe-indexer.serviceAccountName" . }}
-      {{- if .Values.ghcr.pat }}
+      {{- if or .Values.ghcr.pat .Values.ghcr.existingSecret }}
       imagePullSecrets:
-        - name: {{ include "yoloscribe-indexer.fullname" . }}-ghcr
+        - name: {{ include "yoloscribe-indexer.ghcrSecretName" . }}
       {{- end }}
       containers:
         - name: polling-worker

@@ -63,3 +63,7 @@ Effective indexer image (config.indexerImage or image.repository:tag).
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag }}
 {{- end }}
 {{- end }}
+
+{{- define "yoloscribe-indexer.ghcrSecretName" -}}
+{{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-indexer.fullname" .)) -}}
+{{- end }}
