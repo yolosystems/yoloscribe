@@ -8,7 +8,7 @@
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret"
       ],
-      "Resource": "arn:aws:secretsmanager:<region>:<aws-account-id>:secret:yoloscribe/deploy/*"
+      "Resource": "arn:aws:secretsmanager:__AWS_REGION__:__AWS_ACCOUNT_ID__:secret:yoloscribe/__STAGE__/deploy/*"
     }
   ]
 }

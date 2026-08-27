@@ -34,6 +34,8 @@ fi
 
 ROLE_NAME="yoloscribe-agent-runner"
 SA_NAME="yoloscribe-agent-runner"
+: "${STAGE:?STAGE must be set: policy grants are scoped to it}"
+: "${S3_BUCKET:?S3_BUCKET must be set}"
 POLICY_FILE="$(dirname "${BASH_SOURCE[0]}")/yoloscribe-agent-runner-policy.json"
 
 AWS_ARGS=()
@@ -74,11 +76,27 @@ else
     --output json | jq -r '.Role.Arn'
 fi
 
+# The policy file is a template: placeholders keep the grants scoped to this
+# stage's resources rather than every yoloscribe-* in the account, so a dev role
+# cannot reach prod's bucket, tables or queues.
+POLICY_DOCUMENT=$(sed \
+  -e "s|__AWS_REGION__|${AWS_REGION}|g" \
+  -e "s|__AWS_ACCOUNT_ID__|${AWS_ACCOUNT_ID}|g" \
+  -e "s|__STAGE__|${STAGE}|g" \
+  -e "s|__S3_BUCKET__|${S3_BUCKET}|g" \
+  "$POLICY_FILE")
+
+if printf '%s' "$POLICY_DOCUMENT" | grep -q '__[A-Z_]*__'; then
+  echo "Error: unsubstituted placeholders remain in the policy:" >&2
+  printf '%s' "$POLICY_DOCUMENT" | grep -o '__[A-Z_]*__' | sort -u | sed 's/^/  /' >&2
+  exit 1
+fi
+
 echo "Applying inline policy (idempotent)..."
 aws "${AWS_ARGS[@]}" iam put-role-policy \
   --role-name "$ROLE_NAME" \
   --policy-name "yoloscribe-agent-runner-access" \
-  --policy-document "file://$POLICY_FILE"
+  --policy-document "$POLICY_DOCUMENT"
 
 # No Bedrock managed policy is attached: all model inference routes through the
 # LiteLLM proxy (YOL-512), whose own IRSA role carries the inference permissions.
