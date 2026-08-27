@@ -1,4 +1,9 @@
 # ── Image ────────────────────────────────────────────────────────────────────
+# Deployment stage (dev, staging, prod). Required.
+# Every AWS resource name is derived from it, so two environments in one
+# account never share a bucket, queue or table.
+stage: ""
+
 image:
   repository: ""
   tag: latest
@@ -167,10 +172,17 @@ cognito:
 
 # ── DynamoDB tables (authProvider=cognito or oidc) ────────────────────────────
 # The user→site, API-token, and messaging-config stores for any non-Supabase IdP.
+# ── DynamoDB ─────────────────────────────────────────────────────────────────
+# Table names are derived from `stage` above: yoloscribe-{stage}-user-site, and
+# so on. Set one of these only to point at a table that does not follow the
+# convention -- and note the agent-runner must be given the identical
+# agentLocksTable, since the backend writes it into every user's IAM policy
+# while the runner is what actually takes the lock.
 dynamodb:
-  userSiteTable: "yoloscribe-user-site"
-  apiTokensTable: "yoloscribe-api-tokens"
-  messagingConfigsTable: "yoloscribe-messaging-configs"
+  userSiteTable: ""
+  apiTokensTable: ""
+  messagingConfigsTable: ""
+  agentLocksTable: ""
 
 # ── OIDC client secret ───────────────────────────────────────────────────────
 # Intentionally unused. POLICY: frontend login is public-client PKCE only —

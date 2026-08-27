@@ -199,17 +199,22 @@ Required when `AUTH_PROVIDER` is `oidc` or `cognito` — these paths keep user d
 
 | Table | Partition key | Purpose |
 |---|---|---|
-| `yoloscribe-user-site` | `user_id` (S) | Maps user UUID → site name |
-| `yoloscribe-api-tokens` | `token_id` (S) | Stores hashed API tokens |
-| `yoloscribe-messaging-configs` | `id` (S) | Messaging bot channel bindings |
+| `yoloscribe-{stage}-user-site` | `user_id` (S) | Maps user UUID → site name |
+| `yoloscribe-{stage}-api-tokens` | `token_id` (S) | Stores hashed API tokens |
+| `yoloscribe-{stage}-messaging-configs` | `id` (S) | Messaging bot channel bindings |
+| `yoloscribe-{stage}-agent-locks` | `user_id` (S), `page_path` (S) | Per-page agent locks; TTL on `expires_at` |
 
 GSIs: `yoloscribe-api-tokens` needs `user_id-index` (PK: `user_id`, SK: `created_at`) and `token_hash-index` (PK: `token_hash`); `yoloscribe-messaging-configs` needs `api_token_id-index` (PK: `api_token_id`).
 
-`infra/scripts/setup_dynamodb.sh` creates all three with the right keys and indexes. Set `DYNAMODB_USER_SITE_TABLE`, `DYNAMODB_API_TOKENS_TABLE`, and `DYNAMODB_MESSAGING_CONFIGS_TABLE` if you use non-default names.
+`yolo install` creates all four with the right keys, indexes and TTL. Names are derived from the deployment stage, so two environments in one AWS account never share a table — sharing these would mean sharing their users, API tokens and messaging bindings.
+
+The charts derive the same names from their `stage` value, so nothing needs setting by hand. `DYNAMODB_USER_SITE_TABLE`, `DYNAMODB_API_TOKENS_TABLE`, `DYNAMODB_MESSAGING_CONFIGS_TABLE` and `DDB_AGENT_LOCKS_TABLE` still override individually if a table does not follow the convention.
+
+**`DDB_AGENT_LOCKS_TABLE` must match between the backend and the agent-runner.** The runner takes the lock; the backend writes that table's ARN into every user's IAM policy. If they disagree, provisioning succeeds and locking then fails as `AccessDenied` at run time, far from the cause. Both charts derive it from `stage` for that reason.
 
 The backend's IAM role needs DynamoDB access to these tables — see the `DynamoDBUserStores` statement in `infra/iam/yoloscribe-backend-policy.json`.
 
-Also note `yoloscribe-messaging-configs` needs a second GSI, `platform_channel-index` (PK: `platform_channel`), used to resolve an inbound chat message to its owning site. `platform_channel` is a derived `"{platform}:{channel_id}"` attribute, because DynamoDB cannot index into the nested `connection` map. The setup script adds it to existing tables in place as well as creating it on new ones.
+Also note `yoloscribe-messaging-configs` needs a second GSI, `platform_channel-index` (PK: `platform_channel`), used to resolve an inbound chat message to its owning site. `platform_channel` is a derived `"{platform}:{channel_id}"` attribute, because DynamoDB cannot index into the nested `connection` map. `yolo install` adds it to existing tables in place as well as creating it on new ones — a GSI is a separate call from table creation, so a run that failed between the two leaves a table that exists and looks fine while missing an index.
 
 #### Migrating an existing install from Supabase to DynamoDB
 

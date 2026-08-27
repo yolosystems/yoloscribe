@@ -18,7 +18,7 @@ Once every deployment has run this, drop the column entirely:
     ALTER TABLE messaging_configs DROP COLUMN encrypted_token;
 
 DynamoDB installs need nothing here — the table was never populated by the old
-bot. `infra/scripts/setup_dynamodb.sh` adds the `platform_channel-index` GSI that
+bot. `yolo install` adds the `platform_channel-index` GSI that
 channel lookup requires.
 
 Usage:
