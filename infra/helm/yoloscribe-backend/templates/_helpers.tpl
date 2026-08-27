@@ -81,3 +81,32 @@ a chart installed on its own owns a class named after itself.
 {{- define "yoloscribe-backend.ingressClassName" -}}
 {{- .Values.ingressClass.name | default (include "yoloscribe-backend.fullname" .) -}}
 {{- end }}
+
+{{/*
+The DynamoDB table this release should use for a given role.
+
+Every AWS resource YoloScribe owns is named yoloscribe-{stage}-..., so that two
+environments in one AWS account never share one. That matters most here: the
+tables hold users, API tokens and messaging bindings, and two stages sharing
+them means two stages sharing their users.
+
+Derived from .Values.stage rather than written out, because this name is a
+contract between things that never see each other -- the installer creates the
+table, this chart points the backend at it, an IAM policy grants its ARN, and
+the agent-runner has to arrive at the identical string for locking to work. Four
+places, one name; computing it four times is how one of them ends up different.
+
+stage is required rather than defaulted. A default would let a missing value
+produce a service that starts cleanly and reads the wrong table, which is the
+failure mode this is meant to remove.
+
+Usage:
+  {{ include "yoloscribe-backend.tableName" (dict "root" . "suffix" "user-site" "override" .Values.dynamodb.userSiteTable) }}
+*/}}
+{{- define "yoloscribe-backend.tableName" -}}
+{{- if .override -}}
+{{- .override -}}
+{{- else -}}
+{{- printf "yoloscribe-%s-%s" (required "stage is required: DynamoDB table names are derived from it, and an unset stage would silently point this release at another environment's tables" .root.Values.stage) .suffix -}}
+{{- end -}}
+{{- end -}}

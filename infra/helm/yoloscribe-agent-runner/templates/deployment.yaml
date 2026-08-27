@@ -32,6 +32,8 @@ spec:
               value: {{ .Values.config.sqsIndexingQueueUrl | quote }}
             - name: AWS_REGION
               value: {{ .Values.config.awsRegion | quote }}
+            - name: DDB_AGENT_LOCKS_TABLE
+              value: {{ include "yoloscribe-agent-runner.agentLocksTable" . | quote }}
             - name: K8S_NAMESPACE
               value: {{ .Values.config.k8sNamespace | quote }}
             - name: AGENT_RUNNER_IMAGE

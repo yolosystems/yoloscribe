@@ -88,12 +88,23 @@ spec:
             {{- if has (.Values.config.authProvider | default "supabase") (list "cognito" "oidc") }}
             {{- /* cognito + oidc share the DynamoDB repositories */}}
             - name: DYNAMODB_USER_SITE_TABLE
-              value: {{ .Values.dynamodb.userSiteTable | quote }}
+              value: {{ include "yoloscribe-backend.tableName" (dict "root" . "suffix" "user-site" "override" .Values.dynamodb.userSiteTable) | quote }}
             - name: DYNAMODB_API_TOKENS_TABLE
-              value: {{ .Values.dynamodb.apiTokensTable | quote }}
+              value: {{ include "yoloscribe-backend.tableName" (dict "root" . "suffix" "api-tokens" "override" .Values.dynamodb.apiTokensTable) | quote }}
             - name: DYNAMODB_MESSAGING_CONFIGS_TABLE
-              value: {{ .Values.dynamodb.messagingConfigsTable | quote }}
+              value: {{ include "yoloscribe-backend.tableName" (dict "root" . "suffix" "messaging-configs" "override" .Values.dynamodb.messagingConfigsTable) | quote }}
             {{- end }}
+            {{- /*
+            Agent locking is not provider-specific: the backend writes this
+            table's ARN into every user's IAM policy regardless of how they
+            signed in, so this sits outside the cognito/oidc block above.
+
+            The runner is what actually takes the lock. If the two disagree on
+            the name, each user gets a policy for a table nobody uses and
+            locking fails as AccessDenied long after provisioning succeeded.
+            */}}
+            - name: DDB_AGENT_LOCKS_TABLE
+              value: {{ include "yoloscribe-backend.tableName" (dict "root" . "suffix" "agent-locks" "override" .Values.dynamodb.agentLocksTable) | quote }}
             {{- if .Values.config.cloudfrontDomain }}
             - name: CLOUDFRONT_DOMAIN
               value: {{ .Values.config.cloudfrontDomain | quote }}

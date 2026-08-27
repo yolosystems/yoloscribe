@@ -84,3 +84,23 @@ inline PAT.
 {{- define "yoloscribe-agent-runner.ghcrSecretName" -}}
 {{- .Values.ghcr.existingSecret | default (printf "%s-ghcr" (include "yoloscribe-agent-runner.fullname" .)) -}}
 {{- end }}
+
+{{/*
+The agent-locks DynamoDB table.
+
+This must resolve to the same string the backend produces. The runner takes the
+lock; the backend writes this table's ARN into each user's IAM policy. If the
+two disagree, provisioning succeeds, the policy grants a table nobody uses, and
+locking fails as AccessDenied at run time -- far from the cause.
+
+They agree today only because both defaulted to the same hardcoded name. That is
+not a guarantee, which is why both charts now derive it from `stage` the same
+way.
+*/}}
+{{- define "yoloscribe-agent-runner.agentLocksTable" -}}
+{{- if .Values.dynamodb.agentLocksTable -}}
+{{- .Values.dynamodb.agentLocksTable -}}
+{{- else -}}
+{{- printf "yoloscribe-%s-agent-locks" (required "stage is required: the agent-locks table name is derived from it, and it must match the backend's or locking fails as AccessDenied" .Values.stage) -}}
+{{- end -}}
+{{- end -}}

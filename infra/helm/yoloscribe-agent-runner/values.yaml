@@ -1,4 +1,15 @@
 # ── Image ────────────────────────────────────────────────────────────────────
+# Deployment stage (dev, staging, prod). Required.
+# AWS resource names are derived from it, so two environments in one
+# account never share one.
+stage: ""
+
+# ── DynamoDB ───────────────────────────────────────────────────────────────
+# Derived from `stage` unless set. Must match the backend release exactly:
+# the runner takes the lock, the backend grants it in each user IAM policy.
+dynamodb:
+  agentLocksTable: ""
+
 image:
   repository: ""
   tag: latest
