@@ -9,7 +9,7 @@
         "sqs:DeleteMessage",
         "sqs:GetQueueAttributes"
       ],
-      "Resource": "arn:aws:sqs:*:*:yoloscribe-*"
+      "Resource": "arn:aws:sqs:__AWS_REGION__:__AWS_ACCOUNT_ID__:yoloscribe-__STAGE__-*"
     },
     {
       "Sid": "S3ReadAgentDefs",
@@ -19,8 +19,8 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::yoloscribe-*",
-        "arn:aws:s3:::yoloscribe-*/*"
+        "arn:aws:s3:::__S3_BUCKET__",
+        "arn:aws:s3:::__S3_BUCKET__/*"
       ]
     },
     {
@@ -28,16 +28,16 @@
       "Effect": "Allow",
       "Action": "s3:PutObject",
       "Resource": [
-        "arn:aws:s3:::yoloscribe-*/*/.agents/*/runs/*",
-        "arn:aws:s3:::yoloscribe-*/*/.user/librarian/*",
-        "arn:aws:s3:::yoloscribe-*/*/.user/notifications.md"
+        "arn:aws:s3:::__S3_BUCKET__/*/.agents/*/runs/*",
+        "arn:aws:s3:::__S3_BUCKET__/*/.user/librarian/*",
+        "arn:aws:s3:::__S3_BUCKET__/*/.user/notifications.md"
       ]
     },
     {
       "Sid": "SMReadUserWebhooks",
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe/*/webhooks*"
+      "Resource": "arn:aws:secretsmanager:__AWS_REGION__:__AWS_ACCOUNT_ID__:secret:yoloscribe/*/webhooks*"
     },
     {
       "Sid": "DynamoDBAgentLocks",
@@ -48,7 +48,7 @@
         "dynamodb:DeleteItem",
         "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:*:*:table/yoloscribe-agent-locks"
+      "Resource": "arn:aws:dynamodb:__AWS_REGION__:__AWS_ACCOUNT_ID__:table/yoloscribe-__STAGE__-agent-locks"
     },
     {
       "Sid": "BedrockEmbed",

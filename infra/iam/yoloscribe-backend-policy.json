@@ -13,8 +13,8 @@
         "s3:ListBucketVersions"
       ],
       "Resource": [
-        "arn:aws:s3:::yoloscribe-*",
-        "arn:aws:s3:::yoloscribe-*/*"
+        "arn:aws:s3:::__S3_BUCKET__",
+        "arn:aws:s3:::__S3_BUCKET__/*"
       ]
     },
     {
@@ -28,8 +28,8 @@
         "dynamodb:Query"
       ],
       "Resource": [
-        "arn:aws:dynamodb:*:*:table/yoloscribe-*",
-        "arn:aws:dynamodb:*:*:table/yoloscribe-*/index/*"
+        "arn:aws:dynamodb:__AWS_REGION__:__AWS_ACCOUNT_ID__:table/yoloscribe-__STAGE__-*",
+        "arn:aws:dynamodb:__AWS_REGION__:__AWS_ACCOUNT_ID__:table/yoloscribe-__STAGE__-*/index/*"
       ]
     },
     {
@@ -42,6 +42,12 @@
         "secretsmanager:DescribeSecret"
       ],
       "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe*"
+    },
+    {
+      "Sid": "DenyDeploymentSecrets",
+      "Effect": "Deny",
+      "Action": "secretsmanager:*",
+      "Resource": "arn:aws:secretsmanager:*:*:secret:yoloscribe/*/deploy/*"
     },
     {
       "Sid": "IAMProvisionUserRoles",
@@ -59,7 +65,7 @@
       "Action": [
         "sqs:SendMessage"
       ],
-      "Resource": "arn:aws:sqs:*:*:yoloscribe-*"
+      "Resource": "arn:aws:sqs:__AWS_REGION__:__AWS_ACCOUNT_ID__:yoloscribe-__STAGE__-*"
     },
     {
       "Sid": "BedrockEmbed",
