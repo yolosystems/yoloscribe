@@ -5,21 +5,35 @@
 # a `secretKeyRef` is a hard requirement, so a pod whose Secret has not synced
 # yet fails CreateContainerConfigError rather than waiting.
 
-# ── SecretStore ───────────────────────────────────────────────────────────────
-# The store is cluster scaffolding shared with YoloBrain, so exactly one release
-# creates it and the others reference it by name — the same ownership rule as
-# the shared IngressClass. Helm refuses to adopt another release's object, so a
-# second `create: true` on this name fails on install and on every upgrade after.
+# Deployment stage (dev, staging, prod). Required.
+# The Secrets Manager prefix is derived from it, so two environments never read
+# each other's deployment credentials.
+stage: ""
+
+# ── Identity ─────────────────────────────────────────────────────────────────
+# External Secrets holds no AWS credentials of its own: each SecretStore names a
+# serviceAccountRef, and the operator exchanges that ServiceAccount's projected
+# token for AWS credentials via IRSA. Identity is per-store, so YoloScribe has
+# its own rather than borrowing YoloBrain's — a shared identity would have to
+# hold the union of both products' grants.
 #
-# YoloBrain's external-secrets chart owns it today. Leave create: false unless
-# you are deploying YoloScribe standalone.
+# The name carries no stage (the namespace scopes it); the IAM role does, since
+# roles are account-global and stages share an AWS account.
+serviceAccount:
+  create: true
+  name: ""                 # defaults to yoloscribe-eso
+  iamRoleArn: ""           # arn:aws:iam::<account>:role/yoloscribe-<stage>-eso
+
+# ── SecretStore ───────────────────────────────────────────────────────────────
+# YoloScribe owns this one. YoloBrain owns yolobrain-aws separately; exactly one
+# release may create a given name, since Helm refuses to adopt another release's
+# object and a second `create: true` fails on install and on every upgrade after.
 secretStore:
-  create: false
-  name: yolo-aws
+  create: true
+  name: yoloscribe-aws
   kind: SecretStore
-  # Only used when create is true. ClusterSecretStore omits the namespace.
-  region: ""
-  serviceAccountName: ""
+  region: ""               # required when create is true
+  serviceAccountName: ""   # defaults to the ServiceAccount above
 
 # ── Where the secrets come from ───────────────────────────────────────────────
 # NOT `yoloscribe/` — that prefix is the runtime per-user namespace, holding
@@ -27,7 +41,8 @@ secretStore:
 # yoloscribe/{user-uuid}/. Deployment secrets live under their own prefix so the
 # operator's IAM role can be granted exactly that and nothing else. See
 # infra/iam/yoloscribe-eso-policy.json.
-secretsPrefix: "yoloscribe/deploy"
+# Derived from `stage` unless set: yoloscribe/{stage}/deploy.
+secretsPrefix: ""
 
 # How often ESO re-reads Secrets Manager. Changing a value in Secrets Manager
 # does NOT restart pods — roll the deployment, or wait for the next release.
