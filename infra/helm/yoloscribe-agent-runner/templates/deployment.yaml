@@ -82,11 +82,16 @@ spec:
               value: {{ .Values.otel.endpoint | quote }}
             {{- end }}
             {{- if or .Values.otel.headers .Values.otel.existingSecret }}
+            # optional: the headers carry a Phoenix API key, which can only be
+            # created once Phoenix is running, so a first install has no Secret
+            # yet. The pod starts untraced instead of failing
+            # CreateContainerConfigError, and picks the headers up on its next rollout.
             - name: OTEL_EXPORTER_OTLP_HEADERS
               valueFrom:
                 secretKeyRef:
                   name: {{ include "yoloscribe-agent-runner.otelSecretName" . }}
                   key: {{ .Values.otel.existingSecretKey | default "otlp-headers" }}
+                  optional: true
             {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
