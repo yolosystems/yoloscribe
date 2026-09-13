@@ -29,6 +29,9 @@ AWS_PROFILE=myprofile uv run --env-file ../.env uvicorn main:app --reload  # wit
 
 Backend has no test suite yet. Lint/type-check: `uv run mypy main.py agents/`.
 
+### Deploying (YoloForge)
+Production installs go through `yolo install` from the separate yoloforge repo, which fetches this repo **at the commit pinned in its `internal/manifest/manifest.yaml`**. After merging anything the install reads — a chart under `infra/helm/` or a policy under `infra/iam/` — bump that pin: `make pins` in yoloforge, then commit `manifest.yaml` and rebuild. An unbumped pin keeps installing the old charts and policies, and nothing reports it. See `INSTALL.md` → *Deployment*.
+
 ## Architecture
 
 ### Data model (S3)
