@@ -103,7 +103,7 @@ Backend-to-backend routes in `backend/routers/internal.py`, authenticated by a s
 | `POST /internal/messaging/message` | messaging-bot | `MESSAGING_BOT_SECRET` |
 | `POST /internal/messaging/ingest/{upload,trigger}` | messaging-bot | `MESSAGING_BOT_SECRET` |
 
-**Two separate secrets, deliberately.** `/internal/runs/mint` takes an arbitrary `site` + `user_id`, so anything holding that secret can act as any user. The messaging bot processes untrusted input from chat platforms and must never reach it. `install_messaging_bot.sh` refuses to deploy if the two values match.
+**Two separate secrets, deliberately.** `/internal/runs/mint` takes an arbitrary `site` + `user_id`, so anything holding that secret can act as any user. The messaging bot processes untrusted input from chat platforms and must never reach it. `yolo install` (YoloForge) refuses to write the secrets if the two values match.
 
 **These must not be publicly reachable** — `infra/waf/README.md` states the requirement and why the shared secret alone is not enough. In the runyolo deployment it is enforced by a WAF rule that denies `^/internal(/|$)` on every host, provisioned from the private `yoloscribe-ops` repo (`waf/`), where the rule ordering that makes it effective is documented. Callers reach these routes over cluster DNS — pod → ClusterIP → pod never traverses the load balancer — so in-cluster clients must be configured with the **internal service address**, not the public hostname.
 

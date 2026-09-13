@@ -7,7 +7,7 @@ ghcr:
   username: <ghcr-user>
 
 serviceAccount:
-  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-agent-runner"  # set after running infra/iam/create_agent_runner_role.sh
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-<stage>-agent-runner"  # created by `yolo install`
 
 config:
   sqsQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-jobs"

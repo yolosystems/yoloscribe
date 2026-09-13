@@ -7,7 +7,7 @@ ghcr:
   username: <ghcr-user>
 
 serviceAccount:
-  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-indexer"  # set after running infra/iam/create_indexer_role.sh
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-<stage>-indexer"  # created by `yolo install`
 
 config:
   sqsIndexingQueueUrl: "https://sqs.<region>.amazonaws.com/<aws-account-id>/<prefix>-indexing"

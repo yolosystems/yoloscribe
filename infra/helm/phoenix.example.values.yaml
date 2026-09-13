@@ -9,10 +9,10 @@
 # environment. Copy this to phoenix.{STAGE}.{REGION}.values.yaml in
 # yoloscribe-ops and install with:
 #
-#   STAGE=... REGION=... K8S_NAMESPACE=... \
-#     install_phoenix.sh --values-dir ~/Projects/yolo/yoloscribe-ops/helm
+#   yolo install phoenix --values-dir ~/Projects/yolo/yoloscribe-ops/helm
 #
-# Secrets are injected by the script from the environment, never committed here.
+# No secret is set here. `yolo install` writes them to Secrets Manager and
+# External Secrets syncs them into phoenix-secret (see Auth below).
 # Verify keys against the chart version you pin.
 
 # ── External Postgres is REQUIRED ─────────────────────────────────────────────
@@ -40,17 +40,16 @@ persistence:
   enabled: false
 
 database:
-  # Leave url empty and use the postgres.* fields below; the script injects the
-  # password. Set url instead only if you need options the fields cannot express
-  # (e.g. an explicit sslmode).
+  # Leave url empty and use the postgres.* fields below. Set url instead only if
+  # you need options the fields cannot express (e.g. an explicit sslmode).
   url: ""
   readReplicaUrl: ""
   postgres:
     host: "<rds-endpoint>.xxxxxxxx.<region>.rds.amazonaws.com"  # TODO
     port: 5432
     db: "phoenix"
-    user: "phoenix"
-    # password comes from PHOENIX_PG_PASSWORD at install time — never set here.
+    user: "phoenix_app"   # the role db-bootstrap creates
+    # read from phoenix-secret (PHOENIX_POSTGRES_PASSWORD) — never set here.
     password: ""
     # RDS IAM auth is supported (useAwsIamAuth: true) and removes the password
     # secret entirely, but needs the image built with arize-phoenix[aws] and an
@@ -81,17 +80,15 @@ server:
   grpcPort: 4317    # OTLP/gRPC collector
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-# Left on. The values below are placeholders; install_phoenix.sh injects the
-# real ones from PHOENIX_SECRET / PHOENIX_PG_PASSWORD / PHOENIX_ADMIN_PASSWORD.
+# Left on. The chart does NOT create this Secret: External Secrets syncs it from
+# yoloscribe/{stage}/deploy/phoenix, which `yolo install` writes with the five
+# keys chart 12.0.5 reads — PHOENIX_SECRET, PHOENIX_ADMIN_SECRET,
+# PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD, PHOENIX_SMTP_PASSWORD and
+# PHOENIX_POSTGRES_PASSWORD. None is optional in the chart. Enable the phoenix
+# entry in yoloscribe-external-secrets alongside this.
 auth:
   enableAuth: true
-  defaultAdminPassword: ""
-  createSecret: true
+  createSecret: false
   name: phoenix-secret
-  secret:
-    - key: PHOENIX_SECRET
-      value: ""
-    - key: PHOENIX_POSTGRES_PASSWORD
-      value: ""              # must equal database.postgres.password
 
 resources: {}

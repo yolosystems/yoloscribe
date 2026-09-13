@@ -94,7 +94,7 @@ Backend: `OIDC_CONFIG_URL` (required), plus optional `OIDC_CLIENT_ID`, `OIDC_AUD
 
 The bot holds **no** database credential, no encryption key, and no user API token. It authenticates to the backend's `/internal/messaging/*` endpoints with `MESSAGING_BOT_SECRET` and names a channel; the backend resolves channel → API token → owning site and runs the request as that user. A user's token is handled exactly once, during `/setup`, and is forwarded rather than stored — the stored binding records only the token's ID, so revoking a token disconnects its channels automatically.
 
-> **`MESSAGING_BOT_SECRET` must differ from `INTERNAL_MINT_SECRET`.** The bot processes untrusted input from chat platforms, and `/internal/runs/mint` accepts an arbitrary `site` + `user_id`. One shared value would let a compromised bot mint run tokens for any site. `install_messaging_bot.sh` refuses to deploy if the two match.
+> **`MESSAGING_BOT_SECRET` must differ from `INTERNAL_MINT_SECRET`.** The bot processes untrusted input from chat platforms, and `/internal/runs/mint` accepts an arbitrary `site` + `user_id`. One shared value would let a compromised bot mint run tokens for any site. `yolo install` refuses to write either secret if the two match.
 
 > **`YOLOSCRIBE_API_URL` must be the in-cluster address, not the public hostname.** `/internal/*` is blocked at the ALB by the WAF (see `infra/waf/README.md`), so a public URL here returns 403 on every request. In-cluster traffic goes pod → ClusterIP → pod and never reaches the load balancer.
 
@@ -140,13 +140,14 @@ Enable model access in the Bedrock console for your region:
 
 #### IAM — service roles
 
-Create three IAM roles with IRSA trust policies (trust the EKS OIDC provider for the appropriate Kubernetes namespace/ServiceAccount). Attach the policies from `infra/iam/`:
+`yolo install` creates four IAM roles, each with an IRSA trust policy for its Kubernetes ServiceAccount and an inline policy from `infra/iam/`. Names are stage-scoped because IAM role names are account-global. The cluster's OIDC provider must already be registered in IAM.
 
 | Role | Policy file | Used by |
 |---|---|---|
-| `yoloscribe-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3 (incl. object versions), DynamoDB, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
-| `yoloscribe-agent-runner` | `yoloscribe-agent-runner-policy.json` | Agent-runner pod — SQS poll, S3 read (agent/skill definitions only) |
-| `yoloscribe-indexer` | `yoloscribe-indexer-policy.json` | Indexer pod — SQS poll, S3 read, Bedrock, S3 Vectors |
+| `yoloscribe-{stage}-backend` | `yoloscribe-backend-policy.json` | Backend pod — S3 (incl. object versions), DynamoDB, SQS, Secrets Manager, IAM (to provision user roles), Bedrock |
+| `yoloscribe-{stage}-agent-runner` | `yoloscribe-agent-runner-policy.json` | Agent-runner pod — SQS poll, S3 read (agent/skill definitions only) |
+| `yoloscribe-{stage}-indexer` | `yoloscribe-indexer-policy.json` | Indexer pod — SQS poll, S3 read, Bedrock, S3 Vectors |
+| `yoloscribe-{stage}-eso` | `yoloscribe-eso-policy.json` | External Secrets — read on `yoloscribe/{stage}/deploy/*` only |
 
 **Bedrock: inference vs. embeddings.** These two paths have different requirements, and conflating them is the usual source of IAM surprises here.
 
@@ -249,36 +250,27 @@ Issue certificates for your backend domain and CloudFront distribution. CloudFro
 
 ### Deployment
 
-Each service has a Dockerfile. Build and push images to GHCR or ECR, then deploy with the `install_*.sh` scripts in `infra/helm/`. Every script takes the same inputs and runs `helm upgrade --install`, so the same command creates a release and updates it:
+Each service has a Dockerfile. Build and push images to GHCR or ECR, then install with `yolo`, the YoloForge installer. It installs YoloScribe alongside YoloBrain, LiteLLM and Phoenix, converging in order: the data plane (content bucket, S3 Vectors index, SQS queues, DynamoDB tables), the IAM roles, the Secrets Manager objects External Secrets syncs, then every Helm release. Every step is create-or-update, so the same command installs and upgrades, and re-running after a failure finishes the job:
 
 ```bash
-export STAGE=prod REGION=us-west-2 K8S_NAMESPACE=yoloscribe
-
-infra/helm/install_backend.sh
-infra/helm/install_runner.sh
-infra/helm/install_indexer.sh
-infra/helm/install_messaging_bot.sh   # optional; see the messaging bot section
+yolo preflight                    # check the cluster prerequisites
+yolo install --dry-run            # show the plan, change nothing
+yolo install                      # converge everything
+yolo install yoloscribe-backend   # one component and what it requires
 ```
 
-| Input | Required | Purpose |
+| Setting | Flag | Environment |
 |---|---|---|
-| `STAGE` | yes | Names the values file — `dev`, `staging`, `prod` |
-| `REGION` | yes | Names the values file — e.g. `us-west-2` |
-| `K8S_NAMESPACE` | yes | Target namespace. **No default**, deliberately: combined with `--create-namespace`, a default would turn a forgotten variable into a second copy of the stack in a namespace nobody meant to create. `NAMESPACE` is accepted as an alias. |
-| `--values-dir <path>` | no | Where to look for the values file; defaults to `infra/helm/` |
-| `--dry-run` | no | Render templates without touching the cluster |
+| Stage — names the values files: `dev`, `staging`, `prod` | `--stage` | `STAGE` |
+| AWS region | `--region` | `AWS_REGION` |
+| Target namespace. **No default**, deliberately: a defaulted namespace turns a forgotten value into a second copy of the stack in a namespace nobody meant to create. | `--namespace` | `K8S_NAMESPACE` |
+| Where the values files live | `--values-dir` | `YOLO_VALUES_DIR` |
 
-Anything else you pass is forwarded to `helm` unchanged (`--timeout 10m`, `--atomic`, and so on).
+Precedence is flags, then the environment, then `.env.yolo` in the working directory, then defaults — so `STAGE=prod yolo install` means prod even when `.env.yolo` says otherwise. `yolo config` shows what resolved.
 
-Each script resolves `<component>.<STAGE>.<REGION>.values.yaml` — `backend`, `agent-runner`, `indexer`, `messaging-bot`, `litellm`. Copy the matching `*.example.values.yaml` and fill it in. These files carry account-specific detail and are gitignored; if you keep them in a separate ops repo, point at it rather than copying:
+Each release reads `<component>.<stage>.<region>.values.yaml`. Copy the matching `*.example.values.yaml` from `infra/helm/` and fill it in. These files carry account-specific detail and are gitignored; keep them in a separate ops repo and point `--values-dir` at it.
 
-```bash
-infra/helm/install_backend.sh --values-dir ~/ops/helm
-```
-
-Resolution is strict — with `--values-dir` there is no fallback to `infra/helm/`, so it is always unambiguous which file a deploy used. Both `--values-dir <path>` and `--values-dir=<path>` work, including a leading `~`.
-
-Values come from the file; secrets come from the environment or the repo-root `.env`. For the four variables that decide *where* a deploy lands — `STAGE`, `REGION`, `K8S_NAMESPACE`, `NAMESPACE` — an explicit environment variable overrides `.env`, so `STAGE=prod infra/helm/install_backend.sh` means prod even when `.env` says otherwise.
+No secret reaches a Helm command line. `yolo install` writes them to Secrets Manager under `yoloscribe/{stage}/deploy/`, minting what it can and prompting for the rest, and External Secrets syncs them into the Kubernetes Secrets the charts name. `yolo components` prints the install order and why each step sits where it does.
 
 Build and deploy the frontend:
 

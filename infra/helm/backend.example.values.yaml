@@ -7,7 +7,7 @@ ghcr:
   username: <ghcr-user>
 
 serviceAccount:
-  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-backend"  # set after running infra/iam/create_backend_role.sh
+  iamRoleArn: "arn:aws:iam::<aws-account-id>:role/yoloscribe-<stage>-backend"  # created by `yolo install`
 
 ingress:
   host: api.<your-domain>
