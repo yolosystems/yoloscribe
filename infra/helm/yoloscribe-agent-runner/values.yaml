@@ -82,8 +82,8 @@ existingSecretKey: anthropic-api-key
 anthropicApiKey: ""
 
 # ── LiteLLM proxy API key (YOL-512) — the key the runner presents to the proxy.
-# Passed via --set by install_runner.sh (from $LITELLM_MASTER_KEY); with
-# existingSecret, add this key to that secret.
+# With existingSecret it is read from that secret's litellm-api-key, which
+# `yolo install` writes; set it here only for development.
 litellmApiKey: ""
 litellmExistingSecretKey: litellm-api-key
 

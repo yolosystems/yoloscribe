@@ -77,9 +77,9 @@ externalSecrets:
     enabled: false
     remoteKey: messaging-bot
     targetSecret: yoloscribe-messaging-bot
-  # Phoenix's vendor chart reads PHOENIX_SECRET and PHOENIX_POSTGRES_PASSWORD
-  # from a Secret it does not create when auth.createSecret is false. Optional:
-  # enable alongside install_phoenix.sh.
+  # Phoenix's vendor chart reads its five auth keys from a Secret it does not
+  # create when auth.createSecret is false. Optional: enable when Phoenix is
+  # installed.
   phoenix:
     enabled: false
     remoteKey: phoenix
